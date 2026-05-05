@@ -67,7 +67,7 @@ Fill in your `GEMINI_API_KEY` and MySQL credentials.
 ### 2. Seed Realistic POS Data
 To replace garbage data with 2,000+ realistic transactions across 5 locations:
 ```bash
-python seed_data.py
+python scripts/seed_data.py
 ```
 *Note: This will reset `datamind_db` and apply the professional POS schema.*
 

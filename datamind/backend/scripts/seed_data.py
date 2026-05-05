@@ -7,8 +7,11 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 import uuid
 
+from dotenv import load_dotenv
+
 # Initialize Faker
 fake = Faker()
+load_dotenv()
 
 def get_connection():
     return mysql.connector.connect(
