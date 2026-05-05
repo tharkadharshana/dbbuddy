@@ -8,7 +8,7 @@ import { fetchTables } from './utils/api'
 
 export default function App() {
   const [page, setPage] = useState('query')
-  const [llm, setLlm] = useState('gemini')
+  const [llm, setLlm] = useState('Gemini')
   const [tables, setTables] = useState([])
   const [schemas, setSchemas] = useState({})
 
@@ -25,48 +25,72 @@ export default function App() {
   }, [])
 
   const pages = {
-    query:    <QueryPage llm={llm} setLlm={setLlm} />,
+    query:    <QueryPage llm={llm} />,
     forecast: <ForecastPage tables={tables} schemas={schemas} />,
     anomaly:  <AnomalyPage tables={tables} schemas={schemas} />,
-    reports:  <ReportsPage llm={llm} setLlm={setLlm} tables={tables} />,
-  }
-
-  const titles = {
-    query: 'Natural Language Query',
-    forecast: 'Time Series Forecasting',
-    anomaly: 'Anomaly Detection',
-    reports: 'AI Reports',
+    reports:  <ReportsPage llm={llm} tables={tables} />,
   }
 
   return (
-    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
-      <Sidebar active={page} setActive={setPage} tables={tables} />
-
-      <main style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        {/* Top bar */}
-        <header style={{
-          height: 50,
-          background: 'var(--bg-surface)',
-          borderBottom: '1px solid var(--border)',
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: '0 20px', flexShrink: 0,
-        }}>
-          <h1 style={{ fontSize: 14, fontWeight: 500, color: 'var(--text-secondary)' }}>
-            {titles[page]}
-          </h1>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Using</div>
-            <div style={{ fontSize: 11, fontWeight: 500, color: 'var(--accent)', background: 'var(--accent-dim)', padding: '2px 10px', borderRadius: 20 }}>
-              {llm === 'gemini' ? '✦ Gemini' : '◈ DeepSeek'}
-            </div>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: 'var(--color-background-tertiary)' }}>
+      {/* Topbar */}
+      <header style={{
+        height: 52,
+        background: 'var(--color-background-primary)',
+        borderBottom: '0.5px solid var(--color-border-tertiary)',
+        padding: '0 24px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexShrink: 0,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 15, fontWeight: 600, color: 'var(--color-text-primary)' }}>
+          <div style={{ width: 28, height: 28, background: '#1a1a2e', borderRadius: 7, display: 'flex', alignItems: 'center', justifyCenter: 'center', padding: 6 }}>
+            <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect x="2" y="2" width="5" height="5" rx="1" fill="#7F77DD"/>
+              <rect x="9" y="2" width="5" height="5" rx="1" fill="#5DCAA5"/>
+              <rect x="2" y="9" width="5" height="5" rx="1" fill="#5DCAA5"/>
+              <rect x="9" y="9" width="5" height="5" rx="1" fill="#7F77DD"/>
+            </svg>
           </div>
-        </header>
-
-        {/* Page content */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: 20 }}>
-          {pages[page]}
+          DataMind AI
         </div>
-      </main>
+        
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: '#eaf3de', color: '#3B6D11', borderRadius: 20, padding: '4px 12px', fontSize: 12, fontWeight: 500 }}>
+            <div style={{ width: 6, height: 6, background: '#639922', borderRadius: '50%' }}></div>
+            MySQL · connected
+          </div>
+          
+          <div style={{ display: 'flex', background: 'var(--color-background-secondary)', border: '0.5px solid var(--color-border-tertiary)', borderRadius: 'var(--border-radius-md)', padding: 3, gap: 2 }}>
+            {['Gemini', 'DeepSeek'].map(name => (
+              <button
+                key={name}
+                onClick={() => setLlm(name)}
+                style={{
+                  padding: '4px 12px',
+                  borderRadius: 6,
+                  fontSize: 12,
+                  fontWeight: 500,
+                  background: llm === name ? 'var(--color-background-primary)' : 'transparent',
+                  color: llm === name ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
+                  border: llm === name ? '0.5px solid var(--color-border-secondary)' : 'none',
+                }}
+              >
+                {name}
+              </button>
+            ))}
+          </div>
+        </div>
+      </header>
+
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+        <Sidebar active={page} setActive={setPage} tables={tables} />
+        
+        <main style={{ flex: 1, overflowY: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {pages[page]}
+        </main>
+      </div>
     </div>
   )
 }

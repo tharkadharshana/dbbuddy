@@ -110,15 +110,23 @@ def natural_language_query(req: NLQueryRequest):
 
 @app.post("/forecast")
 def forecast(req: ForecastRequest):
-    """Run Prophet time-series forecasting on a table column."""
+    """Run Prophet time-series forecasting on a table column with daily aggregation."""
     try:
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute(
-            f"SELECT `{req.date_column}`, `{req.value_column}` FROM `{req.table}` ORDER BY `{req.date_column}`"
+        # Aggregate by date to ensure one point per day (better for Prophet)
+        query = (
+            f"SELECT DATE(`{req.date_column}`) as ds, SUM(`{req.value_column}`) as y "
+            f"FROM `{req.table}` "
+            f"GROUP BY ds "
+            f"ORDER BY ds"
         )
+        cursor.execute(query)
         rows = cursor.fetchall()
         conn.close()
+
+        if not rows:
+            raise HTTPException(status_code=404, detail="No data found for the selected columns.")
 
         result = run_forecast(rows, req.periods)
         return result

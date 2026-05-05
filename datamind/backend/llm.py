@@ -45,7 +45,7 @@ def call_deepseek(prompt: str, system: str = "") -> str:
 # ── Dispatch ─────────────────────────────────────────────────────────────────
 
 def call_llm(prompt: str, system: str = "", llm: str = "gemini") -> str:
-    if llm == "deepseek":
+    if str(llm).lower() == "deepseek":
         return call_deepseek(prompt, system)
     return call_gemini(prompt, system)
 
