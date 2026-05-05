@@ -60,9 +60,9 @@ def run_forecast(rows: List[Tuple], periods: int = 90) -> Dict[str, Any]:
     fc_out = [
         {
             "date": _safe_str(r["ds"]),
-            "yhat": round(r["yhat"], 2),
-            "yhat_lower": round(r["yhat_lower"], 2),
-            "yhat_upper": round(r["yhat_upper"], 2),
+            "yhat": max(0, round(r["yhat"], 2)),
+            "yhat_lower": max(0, round(r["yhat_lower"], 2)),
+            "yhat_upper": max(0, round(r["yhat_upper"], 2)),
         }
         for _, r in fc_slice.iterrows()
     ]

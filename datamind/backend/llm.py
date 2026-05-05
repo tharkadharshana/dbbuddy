@@ -16,9 +16,18 @@ def call_gemini(prompt: str, system: str = "") -> str:
         "contents": [{"parts": [{"text": f"{system}\n\n{prompt}" if system else prompt}]}],
         "generationConfig": {"temperature": 0.1, "maxOutputTokens": 1024}
     }
-    resp = requests.post(url, json=body, timeout=30)
-    resp.raise_for_status()
-    return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+    
+    # Try up to 2 times on timeout
+    for attempt in range(2):
+        try:
+            resp = requests.post(url, json=body, timeout=60)
+            resp.raise_for_status()
+            return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        except requests.exceptions.Timeout:
+            if attempt == 0: continue
+            raise Exception("Gemini API timed out after 60s. The service might be overloaded.")
+        except Exception as e:
+            raise e
 
 
 # ── DeepSeek ─────────────────────────────────────────────────────────────────
@@ -37,15 +46,23 @@ def call_deepseek(prompt: str, system: str = "") -> str:
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     body = {"model": "deepseek-chat", "messages": messages, "temperature": 0.1, "max_tokens": 1024}
 
-    resp = requests.post(url, json=body, headers=headers, timeout=30)
-    resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"].strip()
+    # Try up to 2 times on timeout
+    for attempt in range(2):
+        try:
+            resp = requests.post(url, json=body, headers=headers, timeout=60)
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"].strip()
+        except requests.exceptions.Timeout:
+            if attempt == 0: continue
+            raise Exception("DeepSeek API timed out after 60s. The service might be overloaded.")
+        except Exception as e:
+            raise e
 
 
 # ── Dispatch ─────────────────────────────────────────────────────────────────
 
 def call_llm(prompt: str, system: str = "", llm: str = "gemini") -> str:
-    if llm == "deepseek":
+    if str(llm).lower() == "deepseek":
         return call_deepseek(prompt, system)
     return call_gemini(prompt, system)
 

@@ -3,10 +3,16 @@ import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, ReferenceLine
 } from 'recharts'
-import { Btn, Card, Badge, Spinner, Empty, SectionHeader } from '../components/UI'
+import { Btn, Card, Badge, Spinner, SectionHeader, MetricCard } from '../components/UI'
 import { runAnomalies } from '../utils/api'
 
-const TT = { background: '#1a1e28', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 12, color: '#eef0f6' }
+const TT = { 
+  background: '#ffffff', 
+  border: '0.5px solid var(--color-border-secondary)', 
+  borderRadius: 8, 
+  fontSize: 12, 
+  color: 'var(--color-text-primary)' 
+}
 
 const severityColor = { high: 'red', medium: 'amber', low: 'blue' }
 
@@ -46,117 +52,122 @@ export default function AnomalyPage({ tables, schemas }) {
     anomaly: s.is_anomaly ? s.score : null,
   })) || []
 
-  const inputStyle = { padding: '8px 12px', width: '100%', borderRadius: 'var(--radius-md)', fontSize: 13, background: 'var(--bg-elevated)', border: '1px solid var(--border)', color: 'var(--text-primary)' }
+  const inputStyle = { padding: '9px 12px', width: '100%', borderRadius: 'var(--border-radius-md)', fontSize: 13, background: 'var(--color-background-secondary)', border: '0.5px solid var(--color-border-secondary)', color: 'var(--color-text-primary)', outline: 'none' }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
 
-      <Card style={{ padding: 20 }}>
+      <Card style={{ padding: 16 }}>
         <SectionHeader title="Anomaly Detection (Isolation Forest)" />
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: 10, alignItems: 'flex-end' }}>
           <div>
-            <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 5 }}>Table</label>
+            <label style={{ fontSize: 11, color: 'var(--color-text-tertiary)', display: 'block', marginBottom: 5 }}>Table</label>
             <select value={table} onChange={handleTableChange} style={inputStyle}>
               <option value="">Select table…</option>
               {tables.map(t => <option key={t} value={t}>{t}</option>)}
             </select>
           </div>
           <div>
-            <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 5 }}>Value column</label>
+            <label style={{ fontSize: 11, color: 'var(--color-text-tertiary)', display: 'block', marginBottom: 5 }}>Value column</label>
             <select value={valueCol} onChange={e => setValueCol(e.target.value)} style={inputStyle} disabled={!table}>
               <option value="">Select column…</option>
               {columns.map(c => <option key={c.name} value={c.name}>{c.name} ({c.type})</option>)}
             </select>
           </div>
           <div>
-            <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 5 }}>Date column (optional)</label>
+            <label style={{ fontSize: 11, color: 'var(--color-text-tertiary)', display: 'block', marginBottom: 5 }}>Date column (optional)</label>
             <select value={dateCol} onChange={e => setDateCol(e.target.value)} style={inputStyle} disabled={!table}>
               <option value="">None (Index based)</option>
               {columns.map(c => <option key={c.name} value={c.name}>{c.name} ({c.type})</option>)}
             </select>
           </div>
-          <Btn onClick={handleRun} disabled={loading || !table || !valueCol} style={{ alignSelf: 'flex-end' }}>
-            {loading ? <><Spinner size={14} color="#fff" /> Scanning…</> : 'Detect ↗'}
+          <Btn onClick={handleRun} disabled={loading || !table || !valueCol} style={{ padding: '10px 18px', height: 'fit-content' }}>
+            {loading ? <Spinner size={14} color="#fff" /> : 'Detect ↗'}
           </Btn>
         </div>
       </Card>
 
-      {!result && !loading && !error && (
-        <Empty icon="⬡" title="No scan run yet" subtitle="Select a table and numeric column to detect statistical outliers with Isolation Forest." />
-      )}
-
       {error && (
-        <Card style={{ padding: '14px 18px', borderColor: 'rgba(240,96,96,0.3)', background: 'var(--red-dim)' }}>
-          <span style={{ fontSize: 13, color: 'var(--red)' }}>⚠ {error}</span>
+        <Card style={{ padding: '14px 18px', background: '#FCEBEB', borderColor: 'rgba(163,45,45,0.1)' }}>
+          <span style={{ fontSize: 13, color: '#A32D2D' }}>⚠ {error}</span>
         </Card>
       )}
 
-      {loading && <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}><div className="skeleton" style={{ height: 240 }} /><div className="skeleton" style={{ height: 160 }} /></div>}
+      {loading && <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}><Card style={{ height: 240, background: 'var(--color-background-secondary)' }} /><Card style={{ height: 160, background: 'var(--color-background-secondary)' }} /></div>}
 
       {result && (
-        <div className="fade-up" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
 
           {/* Summary metrics */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-            <div style={{ background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)', padding: '14px 16px' }}>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Total points</div>
-              <div style={{ fontSize: 22, fontWeight: 600 }}>{result.total_points.toLocaleString()}</div>
-            </div>
-            <div style={{ background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)', padding: '14px 16px' }}>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Anomalies found</div>
-              <div style={{ fontSize: 22, fontWeight: 600, color: result.anomaly_count > 0 ? 'var(--amber)' : 'var(--green)' }}>
-                {result.anomaly_count}
-              </div>
-            </div>
-            <div style={{ background: 'var(--bg-elevated)', borderRadius: 'var(--radius-md)', padding: '14px 16px' }}>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Anomaly rate</div>
-              <div style={{ fontSize: 22, fontWeight: 600 }}>{((result.anomaly_count / result.total_points) * 100).toFixed(1)}%</div>
-            </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+            <MetricCard label="Total points" value={result.total_points.toLocaleString()} />
+            <MetricCard label="Anomalies found" value={result.anomaly_count} delta={result.anomaly_count > 0 ? "Potential risk" : "Data clean"} deltaType={result.anomaly_count > 0 ? "down" : "up"} />
+            <MetricCard label="Anomaly rate" value={`${((result.anomaly_count / result.total_points) * 100).toFixed(1)}%`} />
+            <MetricCard label="Algorithm" value="Isolation Forest" />
           </div>
 
-          {/* Score chart */}
-          <Card style={{ padding: 18 }}>
-            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 14 }}>Anomaly score over time — red bars exceed threshold</div>
-            <ResponsiveContainer width="100%" height={220}>
-              <ComposedChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
-                <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#555d75' }} axisLine={false} tickLine={false} interval={Math.floor(chartData.length / 8)} />
-                <YAxis tick={{ fontSize: 11, fill: '#555d75' }} axisLine={false} tickLine={false} domain={[0, 1]} />
-                <Tooltip contentStyle={TT} />
-                <ReferenceLine y={0.6} stroke="rgba(240,96,96,0.4)" strokeDasharray="4 3" />
-                <Bar dataKey="score" fill="rgba(91,138,240,0.4)" radius={[2,2,0,0]} />
-                <Bar dataKey="anomaly" fill="var(--red)" radius={[2,2,0,0]} />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </Card>
+          <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: 16 }}>
+            {/* Score chart */}
+            <Card style={{ padding: 16 }}>
+              <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-text-secondary)', marginBottom: 16 }}>Anomaly score distribution — red exceeds threshold</div>
+              <div style={{ height: 260 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={chartData}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(0,0,0,0.05)" />
+                  <XAxis 
+                    dataKey="date" 
+                    hide={false}
+                    tick={{ fontSize: 10, fill: 'var(--color-text-tertiary)' }} 
+                    axisLine={false} 
+                    tickLine={false}
+                    interval={Math.floor(chartData.length / 6)}
+                    tickFormatter={(str) => {
+                      try {
+                        const d = new Date(str);
+                        return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                      } catch(e) { return str; }
+                    }}
+                  />
+                  <YAxis 
+                    tick={{ fontSize: 10, fill: 'var(--color-text-tertiary)' }} 
+                    axisLine={false} 
+                    tickLine={false} 
+                    domain={[0, 1]} 
+                  />
+                    <Tooltip contentStyle={TT} />
+                    <ReferenceLine y={0.6} stroke="#A32D2D" strokeDasharray="4 3" />
+                    <Bar dataKey="score" fill="rgba(55,138,221,0.2)" radius={[2,2,0,0]} />
+                    <Bar dataKey="anomaly" fill="#A32D2D" radius={[2,2,0,0]} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            </Card>
 
-          {/* Anomaly list */}
-          {result.anomalies.length === 0 ? (
-            <Card style={{ padding: '20px', textAlign: 'center' }}>
-              <span style={{ color: 'var(--green)', fontSize: 13 }}>✓ No anomalies detected — your data looks clean.</span>
-            </Card>
-          ) : (
-            <Card style={{ overflow: 'hidden' }}>
-              <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', fontSize: 12, color: 'var(--text-secondary)', fontWeight: 500 }}>
-                Detected Anomalies · {result.anomaly_count}
+            {/* Anomaly list */}
+            <Card style={{ display: 'flex', flexDirection: 'column' }}>
+              <div style={{ padding: '12px 16px', borderBottom: '0.5px solid var(--color-border-tertiary)', fontSize: 12, fontWeight: 500, color: 'var(--color-text-secondary)' }}>
+                Recent Alerts · {result.anomaly_count}
               </div>
-              <div style={{ maxHeight: 320, overflowY: 'auto' }}>
-                {result.anomalies.map((a, i) => (
-                  <div key={i} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid var(--border)', borderLeft: `3px solid ${a.severity === 'high' ? 'var(--red)' : a.severity === 'medium' ? 'var(--amber)' : 'var(--accent)'}` }}>
-                    <div>
-                      <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-primary)' }}>{a.date}</div>
-                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-                        Value: <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>{a.value}</span>
-                        &nbsp;·&nbsp; z-score: <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--amber)' }}>{a.zscore}</span>
-                        &nbsp;·&nbsp; IF score: <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--red)' }}>{a.anomaly_score}</span>
-                      </div>
-                    </div>
-                    <Badge color={severityColor[a.severity]}>{a.severity}</Badge>
+              <div style={{ flex: 1, maxHeight: 300, overflowY: 'auto' }}>
+                {result.anomalies.length === 0 ? (
+                  <div style={{ padding: 32, textAlign: 'center', color: 'var(--color-text-tertiary)', fontSize: 13 }}>
+                    ✓ No anomalies detected
                   </div>
-                ))}
+                ) : (
+                  result.anomalies.map((a, i) => (
+                    <div key={i} style={{ padding: '12px 16px', borderBottom: '0.5px solid var(--color-border-tertiary)', display: 'flex', alignItems: 'center', gap: 12 }} onMouseEnter={(e) => e.currentTarget.style.background = 'var(--color-background-secondary)'} onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>
+                      <div style={{ width: 8, height: 8, borderRadius: '50%', background: a.severity === 'high' ? '#A32D2D' : a.severity === 'medium' ? '#854F0B' : '#378ADD', flexShrink: 0 }}></div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--color-text-primary)' }}>{a.date || `Row #${i+1}`}</div>
+                        <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 2 }}>Val: {a.value} · Score: {a.anomaly_score.toFixed(3)}</div>
+                      </div>
+                      <Badge color={severityColor[a.severity]}>{a.severity}</Badge>
+                    </div>
+                  ))
+                )}
               </div>
             </Card>
-          )}
+          </div>
         </div>
       )}
     </div>
