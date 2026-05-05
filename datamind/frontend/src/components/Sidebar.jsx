@@ -44,8 +44,8 @@ export default function Sidebar({ active, setActive, tables }) {
               padding: '7px 8px',
               borderRadius: 'var(--border-radius-md)',
               fontSize: 13,
-              color: active === id ? '#e8e8f0' : 'var(--color-text-secondary)',
-              background: active === id ? '#1a1a2e' : 'transparent',
+              color: active === id ? 'var(--color-primary-text)' : 'var(--color-text-secondary)',
+              background: active === id ? 'var(--color-primary)' : 'transparent',
               cursor: 'pointer',
               transition: 'all 0.1s',
             }}
