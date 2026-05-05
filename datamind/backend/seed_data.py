@@ -37,11 +37,13 @@ def seed():
     print("Seeding locations...")
     locations = []
     location_names = ["Colombo Main", "Kandy Express", "Galle Fort", "Negombo Beach", "Jaffna Central"]
+    start_date = datetime.now() - timedelta(days=180)
     for name in location_names:
         l_key = f"LIC-{fake.unique.bothify(text='??-####-####').upper()}"
+        created_at = start_date + timedelta(days=random.randint(0, 30))
         cursor.execute(
-            "INSERT INTO locations (location_name, address, licenceKey) VALUES (%s, %s, %s)",
-            (name, fake.address(), l_key)
+            "INSERT INTO locations (location_name, address, licenceKey, created_at) VALUES (%s, %s, %s, %s)",
+            (name, fake.address(), l_key, created_at)
         )
         locations.append((cursor.lastrowid, l_key))
 
@@ -55,9 +57,10 @@ def seed():
         cat = random.choice(categories)
         price = Decimal(random.uniform(10.0, 500.0)).quantize(Decimal("0.00"))
         cost = (price * Decimal(random.uniform(0.4, 0.7))).quantize(Decimal("0.00"))
+        created_at = start_date + timedelta(days=random.randint(0, 60))
         cursor.execute(
-            "INSERT INTO products (itemCode, name, category, basePrice, baseCost) VALUES (%s, %s, %s, %s, %s)",
-            (code, name, cat, price, cost)
+            "INSERT INTO products (itemCode, name, category, basePrice, baseCost, created_at) VALUES (%s, %s, %s, %s, %s, %s)",
+            (code, name, cat, price, cost, created_at)
         )
         products.append({"itemCode": code, "name": name, "price": price, "cost": cost})
 
@@ -68,9 +71,10 @@ def seed():
         for _ in range(4):
             e_id = f"EMP-{fake.unique.bothify(text='####')}"
             name = fake.name()
+            created_at = start_date + timedelta(days=random.randint(0, 100))
             cursor.execute(
-                "INSERT INTO employees (empId, cashierName, location_id) VALUES (%s, %s, %s)",
-                (e_id, name, loc_id)
+                "INSERT INTO employees (empId, cashierName, location_id, created_at) VALUES (%s, %s, %s, %s)",
+                (e_id, name, loc_id, created_at)
             )
             employees.append({"empId": e_id, "cashierName": name, "location_id": loc_id})
 
@@ -79,9 +83,10 @@ def seed():
     customer_ids = []
     for _ in range(500):
         c_id = f"CUST-{fake.unique.bothify(text='####')}"
+        created_at = start_date + timedelta(days=random.randint(0, 180))
         cursor.execute(
-            "INSERT INTO customers (customerId, name, email, loyaltyPoints) VALUES (%s, %s, %s, %s)",
-            (c_id, fake.name(), fake.email(), random.randint(0, 1000))
+            "INSERT INTO customers (customerId, name, email, loyaltyPoints, created_at) VALUES (%s, %s, %s, %s, %s)",
+            (c_id, fake.name(), fake.email(), random.randint(0, 1000), created_at)
         )
         customer_ids.append(c_id)
 
