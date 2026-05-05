@@ -8,7 +8,7 @@ from db import schema_to_text
 
 def call_gemini(prompt: str, system: str = "") -> str:
     api_key = os.getenv("GEMINI_API_KEY", "")
-    if not api_key:
+    if not api_key or api_key == "your_gemini_api_key_here":
         raise ValueError("GEMINI_API_KEY not set in .env")
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
@@ -34,7 +34,7 @@ def call_gemini(prompt: str, system: str = "") -> str:
 
 def call_deepseek(prompt: str, system: str = "") -> str:
     api_key = os.getenv("DEEPSEEK_API_KEY", "")
-    if not api_key:
+    if not api_key or api_key == "your_deepseek_api_key_here":
         raise ValueError("DEEPSEEK_API_KEY not set in .env")
 
     url = "https://api.deepseek.com/v1/chat/completions"
