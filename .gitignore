@@ -1,0 +1,28 @@
+# Node.js
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+env/
+.env
+.env.local
+
+# IDEs
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+sql_analytics_ai_dashboard.html
+datamind/backend/scratch/
