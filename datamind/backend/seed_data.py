@@ -1,74 +1,219 @@
 import mysql.connector
+import os
 import random
-import datetime
+import json
+from faker import Faker
+from datetime import datetime, timedelta
 from decimal import Decimal
+import uuid
 
-def generate_data():
-    conn = mysql.connector.connect(
-        host="localhost",
-        user="root",
-        database="datamind_db"
+# Initialize Faker
+fake = Faker()
+
+def get_connection():
+    return mysql.connector.connect(
+        host=os.getenv("DB_HOST", "localhost"),
+        port=int(os.getenv("DB_PORT", "3306")),
+        user=os.getenv("DB_USER", "root"),
+        password=os.getenv("DB_PASSWORD", ""),
+        database=os.getenv("DB_NAME", "datamind_db")
     )
+
+def seed():
+    conn = get_connection()
     cursor = conn.cursor()
 
-    print("Generating products...")
-    categories = ["Electronics", "Clothing", "Home & Garden", "Books", "Toys"]
+    print("Cleaning up old data...")
+    cursor.execute("SET FOREIGN_KEY_CHECKS = 0")
+    cursor.execute("TRUNCATE TABLE invoice_items")
+    cursor.execute("TRUNCATE TABLE invoices")
+    cursor.execute("TRUNCATE TABLE employees")
+    cursor.execute("TRUNCATE TABLE products")
+    cursor.execute("TRUNCATE TABLE customers")
+    cursor.execute("TRUNCATE TABLE locations")
+    cursor.execute("SET FOREIGN_KEY_CHECKS = 1")
+
+    # 1. Seed Locations
+    print("Seeding locations...")
+    locations = []
+    location_names = ["Colombo Main", "Kandy Express", "Galle Fort", "Negombo Beach", "Jaffna Central"]
+    for name in location_names:
+        l_key = f"LIC-{fake.unique.bothify(text='??-####-####').upper()}"
+        cursor.execute(
+            "INSERT INTO locations (location_name, address, licenceKey) VALUES (%s, %s, %s)",
+            (name, fake.address(), l_key)
+        )
+        locations.append((cursor.lastrowid, l_key))
+
+    # 2. Seed Products
+    print("Seeding products...")
+    categories = ["Fast Food", "Beverages", "Desserts", "Grocery", "Electronics"]
     products = []
-    for i in range(50):
-        name = f"Product {i+1}"
+    for _ in range(100):
+        code = f"PRD-{fake.unique.bothify(text='####')}"
+        name = fake.catch_phrase()
         cat = random.choice(categories)
-        price = round(random.uniform(10, 1000), 2)
-        cursor.execute("INSERT INTO products (name, category, base_price) VALUES (%s, %s, %s)", (name, cat, price))
-        products.append(cursor.lastrowid)
+        price = Decimal(random.uniform(10.0, 500.0)).quantize(Decimal("0.00"))
+        cost = (price * Decimal(random.uniform(0.4, 0.7))).quantize(Decimal("0.00"))
+        cursor.execute(
+            "INSERT INTO products (itemCode, name, category, basePrice, baseCost) VALUES (%s, %s, %s, %s, %s)",
+            (code, name, cat, price, cost)
+        )
+        products.append({"itemCode": code, "name": name, "price": price, "cost": cost})
 
-    print("Generating customers...")
-    countries = ["USA", "UK", "Canada", "Germany", "France", "Japan", "Australia"]
-    customers = []
-    for i in range(500):
-        name = f"Customer {i+1}"
-        email = f"customer{i+1}@example.com"
-        country = random.choice(countries)
-        signup_date = datetime.date(2024, 1, 1) + datetime.timedelta(days=random.randint(0, 365))
-        cursor.execute("INSERT INTO customers (name, email, country, signup_date) VALUES (%s, %s, %s, %s)", (name, email, country, signup_date))
-        customers.append(cursor.lastrowid)
+    # 3. Seed Employees
+    print("Seeding employees...")
+    employees = []
+    for loc_id, _ in locations:
+        for _ in range(4):
+            e_id = f"EMP-{fake.unique.bothify(text='####')}"
+            name = fake.name()
+            cursor.execute(
+                "INSERT INTO employees (empId, cashierName, location_id) VALUES (%s, %s, %s)",
+                (e_id, name, loc_id)
+            )
+            employees.append({"empId": e_id, "cashierName": name, "location_id": loc_id})
 
-    print("Generating sales (20,000 rows)...")
-    start_date = datetime.date(2024, 1, 1)
-    for i in range(20000):
-        p_id = random.choice(products)
-        c_id = random.choice(customers)
-        # Generate some trends and seasonality
-        days_offset = random.randint(0, 850) # Approx 2.3 years
-        sale_date = start_date + datetime.timedelta(days=days_offset)
+    # 4. Seed Customers
+    print("Seeding customers...")
+    customer_ids = []
+    for _ in range(500):
+        c_id = f"CUST-{fake.unique.bothify(text='####')}"
+        cursor.execute(
+            "INSERT INTO customers (customerId, name, email, loyaltyPoints) VALUES (%s, %s, %s, %s)",
+            (c_id, fake.name(), fake.email(), random.randint(0, 1000))
+        )
+        customer_ids.append(c_id)
+
+    # 5. Seed Invoices & Items & Inventory Logs
+    print("Seeding invoices and inventory logs (this may take a while)...")
+    pay_methods = ["CASH", "CARD", "CHEQUE", "SPLIT", "LOYALTY"]
+    order_types = ["DINE-IN", "TAKEAWAY", "DELIVERY"]
+    channels = ["POS-COUNTER", "MOBILE-APP", "UBER-EATS", "PICKME"]
+    
+    start_date = datetime.now() - timedelta(days=180)
+    
+    for i in range(2000): # Seed 2000 invoices for now
+        inv_num = f"INV-{100000 + i}"
+        main_inv = inv_num
+        cent_id = str(uuid.uuid4())[:8].upper()
+        uniq_id = str(uuid.uuid4())
+        ref = f"REF-{fake.bothify(text='####')}"
+        kot = f"KOT-{random.randint(100, 999)}"
+        ord_num = f"ORD-{random.randint(5000, 9999)}"
         
-        qty = random.randint(1, 5)
-        # Base price lookup would be slow here, let's just use random for mock
-        total = round(qty * random.uniform(10, 500), 2)
+        emp = random.choice(employees)
+        loc = [l for l in locations if l[0] == emp["location_id"]][0]
+        lic_key = loc[1]
         
-        # Add some "anomalies" (huge spikes)
-        if random.random() < 0.01:
-            total *= 10
+        cust_id = random.choice(customer_ids)
+        
+        # Temporal Data
+        trans_date = start_date + timedelta(days=random.randint(0, 180), hours=random.randint(0, 23), minutes=random.randint(0, 59))
+        inv_date = trans_date.date()
+        inv_time = trans_date.time()
+        start_dt = trans_date - timedelta(minutes=random.randint(5, 30))
+        end_time = (trans_date + timedelta(minutes=random.randint(2, 10))).time()
+        
+        pay_method = random.choice(pay_methods)
+        
+        # Line Items
+        num_items = random.randint(1, 8)
+        invoice_items = []
+        header_total = Decimal("0.00")
+        header_discount = Decimal("0.00")
+        header_tax = Decimal("0.00")
+        
+        selected_prods = random.sample(products, num_items)
+        
+        item_rows = []
+        inv_log_rows = []
+        for prod in selected_prods:
+            qty = Decimal(random.randint(1, 5))
+            price = prod["price"]
+            cost = prod["cost"]
+            item_discount = (price * qty * Decimal(random.uniform(0, 0.1))).quantize(Decimal("0.00"))
+            tax = (price * qty * Decimal(0.1)).quantize(Decimal("0.00"))
             
-        cursor.execute("INSERT INTO sales (product_id, customer_id, sale_date, quantity, total_amount) VALUES (%s, %s, %s, %s, %s)", 
-                       (p_id, c_id, sale_date, qty, total))
-        
-        if i % 5000 == 0:
-            print(f"  Inserted {i} rows...")
+            header_total += (price * qty) - item_discount + tax
+            header_discount += item_discount
+            header_tax += tax
+            
+            item_rows.append((
+                inv_num, prod["itemCode"], qty, price, cost, item_discount, tax,
+                fake.sentence(nb_words=3),
+                json.dumps({"name": prod["name"], "cat": "Food"}), # itemsDataList
+                json.dumps([{"type": "PROMO", "amount": float(item_discount)}]), # invoiceLineDiscountList
+                json.dumps([{"addon": "Extra Cheese", "price": 1.5}]) # invoiceItemAddonList
+            ))
 
-    print("Generating web analytics...")
-    for i in range(1000):
-        event_date = start_date + datetime.timedelta(days=random.randint(0, 850))
-        path = random.choice(["/home", "/products", "/cart", "/checkout", "/about"])
-        visits = random.randint(100, 5000)
-        bounce = round(random.uniform(20, 80), 2)
-        duration = random.randint(30, 300)
-        cursor.execute("INSERT INTO web_analytics (event_date, page_path, visits, bounce_rate, avg_session_duration) VALUES (%s, %s, %s, %s, %s)",
-                       (event_date, path, visits, bounce, duration))
+            # Inventory Log (SALE)
+            inv_log_rows.append((
+                prod["itemCode"], emp["location_id"], -float(qty), "SALE", inv_date, inv_time
+            ))
+
+        # Header Financials
+        cash_paid = header_total + Decimal(random.randint(0, 50)) if pay_method == "CASH" else header_total
+        balance = cash_paid - header_total if pay_method == "CASH" else Decimal("0.00")
+        
+        cursor.execute(
+            """INSERT INTO invoices (
+                invoiceNumber, mainInvoiceNumber, invoiceCentralizeId, uniqueId, reference, kotNumber, orderNumber, licenceKey,
+                customerId, customerCash, customerBalance, invoiceCustomerSignatures,
+                invoiceTotal, totalDiscount, chargeTotalTax, chargeTotalCharge, creditAmount, creditComplete, creditDays,
+                payMethod, chequeNo, cardNo, payment, splitPayment, loyaltyPoints,
+                invoiceDate, invoiceTime, customizeTime, startDateTime, startTime, endTime,
+                cashierName, empId, tableCode, orderType, pickupDetails, billNote, channel, location_id
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+            (
+                inv_num, main_inv, cent_id, uniq_id, ref, kot, ord_num, lic_key,
+                cust_id, cash_paid, balance, "https://cdn.example.com/sigs/s1.png",
+                header_total, header_discount, header_tax, Decimal("0.00"), Decimal("0.00"), False, 0,
+                pay_method, 
+                fake.bothify(text='CHQ-####') if pay_method == "CHEQUE" else None,
+                fake.credit_card_number() if pay_method == "CARD" else None,
+                json.dumps({"method": pay_method, "amount": float(header_total)}),
+                json.dumps([]) if pay_method != "SPLIT" else json.dumps([{"method": "CASH", "amount": float(header_total/2)}, {"method": "CARD", "amount": float(header_total/2)}]),
+                random.randint(1, 20),
+                inv_date, inv_time, inv_time, start_dt, start_dt.time(), end_time,
+                emp["cashierName"], emp["empId"], f"T-{random.randint(1, 20)}", random.choice(order_types),
+                None, fake.sentence(), random.choice(channels), emp["location_id"]
+            )
+        )
+        
+        # Insert Line Items
+        cursor.executemany(
+            """INSERT INTO invoice_items (
+                invoiceNumber, itemCode, qty, itemPrice, itemCost, discount, taxValue, itemRemark, 
+                itemsDataList, invoiceLineDiscountList, invoiceItemAddonList
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+            item_rows
+        )
+
+        # Insert Inventory Logs
+        cursor.executemany(
+            """INSERT INTO inventory_logs (
+                itemCode, location_id, change_qty, reason, log_date, log_time
+            ) VALUES (%s, %s, %s, %s, %s, %s)""",
+            inv_log_rows
+        )
+
+    # 6. Seed some Restocks
+    print("Seeding restocks...")
+    for _ in range(200):
+        prod = random.choice(products)
+        loc_id = random.choice(locations)[0]
+        qty = random.randint(50, 200)
+        log_date = start_date + timedelta(days=random.randint(0, 180))
+        cursor.execute(
+            "INSERT INTO inventory_logs (itemCode, location_id, change_qty, reason, log_date, log_time) VALUES (%s, %s, %s, %s, %s, %s)",
+            (prod["itemCode"], loc_id, float(qty), "RESTOCK", log_date.date(), log_date.time())
+        )
 
     conn.commit()
     cursor.close()
     conn.close()
-    print("Done!")
+    print("Seeding completed successfully!")
 
 if __name__ == "__main__":
-    generate_data()
+    seed()
