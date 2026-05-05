@@ -10,17 +10,24 @@ export default function App() {
   const [page, setPage] = useState('query')
   const [llm, setLlm] = useState('gemini')
   const [tables, setTables] = useState([])
+  const [schemas, setSchemas] = useState({})
 
   useEffect(() => {
     fetchTables()
-      .then(d => setTables(d.tables || []))
-      .catch(() => setTables([]))
+      .then(d => {
+        setTables(d.tables || [])
+        setSchemas(d.schemas || {})
+      })
+      .catch(() => {
+        setTables([])
+        setSchemas({})
+      })
   }, [])
 
   const pages = {
     query:    <QueryPage llm={llm} setLlm={setLlm} />,
-    forecast: <ForecastPage tables={tables} />,
-    anomaly:  <AnomalyPage tables={tables} />,
+    forecast: <ForecastPage tables={tables} schemas={schemas} />,
+    anomaly:  <AnomalyPage tables={tables} schemas={schemas} />,
     reports:  <ReportsPage llm={llm} setLlm={setLlm} tables={tables} />,
   }
 

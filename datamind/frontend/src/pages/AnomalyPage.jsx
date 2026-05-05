@@ -10,13 +10,21 @@ const TT = { background: '#1a1e28', border: '1px solid rgba(255,255,255,0.1)', b
 
 const severityColor = { high: 'red', medium: 'amber', low: 'blue' }
 
-export default function AnomalyPage({ tables }) {
+export default function AnomalyPage({ tables, schemas }) {
   const [table, setTable] = useState('')
   const [valueCol, setValueCol] = useState('')
   const [dateCol, setDateCol] = useState('')
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
+
+  const columns = table ? (schemas[table] || []) : []
+
+  function handleTableChange(e) {
+    setTable(e.target.value)
+    setValueCol('')
+    setDateCol('')
+  }
 
   async function handleRun() {
     if (!table || !valueCol) return
@@ -38,7 +46,7 @@ export default function AnomalyPage({ tables }) {
     anomaly: s.is_anomaly ? s.score : null,
   })) || []
 
-  const inputStyle = { padding: '8px 12px', width: '100%', borderRadius: 'var(--radius-md)', fontSize: 13 }
+  const inputStyle = { padding: '8px 12px', width: '100%', borderRadius: 'var(--radius-md)', fontSize: 13, background: 'var(--bg-elevated)', border: '1px solid var(--border)', color: 'var(--text-primary)' }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -48,18 +56,24 @@ export default function AnomalyPage({ tables }) {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: 10, alignItems: 'flex-end' }}>
           <div>
             <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 5 }}>Table</label>
-            <select value={table} onChange={e => setTable(e.target.value)} style={inputStyle}>
+            <select value={table} onChange={handleTableChange} style={inputStyle}>
               <option value="">Select table…</option>
               {tables.map(t => <option key={t} value={t}>{t}</option>)}
             </select>
           </div>
           <div>
             <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 5 }}>Value column</label>
-            <input value={valueCol} onChange={e => setValueCol(e.target.value)} placeholder="e.g. revenue, quantity" style={inputStyle} />
+            <select value={valueCol} onChange={e => setValueCol(e.target.value)} style={inputStyle} disabled={!table}>
+              <option value="">Select column…</option>
+              {columns.map(c => <option key={c.name} value={c.name}>{c.name} ({c.type})</option>)}
+            </select>
           </div>
           <div>
             <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 5 }}>Date column (optional)</label>
-            <input value={dateCol} onChange={e => setDateCol(e.target.value)} placeholder="e.g. created_at" style={inputStyle} />
+            <select value={dateCol} onChange={e => setDateCol(e.target.value)} style={inputStyle} disabled={!table}>
+              <option value="">None (Index based)</option>
+              {columns.map(c => <option key={c.name} value={c.name}>{c.name} ({c.type})</option>)}
+            </select>
           </div>
           <Btn onClick={handleRun} disabled={loading || !table || !valueCol} style={{ alignSelf: 'flex-end' }}>
             {loading ? <><Spinner size={14} color="#fff" /> Scanning…</> : 'Detect ↗'}

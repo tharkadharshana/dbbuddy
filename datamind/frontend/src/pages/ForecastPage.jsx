@@ -8,7 +8,7 @@ import { runForecast } from '../utils/api'
 
 const TT = { background: '#1a1e28', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 12, color: '#eef0f6' }
 
-export default function ForecastPage({ tables }) {
+export default function ForecastPage({ tables, schemas }) {
   const [table, setTable] = useState('')
   const [dateCol, setDateCol] = useState('')
   const [valueCol, setValueCol] = useState('')
@@ -16,6 +16,14 @@ export default function ForecastPage({ tables }) {
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
+
+  const columns = table ? (schemas[table] || []) : []
+
+  function handleTableChange(e) {
+    setTable(e.target.value)
+    setDateCol('')
+    setValueCol('')
+  }
 
   async function handleRun() {
     if (!table || !dateCol || !valueCol) return
@@ -41,7 +49,7 @@ export default function ForecastPage({ tables }) {
     ? Object.entries(result.weekly_seasonality || {}).map(([day, val]) => ({ day: day.slice(0,3), value: +val.toFixed(1) }))
     : []
 
-  const inputStyle = { padding: '8px 12px', width: '100%', borderRadius: 'var(--radius-md)', fontSize: 13 }
+  const inputStyle = { padding: '8px 12px', width: '100%', borderRadius: 'var(--radius-md)', fontSize: 13, background: 'var(--bg-elevated)', border: '1px solid var(--border)', color: 'var(--text-primary)' }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -52,18 +60,24 @@ export default function ForecastPage({ tables }) {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: 10, alignItems: 'flex-end' }}>
           <div>
             <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 5 }}>Table</label>
-            <select value={table} onChange={e => setTable(e.target.value)} style={inputStyle}>
+            <select value={table} onChange={handleTableChange} style={inputStyle}>
               <option value="">Select table…</option>
               {tables.map(t => <option key={t} value={t}>{t}</option>)}
             </select>
           </div>
           <div>
             <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 5 }}>Date column</label>
-            <input value={dateCol} onChange={e => setDateCol(e.target.value)} placeholder="e.g. created_at" style={inputStyle} />
+            <select value={dateCol} onChange={e => setDateCol(e.target.value)} style={inputStyle} disabled={!table}>
+              <option value="">Select date column…</option>
+              {columns.map(c => <option key={c.name} value={c.name}>{c.name} ({c.type})</option>)}
+            </select>
           </div>
           <div>
             <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 5 }}>Value column</label>
-            <input value={valueCol} onChange={e => setValueCol(e.target.value)} placeholder="e.g. total_revenue" style={inputStyle} />
+            <select value={valueCol} onChange={e => setValueCol(e.target.value)} style={inputStyle} disabled={!table}>
+              <option value="">Select value column…</option>
+              {columns.map(c => <option key={c.name} value={c.name}>{c.name} ({c.type})</option>)}
+            </select>
           </div>
           <div>
             <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'block', marginBottom: 5 }}>Days ahead</label>
