@@ -1,201 +1,145 @@
-import React, { useState } from 'react'
-import {
-  ComposedChart, Line, Area, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, BarChart, Bar
-} from 'recharts'
-import { Btn, Card, Spinner, SectionHeader } from '../components/UI'
-import { runForecast } from '../utils/api'
+import React, { useState, useEffect } from 'react'
+import { ComposedChart, Area, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart } from 'recharts'
+import { Card, Btn, Spinner, Spinner2, Empty, ErrorBox, KPICard } from '../components/UI'
+import { runAutoForecast, runForecast, fetchTables } from '../utils/api'
 
-const TT = { 
-  background: '#ffffff', 
-  border: '0.5px solid var(--color-border-secondary)', 
-  borderRadius: 8, 
-  fontSize: 12, 
-  color: 'var(--color-text-primary)' 
-}
+const TT = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)', borderRadius:8, fontSize:12, color:'#f0f1fa' }
 
-export default function ForecastPage({ tables, schemas }) {
-  const [table, setTable] = useState('')
-  const [dateCol, setDateCol] = useState('')
-  const [valueCol, setValueCol] = useState('')
+export default function ForecastPage() {
+  const [mode, setMode]       = useState('auto')
   const [periods, setPeriods] = useState(90)
   const [loading, setLoading] = useState(false)
-  const [result, setResult] = useState(null)
-  const [error, setError] = useState(null)
+  const [result, setResult]   = useState(null)
+  const [error, setError]     = useState(null)
+  const [tables, setTables]   = useState([])
+  const [manForm, setManForm] = useState({ table:'', date_column:'', value_column:'' })
 
-  const columns = table ? (schemas[table] || []) : []
+  useEffect(() => {
+    fetchTables().then(d => setTables(d.tables||[])).catch(()=>{})
+  }, [])
 
-  function handleTableChange(e) {
-    setTable(e.target.value)
-    setDateCol('')
-    setValueCol('')
-  }
-
-  async function handleRun() {
-    if (!table || !dateCol || !valueCol) return
+  async function runIt() {
     setLoading(true); setError(null); setResult(null)
     try {
-      const data = await runForecast(table, dateCol, valueCol, periods)
+      const data = mode==='auto'
+        ? await runAutoForecast(periods)
+        : await runForecast(manForm.table, manForm.date_column, manForm.value_column, periods)
       setResult(data)
-    } catch (e) {
-      setError(e.response?.data?.detail || e.message)
-    } finally {
-      setLoading(false)
-    }
+    } catch(e) { setError(e.response?.data?.detail || e.message) }
+    finally { setLoading(false) }
   }
 
-  const chartData = result
-    ? [
-        ...result.historical.map(h => ({ date: h.date, actual: h.value })),
-        ...result.forecast.map(f => ({ date: f.date, forecast: f.yhat, upper: f.yhat_upper, lower: f.yhat_lower }))
-      ]
-    : []
+  const combined = result ? [
+    ...result.historical.map(h => ({ date: h.date, actual: h.value })),
+    ...result.forecast.map(f => ({ date: f.date, forecast: f.yhat, upper: f.yhat_upper, lower: f.yhat_lower }))
+  ] : []
 
-  const weeklyData = result
-    ? Object.entries(result.weekly_seasonality || {}).map(([day, val]) => ({ day: day.slice(0,3), value: +val.toFixed(1) }))
-    : []
-
-  const inputStyle = { padding: '9px 12px', width: '100%', borderRadius: 'var(--border-radius-md)', fontSize: 13, background: 'var(--color-background-secondary)', border: '0.5px solid var(--color-border-secondary)', color: 'var(--color-text-primary)', outline: 'none' }
+  const weeklyData = result ? Object.entries(result.weekly_seasonality||{}).map(([day,val]) => ({ day: day.slice(0,3), value:+val.toFixed(2) })) : []
+  const { summary } = result || {}
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-
+    <div style={{ padding:20, display:'flex', flexDirection:'column', gap:14, height:'100%', overflowY:'auto' }}>
       {/* Config */}
-      <Card style={{ padding: 16 }}>
-        <SectionHeader title="Forecast Configuration" />
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 120px auto', gap: 10, alignItems: 'flex-end' }}>
+      <Card style={{ padding:18 }}>
+        <div style={{ fontSize:11, fontWeight:600, color:'var(--text3)', textTransform:'uppercase', letterSpacing:'.08em', marginBottom:14 }}>Forecast Configuration</div>
+
+        {/* Mode toggle */}
+        <div style={{ display:'flex', background:'var(--bg3)', borderRadius:'var(--r-md)', padding:4, gap:3, marginBottom:16, width:'fit-content' }}>
+          {[['auto','⚡ Auto (Revenue)'],['manual','⚙ Manual']].map(([m,l]) => (
+            <button key={m} onClick={()=>setMode(m)} style={{ padding:'6px 18px', borderRadius:'var(--r-sm)', fontSize:12, fontWeight:500, background: mode===m ? 'var(--blue)' : 'transparent', color: mode===m ? '#fff' : 'var(--text3)', border:'none', cursor:'pointer' }}>{l}</button>
+          ))}
+        </div>
+
+        {mode==='manual' && (
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:10, marginBottom:14 }}>
+            {[['table','Table'], ['date_column','Date Column'], ['value_column','Value Column']].map(([k,lbl]) => (
+              <div key={k}>
+                <label style={{ fontSize:11, color:'var(--text3)', display:'block', marginBottom:5 }}>{lbl}</label>
+                {k==='table'
+                  ? <select value={manForm.table} onChange={e=>setManForm(f=>({...f,table:e.target.value}))} style={{ width:'100%', padding:'8px 10px', borderRadius:'var(--r-md)', fontSize:13 }}>
+                      <option value="">Select…</option>
+                      {tables.map(t => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                  : <input value={manForm[k]} onChange={e=>setManForm(f=>({...f,[k]:e.target.value}))} placeholder={k==='date_column'?'e.g. invoiceDate':'e.g. invoiceTotal'} style={{ width:'100%', padding:'8px 10px', borderRadius:'var(--r-md)', fontSize:13 }} />
+                }
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div style={{ display:'flex', alignItems:'center', gap:12 }}>
           <div>
-            <label style={{ fontSize: 11, color: 'var(--color-text-tertiary)', display: 'block', marginBottom: 5 }}>Table</label>
-            <select value={table} onChange={handleTableChange} style={inputStyle}>
-              <option value="">Select table…</option>
-              {tables.map(t => <option key={t} value={t}>{t}</option>)}
+            <label style={{ fontSize:11, color:'var(--text3)', display:'block', marginBottom:5 }}>Forecast horizon</label>
+            <select value={periods} onChange={e=>setPeriods(Number(e.target.value))} style={{ padding:'8px 10px', borderRadius:'var(--r-md)', fontSize:13 }}>
+              {[30,60,90,180].map(p => <option key={p} value={p}>{p} days</option>)}
             </select>
           </div>
-          <div>
-            <label style={{ fontSize: 11, color: 'var(--color-text-tertiary)', display: 'block', marginBottom: 5 }}>Date column</label>
-            <select value={dateCol} onChange={e => setDateCol(e.target.value)} style={inputStyle} disabled={!table}>
-              <option value="">Select date column…</option>
-              {columns.map(c => <option key={c.name} value={c.name}>{c.name} ({c.type})</option>)}
-            </select>
-          </div>
-          <div>
-            <label style={{ fontSize: 11, color: 'var(--color-text-tertiary)', display: 'block', marginBottom: 5 }}>Value column</label>
-            <select value={valueCol} onChange={e => setValueCol(e.target.value)} style={inputStyle} disabled={!table}>
-              <option value="">Select value column…</option>
-              {columns.map(c => <option key={c.name} value={c.name}>{c.name} ({c.type})</option>)}
-            </select>
-          </div>
-          <div>
-            <label style={{ fontSize: 11, color: 'var(--color-text-tertiary)', display: 'block', marginBottom: 5 }}>Horizon</label>
-            <select value={periods} onChange={e => setPeriods(Number(e.target.value))} style={inputStyle}>
-              <option value={30}>30 days</option>
-              <option value={60}>60 days</option>
-              <option value={90}>90 days</option>
-              <option value={180}>180 days</option>
-            </select>
-          </div>
-          <Btn onClick={handleRun} disabled={loading || !table || !dateCol || !valueCol} style={{ padding: '10px 18px', height: 'fit-content' }}>
-            {loading ? <Spinner size={14} color="#fff" /> : 'Run Forecast ↗'}
+          <Btn onClick={runIt} disabled={loading} style={{ alignSelf:'flex-end' }}>
+            {loading ? <><Spinner size={13} color="#fff" /> Running Prophet…</> : 'Run Forecast ↗'}
           </Btn>
         </div>
       </Card>
 
-      {/* Info banner */}
-      <div style={{ background: '#E6F1FB', border: '0.5px solid rgba(24,95,165,0.1)', borderRadius: 'var(--border-radius-md)', padding: '10px 14px', fontSize: 12, color: '#185FA5', display: 'flex', alignItems: 'center', gap: 8 }}>
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.2"/><line x1="8" y1="5" x2="8" y2="8.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/><circle cx="8" cy="11" r="0.8" fill="currentColor"/></svg>
-        Forecasting uses Prophet on your actual table data. The chart below shows a {periods}-day prediction with confidence bands.
-      </div>
-
-      {error && (
-        <Card style={{ padding: '14px 18px', background: '#FCEBEB', borderColor: 'rgba(163,45,45,0.1)' }}>
-          <span style={{ fontSize: 13, color: '#A32D2D' }}>⚠ {error}</span>
-        </Card>
+      {error && <ErrorBox message={error} />}
+      {loading && <Spinner2 label="Fitting Prophet model — this takes a few seconds…" />}
+      {!result && !loading && !error && (
+        <div style={{ background:'var(--blue-dim)', border:'1px solid rgba(79,142,247,0.2)', borderRadius:'var(--r-md)', padding:'12px 16px', fontSize:13, color:'var(--blue)' }}>
+          ✦ Powered by Meta's Prophet. Auto mode forecasts daily revenue from your invoices table.
+        </div>
       )}
 
-      {loading && <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}><Card style={{ height: 300, background: 'var(--color-background-secondary)' }} /><Card style={{ height: 180, background: 'var(--color-background-secondary)' }} /></div>}
+      {result && !loading && (
+        <div className="fade-up" style={{ display:'flex', flexDirection:'column', gap:12 }}>
+          {/* Summary KPIs */}
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10 }}>
+            <KPICard label="Historical Points" value={result.historical.length} icon="📊" />
+            <KPICard label="Next 30-day Avg" value={summary?.next_30_avg?.toLocaleString()} icon="📈" />
+            <KPICard label="Predicted Growth" value={`${summary?.predicted_growth_pct > 0 ? '+' : ''}${summary?.predicted_growth_pct}%`} color={summary?.predicted_growth_pct >= 0 ? 'var(--green)' : 'var(--red)'} icon="🚀" />
+          </div>
 
-      {result && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-
-          {/* Main forecast chart */}
-          <Card style={{ padding: 16 }}>
-            <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-text-secondary)', marginBottom: 16 }}>{table} · daily count — {periods}-day forecast</div>
-            <div style={{ height: 260 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={chartData}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(0,0,0,0.05)" />
-                  <XAxis 
-                    dataKey="date" 
-                    tick={{ fontSize: 10, fill: 'var(--color-text-tertiary)' }} 
-                    axisLine={false} 
-                    tickLine={false} 
-                    interval={Math.floor(chartData.length / 8)}
-                    tickFormatter={(str) => {
-                      try {
-                        const d = new Date(str);
-                        return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-                      } catch(e) { return str; }
-                    }}
-                  />
-                  <YAxis 
-                    tick={{ fontSize: 10, fill: 'var(--color-text-tertiary)' }} 
-                    axisLine={false} 
-                    tickLine={false} 
-                    domain={[0, 'auto']}
-                  />
-                  <Tooltip contentStyle={TT} />
-                  <Area dataKey="upper" fill="rgba(216,90,48,0.08)" stroke="none" />
-                  <Area dataKey="lower" fill="#fff" stroke="none" />
-                  <Line dataKey="actual" stroke="#378ADD" strokeWidth={1.5} dot={false} connectNulls={false} />
-                  <Line dataKey="forecast" stroke="#D85A30" strokeWidth={1.5} strokeDasharray="4 3" dot={false} connectNulls={false} />
-                </ComposedChart>
-              </ResponsiveContainer>
-            </div>
-            <div style={{ display: 'flex', gap: 20, marginTop: 12, fontSize: 11, color: 'var(--color-text-tertiary)' }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 12, height: 2, background: '#378ADD', display: 'inline-block' }} /> Historical</span>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 12, height: 2, borderTop: '2px dashed #D85A30', display: 'inline-block' }} /> Forecast</span>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 12, height: 8, background: 'rgba(216,90,48,0.1)', display: 'inline-block', borderRadius: 2 }} /> 80% confidence</span>
+          {/* Main chart */}
+          <Card style={{ padding:18 }}>
+            <div style={{ fontSize:12, color:'var(--text3)', marginBottom:14 }}>Historical + {periods}-day forecast · 80% confidence band</div>
+            <ResponsiveContainer width="100%" height={280}>
+              <ComposedChart data={combined}>
+                <defs>
+                  <linearGradient id="confBand" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#4f8ef7" stopOpacity={0.15}/>
+                    <stop offset="100%" stopColor="#4f8ef7" stopOpacity={0.02}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                <XAxis dataKey="date" tick={{fontSize:10,fill:'#5a5f7d'}} axisLine={false} tickLine={false} interval={Math.floor(combined.length/8)} />
+                <YAxis tick={{fontSize:10,fill:'#5a5f7d'}} axisLine={false} tickLine={false} />
+                <Tooltip contentStyle={TT} />
+                <Area dataKey="upper" fill="url(#confBand)" stroke="none" />
+                <Area dataKey="lower" fill="var(--bg)" stroke="none" />
+                <Line dataKey="actual" stroke="var(--green)" strokeWidth={1.8} dot={false} connectNulls={false} />
+                <Line dataKey="forecast" stroke="var(--blue)" strokeWidth={2} strokeDasharray="5 3" dot={false} connectNulls={false} />
+              </ComposedChart>
+            </ResponsiveContainer>
+            <div style={{ display:'flex', gap:18, marginTop:10, fontSize:11, color:'var(--text3)' }}>
+              <span><span style={{ display:'inline-block', width:18, height:2, background:'var(--green)', marginRight:5, verticalAlign:'middle' }}/>Historical</span>
+              <span><span style={{ display:'inline-block', width:18, height:2, background:'var(--blue)', marginRight:5, verticalAlign:'middle', borderTop:'2px dashed var(--blue)' }}/>Forecast</span>
+              <span><span style={{ display:'inline-block', width:18, height:8, background:'rgba(79,142,247,0.15)', marginRight:5, verticalAlign:'middle', borderRadius:2 }}/>80% Confidence</span>
             </div>
           </Card>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-            {/* Weekly seasonality */}
-            <Card style={{ padding: 16 }}>
-              <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-text-secondary)', marginBottom: 14 }}>Weekly seasonality pattern</div>
-              <div style={{ height: 160 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={weeklyData}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(0,0,0,0.05)" />
-                    <XAxis dataKey="day" tick={{ fontSize: 11, fill: 'var(--color-text-tertiary)' }} axisLine={false} tickLine={false} />
-                    <YAxis tick={{ fontSize: 11, fill: 'var(--color-text-tertiary)' }} axisLine={false} tickLine={false} />
-                    <Tooltip contentStyle={TT} cursor={{ fill: 'rgba(0,0,0,0.02)' }} />
-                    <Bar dataKey="value" fill="#7F77DD" radius={[4,4,0,0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
+          {/* Weekly seasonality */}
+          {weeklyData.length > 0 && (
+            <Card style={{ padding:18 }}>
+              <div style={{ fontSize:12, color:'var(--text3)', marginBottom:14 }}>Weekly seasonality pattern</div>
+              <ResponsiveContainer width="100%" height={160}>
+                <BarChart data={weeklyData} barSize={28}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                  <XAxis dataKey="day" tick={{fontSize:11,fill:'#5a5f7d'}} axisLine={false} tickLine={false} />
+                  <YAxis tick={{fontSize:10,fill:'#5a5f7d'}} axisLine={false} tickLine={false} />
+                  <Tooltip contentStyle={TT} />
+                  <Bar dataKey="value" fill="var(--purple)" radius={[4,4,0,0]} />
+                </BarChart>
+              </ResponsiveContainer>
             </Card>
-
-            {/* Prediction details */}
-            <Card style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-text-secondary)', marginBottom: 2 }}>Forecast Details</div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                <div style={{ background: 'var(--color-background-secondary)', padding: '12px', borderRadius: 'var(--border-radius-md)' }}>
-                  <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginBottom: 4 }}>Last Val</div>
-                  <div style={{ fontSize: 18, fontWeight: 500 }}>{result.forecast.at(-1)?.yhat?.toLocaleString() ?? '—'}</div>
-                </div>
-                <div style={{ background: 'var(--color-background-secondary)', padding: '12px', borderRadius: 'var(--border-radius-md)' }}>
-                  <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginBottom: 4 }}>Horizon</div>
-                  <div style={{ fontSize: 18, fontWeight: 500 }}>{periods}d</div>
-                </div>
-              </div>
-              <div style={{ flex: 1, background: 'var(--color-background-secondary)', padding: '12px', borderRadius: 'var(--border-radius-md)' }}>
-                <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginBottom: 6 }}>Model Confidence</div>
-                <div style={{ fontSize: 13, color: 'var(--color-text-secondary)', lineHeight: 1.5 }}>
-                  The 80% confidence interval indicates a stable trend with moderate volatility detected in the last cycle.
-                </div>
-              </div>
-            </Card>
-          </div>
+          )}
         </div>
       )}
     </div>

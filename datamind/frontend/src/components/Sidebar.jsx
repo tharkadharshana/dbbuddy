@@ -1,90 +1,69 @@
 import React from 'react'
 
-const navItems = [
-  { id: 'query',    label: 'Query',      icon: IconSearch },
-  { id: 'forecast', label: 'Forecast',   icon: IconTrend },
-  { id: 'anomaly',  label: 'Anomalies',  icon: IconAlert },
-  { id: 'reports',  label: 'Reports',    icon: IconDoc },
+const NAV = [
+  { id:'discover', label:'Analytics Hub', icon:'⬡' },
+  { id:'query',    label:'Ask a Question', icon:'⌕' },
+  { id:'forecast', label:'Forecasting', icon:'📈' },
+  { id:'anomaly',  label:'Anomaly Alerts', icon:'⚠' },
+  { id:'reports',  label:'Reports', icon:'📋' },
 ]
-
-function IconSearch() {
-  return <svg viewBox="0 0 16 16" fill="none" width="14" height="14"><circle cx="7" cy="7" r="4.5" stroke="currentColor" strokeWidth="1.2"/><path d="M10.5 10.5L13 13" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>
-}
-function IconTrend() {
-  return <svg viewBox="0 0 16 16" fill="none" width="14" height="14"><polyline points="2,12 5,8 8,10 11,5 14,7" stroke="currentColor" strokeWidth="1.2" fill="none" strokeLinecap="round" strokeLinejoin="round"/></svg>
-}
-function IconAlert() {
-  return <svg viewBox="0 0 16 16" fill="none" width="14" height="14"><path d="M8 2L14 13H2L8 2Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round"/><line x1="8" y1="6" x2="8" y2="9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/><circle cx="8" cy="11" r="0.7" fill="currentColor"/></svg>
-}
-function IconDoc() {
-  return <svg viewBox="0 0 16 16" fill="none" width="14" height="14"><rect x="3" y="2" width="10" height="12" rx="1.5" stroke="currentColor" strokeWidth="1.2"/><line x1="5.5" y1="5.5" x2="10.5" y2="5.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/><line x1="5.5" y1="8" x2="10.5" y2="8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/><line x1="5.5" y1="10.5" x2="8.5" y2="10.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>
-}
 
 export default function Sidebar({ active, setActive, tables }) {
   return (
-    <aside style={{
-      width: 200,
-      background: 'var(--color-background-primary)',
-      borderRight: '0.5px solid var(--color-border-tertiary)',
-      padding: '16px 0',
-      display: 'flex',
-      flexDirection: 'column',
-      flexShrink: 0,
-    }}>
-      <div style={{ padding: '0 12px', marginBottom: 20 }}>
-        <div style={{ fontSize: 10, fontWeight: 500, color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em', padding: '0 8px', marginBottom: 6 }}>Navigation</div>
-        {navItems.map(({ id, label, icon: Icon }) => (
-          <div
-            key={id}
-            onClick={() => setActive(id)}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              padding: '7px 8px',
-              borderRadius: 'var(--border-radius-md)',
-              fontSize: 13,
-              color: active === id ? 'var(--color-primary-text)' : 'var(--color-text-secondary)',
-              background: active === id ? 'var(--color-primary)' : 'transparent',
-              cursor: 'pointer',
-              transition: 'all 0.1s',
-            }}
-            onMouseEnter={(e) => {
-              if (active !== id) {
-                e.currentTarget.style.background = 'var(--color-background-secondary)';
-                e.currentTarget.style.color = 'var(--color-text-primary)';
-              }
-            }}
-            onMouseLeave={(e) => {
-              if (active !== id) {
-                e.currentTarget.style.background = 'transparent';
-                e.currentTarget.style.color = 'var(--color-text-secondary)';
-              }
-            }}
-          >
-            <Icon />
+    <aside style={{ width:'var(--sidebar)', background:'var(--bg1)', borderRight:'1px solid var(--border)', display:'flex', flexDirection:'column', flexShrink:0, overflow:'hidden' }}>
+      {/* Logo */}
+      <div style={{ padding:'16px 16px 12px', borderBottom:'1px solid var(--border)' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:9 }}>
+          <div style={{ width:30, height:30, borderRadius:8, background:'linear-gradient(135deg,#4f8ef7,#a78bfa)', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+              <rect x="2" y="2" width="5" height="5" rx="1" fill="rgba(255,255,255,0.95)"/>
+              <rect x="9" y="2" width="5" height="5" rx="1" fill="rgba(255,255,255,0.5)"/>
+              <rect x="2" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.5)"/>
+              <rect x="9" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.95)"/>
+            </svg>
+          </div>
+          <div>
+            <div style={{ fontWeight:700, fontSize:14, lineHeight:1.1 }}>DataMind</div>
+            <div style={{ fontSize:10, color:'var(--text3)', fontWeight:400 }}>AI Analytics</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Nav */}
+      <nav style={{ padding:'10px 8px', flex:1, overflowY:'auto' }}>
+        <div style={{ fontSize:10, color:'var(--text3)', textTransform:'uppercase', letterSpacing:'.1em', padding:'0 8px', marginBottom:6, fontWeight:600 }}>Navigation</div>
+        {NAV.map(({ id, label, icon }) => (
+          <div key={id} onClick={() => setActive(id)} style={{
+            display:'flex', alignItems:'center', gap:9, padding:'8px 10px',
+            borderRadius:'var(--r-sm)', marginBottom:1, cursor:'pointer',
+            background: active===id ? 'var(--blue-dim)' : 'transparent',
+            color: active===id ? 'var(--blue)' : 'var(--text2)',
+            fontWeight: active===id ? 600 : 400, fontSize:13,
+            borderLeft: active===id ? '2px solid var(--blue)' : '2px solid transparent',
+            transition:'all .1s'
+          }}>
+            <span style={{ fontSize:14 }}>{icon}</span>
             {label}
           </div>
         ))}
-      </div>
+      </nav>
 
-      <div style={{ padding: '0 12px' }}>
-        <div style={{ fontSize: 10, fontWeight: 500, color: 'var(--color-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em', padding: '0 8px', marginBottom: 6 }}>Tables</div>
+      {/* Tables */}
+      <div style={{ padding:'10px 8px', borderTop:'1px solid var(--border)', maxHeight:200, overflowY:'auto' }}>
+        <div style={{ fontSize:10, color:'var(--text3)', textTransform:'uppercase', letterSpacing:'.1em', padding:'0 8px', marginBottom:6, fontWeight:600 }}>Tables</div>
         {tables.map(t => (
-          <div key={t} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 8px', borderRadius: 'var(--border-radius-md)', fontSize: 12, fontFamily: 'var(--font-mono)', color: 'var(--color-text-secondary)', cursor: 'pointer' }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'var(--color-background-secondary)';
-              e.currentTarget.style.color = 'var(--color-text-primary)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'transparent';
-              e.currentTarget.style.color = 'var(--color-text-secondary)';
-            }}
-          >
-            <div style={{ width: 5, height: 5, background: '#378ADD', borderRadius: '50%', flexShrink: 0 }}></div>
+          <div key={t} style={{ display:'flex', alignItems:'center', gap:7, padding:'4px 8px', borderRadius:'var(--r-sm)', color:'var(--text3)', fontSize:11, fontFamily:'var(--mono)' }}>
+            <div style={{ width:5, height:5, borderRadius:'50%', background:'var(--blue)', opacity:.5, flexShrink:0 }} />
             {t}
           </div>
         ))}
+        {!tables.length && <div style={{ fontSize:11, color:'var(--text3)', padding:'4px 8px' }}>No DB connected</div>}
+      </div>
+
+      {/* DB pill */}
+      <div style={{ padding:'10px 16px', borderTop:'1px solid var(--border)', display:'flex', alignItems:'center', gap:7 }}>
+        <div style={{ width:7, height:7, borderRadius:'50%', background: tables.length > 0 ? 'var(--green)' : 'var(--red)', boxShadow: tables.length > 0 ? '0 0 8px var(--green)' : 'none' }} />
+        <span style={{ fontSize:11, color:'var(--text3)' }}>{tables.length > 0 ? `MySQL · ${tables.length} tables` : 'Disconnected'}</span>
       </div>
     </aside>
   )

@@ -1,121 +1,212 @@
 import React from 'react'
+import { ResponsiveContainer, BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts'
 
-// ── Button ────────────────────────────────────────────────────────────────
+export const TT_STYLE = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.1)', borderRadius:8, fontSize:12, color:'#f0f1fa', boxShadow:'0 8px 24px rgba(0,0,0,0.4)' }
+export const COLORS = ['#4f8ef7','#34d17a','#a78bfa','#f5a623','#f05050','#2dd4bf','#f472b6','#facc15','#60a5fa','#fb923c']
 
-export function Btn({ children, onClick, variant = 'primary', size = 'md', disabled, style }) {
-  const base = {
-    display: 'inline-flex', alignItems: 'center', gap: 6,
-    fontFamily: 'var(--font-sans)', fontWeight: 500, cursor: disabled ? 'not-allowed' : 'pointer',
-    border: 'none', borderRadius: 'var(--border-radius-md)', transition: 'all 0.15s',
-    opacity: disabled ? 0.45 : 1,
-  }
-  const sizes = { 
-    sm: { padding: '5px 12px', fontSize: 12 }, 
-    md: { padding: '9px 18px', fontSize: 13 }, 
-    lg: { padding: '12px 24px', fontSize: 14 } 
-  }
+// ── Primitives ───────────────────────────────────────────────────────────────
+
+export function Btn({ children, onClick, variant='primary', size='md', disabled, style={} }) {
+  const base = { display:'inline-flex', alignItems:'center', gap:6, fontWeight:500, borderRadius:'var(--r-md)', opacity: disabled ? 0.4 : 1, cursor: disabled ? 'not-allowed' : 'pointer' }
+  const sizes = { sm:{padding:'5px 12px',fontSize:12}, md:{padding:'9px 18px',fontSize:13}, lg:{padding:'12px 24px',fontSize:14} }
   const variants = {
-    primary: { background: '#1a1a2e', color: '#e8e8f0' },
-    ghost: { background: 'var(--color-background-secondary)', color: 'var(--color-text-secondary)', border: '0.5px solid var(--color-border-tertiary)' },
-    danger: { background: '#FCEBEB', color: '#A32D2D', border: '0.5px solid rgba(163,45,45,0.1)' },
+    primary: { background:'var(--blue)', color:'#fff' },
+    ghost:   { background:'var(--bg3)', color:'var(--text2)', border:'1px solid var(--border)' },
+    danger:  { background:'var(--red-dim)', color:'var(--red)', border:'1px solid rgba(240,80,80,0.2)' },
+    success: { background:'var(--green-dim)', color:'var(--green)', border:'1px solid rgba(52,209,122,0.2)' },
+  }
+  return <button onClick={!disabled ? onClick : undefined} style={{...base,...sizes[size],...variants[variant],...style}}>{children}</button>
+}
+
+export function Card({ children, style={}, onClick }) {
+  return <div onClick={onClick} style={{ background:'var(--bg1)', border:'1px solid var(--border)', borderRadius:'var(--r-lg)', ...style }}>{children}</div>
+}
+
+export function Badge({ children, color='gray', style={} }) {
+  const colors = {
+    blue:   { background:'var(--blue-dim)',   color:'var(--blue)' },
+    green:  { background:'var(--green-dim)',  color:'var(--green)' },
+    amber:  { background:'var(--amber-dim)',  color:'var(--amber)' },
+    red:    { background:'var(--red-dim)',    color:'var(--red)' },
+    purple: { background:'var(--purple-dim)', color:'var(--purple)' },
+    teal:   { background:'var(--teal-dim)',   color:'var(--teal)' },
+    pink:   { background:'var(--pink-dim)',   color:'var(--pink)' },
+    gray:   { background:'var(--bg3)',        color:'var(--text2)' },
+  }
+  return <span style={{ display:'inline-flex', alignItems:'center', padding:'2px 10px', borderRadius:20, fontSize:11, fontWeight:500, ...colors[color]||colors.gray, ...style }}>{children}</span>
+}
+
+export function Spinner({ size=18, color='var(--blue)' }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" style={{animation:'spin .8s linear infinite'}}><circle cx="12" cy="12" r="9" stroke={color} strokeWidth="2.5" strokeDasharray="40 20" strokeLinecap="round"/></svg>
+}
+
+export function LLMToggle({ value, onChange }) {
+  return (
+    <div style={{ display:'flex', background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'var(--r-md)', padding:3, gap:2 }}>
+      {['gemini','deepseek'].map(o => (
+        <button key={o} onClick={() => onChange(o)} style={{ padding:'4px 14px', borderRadius:'var(--r-sm)', fontSize:12, fontWeight:500, background: value===o ? 'var(--blue)' : 'transparent', color: value===o ? '#fff' : 'var(--text3)', border:'none', cursor:'pointer', textTransform:'capitalize' }}>
+          {o==='gemini' ? '✦ Gemini' : '◈ DeepSeek'}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+export function Spinner2({ label='Loading…' }) {
+  return (
+    <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:12, padding:'48px 0', color:'var(--text3)' }}>
+      <Spinner size={28} />
+      <span style={{ fontSize:13 }}>{label}</span>
+    </div>
+  )
+}
+
+export function Empty({ icon='⌕', title, subtitle }) {
+  return (
+    <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:8, padding:'56px 24px', color:'var(--text3)', textAlign:'center' }}>
+      <div style={{ fontSize:36, marginBottom:4 }}>{icon}</div>
+      <div style={{ fontSize:14, fontWeight:500, color:'var(--text2)' }}>{title}</div>
+      {subtitle && <div style={{ fontSize:12, maxWidth:360 }}>{subtitle}</div>}
+    </div>
+  )
+}
+
+export function ErrorBox({ message }) {
+  return (
+    <div style={{ background:'var(--red-dim)', border:'1px solid rgba(240,80,80,0.2)', borderRadius:'var(--r-md)', padding:'12px 16px', fontSize:13, color:'var(--red)', display:'flex', gap:8 }}>
+      ⚠ {message}
+    </div>
+  )
+}
+
+export function KPICard({ label, value, sub, color='var(--text)', icon }) {
+  return (
+    <Card style={{ padding:'16px 18px' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
+        <div>
+          <div style={{ fontSize:11, color:'var(--text3)', textTransform:'uppercase', letterSpacing:'.07em', marginBottom:8, fontWeight:500 }}>{label}</div>
+          <div style={{ fontSize:24, fontWeight:700, color, lineHeight:1.1 }}>{value}</div>
+          {sub && <div style={{ fontSize:11, color:'var(--text3)', marginTop:6 }}>{sub}</div>}
+        </div>
+        {icon && <div style={{ fontSize:20, opacity:.7 }}>{icon}</div>}
+      </div>
+    </Card>
+  )
+}
+
+export function SectionTitle({ children, right }) {
+  return (
+    <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:14 }}>
+      <h3 style={{ fontSize:11, fontWeight:600, color:'var(--text3)', textTransform:'uppercase', letterSpacing:'.09em' }}>{children}</h3>
+      {right}
+    </div>
+  )
+}
+
+// ── Chart Wrappers ────────────────────────────────────────────────────────────
+
+export function ChartCard({ title, children, style={} }) {
+  return (
+    <Card style={{ padding:18, ...style }}>
+      {title && <div style={{ fontSize:12, color:'var(--text3)', marginBottom:14, fontWeight:500 }}>{title}</div>}
+      {children}
+    </Card>
+  )
+}
+
+export function BarChartSimple({ data, xKey, yKey, color='var(--blue)', height=220, horizontal=false }) {
+  if (!data?.length) return <Empty icon="📊" title="No data" />
+  if (horizontal) {
+    return (
+      <ResponsiveContainer width="100%" height={Math.max(height, data.length * 32)}>
+        <BarChart data={data} layout="vertical" barSize={16} margin={{left:10,right:20}}>
+          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" horizontal={false} />
+          <XAxis type="number" tick={{fontSize:10,fill:'#5a5f7d'}} axisLine={false} tickLine={false} />
+          <YAxis dataKey={xKey} type="category" width={120} tick={{fontSize:10,fill:'#9499b8'}} axisLine={false} tickLine={false} />
+          <Tooltip contentStyle={TT_STYLE} />
+          <Bar dataKey={yKey} fill={color} radius={[0,4,4,0]} />
+        </BarChart>
+      </ResponsiveContainer>
+    )
   }
   return (
-    <button onClick={!disabled ? onClick : undefined} style={{ ...base, ...sizes[size], ...variants[variant], ...style }}>
-      {children}
-    </button>
+    <ResponsiveContainer width="100%" height={height}>
+      <BarChart data={data} barSize={22}>
+        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+        <XAxis dataKey={xKey} tick={{fontSize:10,fill:'#5a5f7d'}} axisLine={false} tickLine={false} />
+        <YAxis tick={{fontSize:11,fill:'#5a5f7d'}} axisLine={false} tickLine={false} />
+        <Tooltip contentStyle={TT_STYLE} />
+        <Bar dataKey={yKey} fill={color} radius={[4,4,0,0]} />
+      </BarChart>
+    </ResponsiveContainer>
   )
 }
 
-
-// ── Card ─────────────────────────────────────────────────────────────────
-
-export function Card({ children, style, className, onClick }) {
+export function LineChartSimple({ data, xKey, yKeys, colors, height=220 }) {
+  if (!data?.length) return <Empty icon="📈" title="No data" />
+  const _colors = colors || COLORS
+  const _yKeys = Array.isArray(yKeys) ? yKeys : [yKeys]
   return (
-    <div className={className} onClick={onClick} style={{
-      background: 'var(--color-background-primary)',
-      border: '0.5px solid var(--color-border-tertiary)',
-      borderRadius: 'var(--border-radius-lg)',
-      ...style
-    }}>
-      {children}
-    </div>
+    <ResponsiveContainer width="100%" height={height}>
+      <LineChart data={data}>
+        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+        <XAxis dataKey={xKey} tick={{fontSize:10,fill:'#5a5f7d'}} axisLine={false} tickLine={false} />
+        <YAxis tick={{fontSize:11,fill:'#5a5f7d'}} axisLine={false} tickLine={false} />
+        <Tooltip contentStyle={TT_STYLE} />
+        {_yKeys.length > 1 && <Legend wrapperStyle={{fontSize:11,color:'#9499b8'}} />}
+        {_yKeys.map((k,i) => <Line key={k} dataKey={k} stroke={_colors[i%_colors.length]} strokeWidth={2} dot={false} />)}
+      </LineChart>
+    </ResponsiveContainer>
   )
 }
 
-
-// ── Badge ─────────────────────────────────────────────────────────────────
-
-const badgeColors = {
-  green: { background: '#eaf3de', color: '#3B6D11' },
-  amber: { background: '#FAEEDA', color: '#854F0B' },
-  red:   { background: '#FCEBEB', color: '#A32D2D' },
-  blue:  { background: '#E6F1FB', color: '#185FA5' },
-  purple:{ background: '#f0f0f8', color: '#534AB7' },
-  gray:  { background: 'var(--color-background-secondary)', color: 'var(--color-text-secondary)' },
-}
-
-export function Badge({ children, color = 'gray', style }) {
+export function PieChartSimple({ data, nameKey, valueKey, height=220 }) {
+  if (!data?.length) return <Empty icon="🥧" title="No data" />
   return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center',
-      padding: '3px 10px', borderRadius: 20,
-      fontSize: 11, fontWeight: 500,
-      ...badgeColors[color], ...style
-    }}>
-      {children}
-    </span>
+    <ResponsiveContainer width="100%" height={height}>
+      <PieChart>
+        <Pie data={data} dataKey={valueKey} nameKey={nameKey} cx="50%" cy="50%" outerRadius={80} label={({name,percent})=>`${name} ${(percent*100).toFixed(0)}%`} labelLine={false} fontSize={10}>
+          {data.map((_,i) => <Cell key={i} fill={COLORS[i%COLORS.length]} />)}
+        </Pie>
+        <Tooltip contentStyle={TT_STYLE} />
+      </PieChart>
+    </ResponsiveContainer>
   )
 }
 
+// ── Data Table ────────────────────────────────────────────────────────────────
 
-// ── Spinner ───────────────────────────────────────────────────────────────
-
-export function Spinner({ size = 18, color = '#1a1a2e' }) {
+export function DataTable({ columns, data, maxHeight=320 }) {
+  if (!data?.length) return <Empty icon="📋" title="No rows returned" />
+  const isNum = v => typeof v === 'number'
+  const isPos = (col, v) => isNum(v) && (col.includes('growth') || col.includes('pct')) && v > 0
+  const isNeg = (col, v) => isNum(v) && (col.includes('growth') || col.includes('pct')) && v < 0
+  const fmt = (col, v) => {
+    if (v === null || v === undefined) return <span style={{color:'var(--text3)'}}>—</span>
+    if (isNum(v)) {
+      if (col.includes('pct') || col.includes('rate') || col.includes('growth')) return `${v > 0 ? '+' : ''}${v}%`
+      if (col.includes('revenue') || col.includes('sales') || col.includes('ltv') || col.includes('spent') || col.includes('value') || col.includes('profit') || col.includes('ticket') || col.includes('order') || col.includes('aov') || col.includes('monetary'))
+        return `$${Number(v).toLocaleString()}`
+      return Number(v).toLocaleString()
+    }
+    return String(v)
+  }
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
-      style={{ animation: 'spin 0.8s linear infinite' }}>
-      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
-      <circle cx="12" cy="12" r="9" stroke={color} strokeWidth="2.5" strokeDasharray="40 20" strokeLinecap="round"/>
-    </svg>
-  )
-}
-
-
-// ── Metric Card ───────────────────────────────────────────────────────────
-
-export function MetricCard({ label, value, delta, deltaType }) {
-  const deltaColor = deltaType === 'up' ? '#3B6D11' : deltaType === 'down' ? '#A32D2D' : 'var(--color-text-tertiary)'
-  const deltaPrefix = deltaType === 'up' ? '+' : deltaType === 'down' ? '−' : ''
-  return (
-    <div style={{ background: 'var(--color-background-secondary)', borderRadius: 'var(--border-radius-md)', padding: '12px 14px' }}>
-      <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginBottom: 6 }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 500, color: 'var(--color-text-primary)' }}>{value}</div>
-      {delta && <div style={{ fontSize: 11, color: deltaColor, marginTop: 4 }}>{deltaPrefix}{delta}</div>}
-    </div>
-  )
-}
-
-
-// ── Empty State ───────────────────────────────────────────────────────────
-
-export function Empty({ icon, title, subtitle }) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '48px 24px', color: 'var(--color-text-tertiary)', textAlign: 'center' }}>
-      <div style={{ fontSize: 32, marginBottom: 12 }}>{icon}</div>
-      <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--color-text-secondary)', marginBottom: 4 }}>{title}</div>
-      <div style={{ fontSize: 12 }}>{subtitle}</div>
-    </div>
-  )
-}
-
-
-// ── Section Header ─────────────────────────────────────────────────────────
-
-export function SectionHeader({ title, right }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-      <h2 style={{ fontSize: 13, fontWeight: 500, color: 'var(--color-text-secondary)' }}>{title}</h2>
-      {right}
+    <div style={{ overflowX:'auto', overflowY:'auto', maxHeight }}>
+      <table className="data-table">
+        <thead><tr>{columns.map(c => <th key={c}>{c.replace(/_/g,' ')}</th>)}</tr></thead>
+        <tbody>
+          {data.map((row,i) => (
+            <tr key={i}>
+              {columns.map(c => {
+                const v = row[c]
+                const cls = isPos(c,v) ? 'pos' : isNeg(c,v) ? 'neg' : isNum(v) ? 'num' : ''
+                return <td key={c} className={cls}>{fmt(c,v)}</td>
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   )
 }

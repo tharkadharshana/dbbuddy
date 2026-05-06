@@ -1,224 +1,143 @@
 import React, { useState } from 'react'
-import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { Btn, Card, MetricCard, Spinner, Empty } from '../components/UI'
+import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
+import { Card, Btn, LLMToggle, Spinner, Empty, ErrorBox, KPICard, DataTable, COLORS } from '../components/UI'
 import { runNLQuery } from '../utils/api'
 
 const SUGGESTIONS = [
-  'Top 10 customers by revenue',
-  'Monthly orders vs returns',
-  'Which products have low inventory?',
-  'Revenue by region this quarter',
+  'Show total revenue by product category',
+  'Top 10 customers by lifetime value',
+  'Monthly order count for the last 12 months',
+  'Which products have the lowest inventory?',
+  'Revenue by location this year',
+  'Cashier performance ranked by sales',
+  'Show daily revenue for the last 30 days',
+  'What is the average discount per payment method?',
 ]
+const TT = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)', borderRadius:8, fontSize:12, color:'#f0f1fa' }
 
-const TOOLTIP_STYLE = {
-  background: '#ffffff', border: '0.5px solid var(--color-border-secondary)',
-  borderRadius: 8, fontSize: 12, color: 'var(--color-text-primary)',
-}
-
-export default function QueryPage({ llm }) {
-  const [question, setQuestion] = useState('')
+export default function QueryPage({ llm, setLlm }) {
+  const [q, setQ]           = useState('')
   const [loading, setLoading] = useState(false)
-  const [result, setResult] = useState(null)
-  const [error, setError] = useState(null)
+  const [result, setResult]   = useState(null)
+  const [error, setError]     = useState(null)
   const [showSQL, setShowSQL] = useState(false)
+  const [history, setHistory] = useState([])
 
-  async function handleRun() {
-    if (!question.trim()) return
+  async function handleRun(question) {
+    const qText = question || q
+    if (!qText.trim()) return
     setLoading(true); setError(null); setResult(null); setShowSQL(false)
     try {
-      const data = await runNLQuery(question, llm)
+      const data = await runNLQuery(qText, llm)
       setResult(data)
-    } catch (e) {
+      setHistory(h => [{ q: qText, ts: new Date().toLocaleTimeString() }, ...h.slice(0,9)])
+    } catch(e) {
       setError(e.response?.data?.detail || e.message)
-    } finally {
-      setLoading(false)
-    }
+    } finally { setLoading(false) }
   }
 
-  const isNumeric = (v) => typeof v === 'number'
-
-  // Pick first string col as X axis, first numeric col as Y
-  const cols = result?.columns || []
-  const xCol = cols.find(c => typeof result?.data?.[0]?.[c] === 'string') || cols[0]
-  const yCol = cols.find(c => isNumeric(result?.data?.[0]?.[c]))
-  const chartData = result?.data?.slice(0, 30).map(r => ({ name: String(r[xCol] ?? ''), value: r[yCol] ?? 0 })) || []
+  const isNum = v => typeof v === 'number'
+  const cols  = result?.columns || []
+  const xCol  = cols.find(c => typeof result?.data?.[0]?.[c] === 'string') || cols[0]
+  const yCols = cols.filter(c => isNum(result?.data?.[0]?.[c])).slice(0, 2)
+  const chartData = result?.data?.slice(0, 30).map(r => ({ name: String(r[xCol] ?? ''), ...Object.fromEntries(yCols.map(k => [k, r[k]])) })) || []
+  const numCols = cols.filter(c => isNum(result?.data?.[0]?.[c])).slice(0, 4)
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, height: '100%' }}>
-
-      {/* Input area */}
-      <Card style={{ padding: 16 }}>
-        <div style={{ fontSize: 11, fontWeight: 500, color: 'var(--color-text-tertiary)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Ask your data anything</div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-          <textarea
-            value={question}
-            onChange={e => setQuestion(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleRun() } }}
-            placeholder="e.g. Show me total revenue by product category for the last 6 months..."
-            rows={2}
-            style={{ flex: 1, padding: '10px 14px', border: '0.5px solid var(--color-border-secondary)', borderRadius: 'var(--border-radius-md)', fontSize: 14, background: 'var(--color-background-secondary)', color: 'var(--color-text-primary)', resize: 'none' }}
-          />
-          <Btn onClick={handleRun} disabled={loading || !question.trim()} style={{ padding: '10px 18px', height: 'fit-content' }}>
-            {loading ? <Spinner size={14} color="#fff" /> : 'Run ↗'}
-          </Btn>
-        </div>
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 10 }}>
-          {SUGGESTIONS.map(s => (
-            <div key={s} onClick={() => setQuestion(s)} style={{
-              padding: '4px 12px', background: 'var(--color-background-secondary)', border: '0.5px solid var(--color-border-tertiary)', borderRadius: 20, fontSize: 12, color: 'var(--color-text-secondary)', cursor: 'pointer', transition: 'all 0.1s'
-            }} onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'var(--color-border-secondary)'; e.currentTarget.style.color = 'var(--color-text-primary)'; }} onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--color-border-tertiary)'; e.currentTarget.style.color = 'var(--color-text-secondary)'; }}>{s}</div>
+    <div style={{ display:'flex', height:'100%', overflow:'hidden' }}>
+      {/* History panel */}
+      <div style={{ width:220, borderRight:'1px solid var(--border)', display:'flex', flexDirection:'column', flexShrink:0 }}>
+        <div style={{ padding:'14px 14px 8px', fontSize:10, color:'var(--text3)', fontWeight:600, textTransform:'uppercase', letterSpacing:'.08em' }}>Recent Queries</div>
+        <div style={{ flex:1, overflowY:'auto', padding:'0 8px 12px' }}>
+          {!history.length && <div style={{ fontSize:11, color:'var(--text3)', padding:'8px 6px' }}>No queries yet</div>}
+          {history.map((h, i) => (
+            <div key={i} onClick={() => { setQ(h.q); handleRun(h.q) }} style={{ padding:'8px 8px', borderRadius:'var(--r-sm)', cursor:'pointer', marginBottom:2, fontSize:11, color:'var(--text2)', lineHeight:1.4 }}
+              onMouseEnter={e => e.currentTarget.style.background='var(--bg3)'}
+              onMouseLeave={e => e.currentTarget.style.background='transparent'}>
+              <div style={{ color:'var(--text)', fontWeight:500, marginBottom:2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{h.q}</div>
+              <div style={{ color:'var(--text3)', fontSize:10 }}>{h.ts}</div>
+            </div>
           ))}
         </div>
-      </Card>
+      </div>
 
-      {/* Error */}
-      {error && (
-        <Card style={{ padding: '14px 18px', background: '#FCEBEB', borderColor: 'rgba(163,45,45,0.1)' }}>
-          <span style={{ fontSize: 13, color: '#A32D2D' }}>⚠ {error}</span>
+      {/* Main */}
+      <div style={{ flex:1, overflowY:'auto', padding:20, display:'flex', flexDirection:'column', gap:14 }}>
+        <Card style={{ padding:18 }}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12 }}>
+            <span style={{ fontSize:11, fontWeight:600, color:'var(--text3)', textTransform:'uppercase', letterSpacing:'.08em' }}>Ask Your Data Anything</span>
+            <LLMToggle value={llm} onChange={setLlm} />
+          </div>
+          <div style={{ display:'flex', gap:10 }}>
+            <textarea value={q} onChange={e=>setQ(e.target.value)}
+              onKeyDown={e=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();handleRun()} }}
+              placeholder="e.g. Show total revenue by category for the last 6 months…"
+              rows={2} style={{ flex:1, padding:'10px 14px', resize:'none', lineHeight:1.6 }} />
+            <Btn onClick={() => handleRun()} disabled={loading||!q.trim()} style={{ alignSelf:'flex-end', height:42 }}>
+              {loading ? <Spinner size={13} color="#fff" /> : 'Run ↗'}
+            </Btn>
+          </div>
+          <div style={{ display:'flex', gap:5, flexWrap:'wrap', marginTop:10 }}>
+            {SUGGESTIONS.map(s => (
+              <button key={s} onClick={() => { setQ(s); handleRun(s) }} style={{ padding:'3px 11px', borderRadius:20, fontSize:11, background:'var(--bg3)', color:'var(--text3)', border:'1px solid var(--border)', cursor:'pointer' }}>{s}</button>
+            ))}
+          </div>
         </Card>
-      )}
 
-      {/* Empty */}
-      {!result && !loading && !error && (
-        <Empty icon="⌕" title="Ask your first question" subtitle="Type a question above and press Run — the AI will generate and execute the SQL for you." />
-      )}
+        {error && <ErrorBox message={error} />}
 
-      {/* Loading skeleton */}
-      {loading && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <Card style={{ height: 100, background: 'var(--color-background-secondary)' }} />
-          <Card style={{ height: 260, background: 'var(--color-background-secondary)' }} />
-        </div>
-      )}
+        {loading && <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+          {[80,220,40].map((h,i) => <div key={i} className="skeleton" style={{ height:h }} />)}
+        </div>}
 
-      {/* Results */}
-      {result && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        {!result && !loading && !error && <Empty icon="⌕" title="Ask your first question" subtitle="Type a question above and press Run — the AI writes and executes the SQL automatically." />}
 
-          <Card style={{ overflow: 'hidden' }}>
-            <div onClick={() => setShowSQL(v => !v)} style={{ display: 'flex', alignItems: 'center', justifyCenter: 'space-between', padding: '12px 16px', cursor: 'pointer', borderBottom: showSQL ? '0.5px solid var(--color-border-tertiary)' : 'none' }}>
-              <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--color-text-primary)' }}>{question}</div>
-              <div style={{ background: '#f0f0f8', color: '#534AB7', borderRadius: 'var(--border-radius-md)', padding: '2px 10px', fontSize: 11, fontFamily: 'var(--font-mono)', fontWeight: 500 }}>SQL {showSQL ? '↑' : '↓'}</div>
-            </div>
-            {showSQL && (
-              <pre style={{ background: 'var(--color-background-secondary)', padding: '12px 16px', fontSize: 12, fontFamily: 'var(--font-mono)', color: 'var(--color-text-secondary)', borderTop: '0.5px solid var(--color-border-tertiary)', overflowX: 'auto' }}>
-                {result.sql}
-              </pre>
-            )}
-            
-            <div style={{ padding: 16 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 16 }}>
-                <MetricCard label="Rows returned" value={result.row_count} />
-                <MetricCard label="Columns" value={result.columns.length} />
-                <MetricCard label="Avg value" value={isNumeric(result.data[0]?.[yCol]) ? (result.data.reduce((acc, r) => acc + (r[yCol] || 0), 0) / result.row_count).toFixed(1) : 'N/A'} />
-                <MetricCard label="Top item" value={result.data[0]?.[xCol] || 'N/A'} />
+        {result && !loading && (
+          <div className="fade-up" style={{ display:'flex', flexDirection:'column', gap:12 }}>
+            {/* SQL */}
+            <Card style={{ overflow:'hidden' }}>
+              <div onClick={() => setShowSQL(v=>!v)} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'11px 16px', cursor:'pointer' }}>
+                <span style={{ fontSize:12, fontWeight:500, color:'var(--text2)' }}>Generated SQL</span>
+                <span style={{ fontSize:11, color:'var(--blue)' }}>{showSQL ? '▲ Hide' : '▼ Show'}</span>
               </div>
+              {showSQL && <pre style={{ padding:'12px 16px', fontFamily:'var(--mono)', fontSize:12, color:'var(--green)', overflowX:'auto', lineHeight:1.8, whiteSpace:'pre-wrap', borderTop:'1px solid var(--border)' }}>{result.sql}</pre>}
+            </Card>
 
-              {yCol && chartData.length > 1 && (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-                  <div>
-                    <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-text-secondary)', marginBottom: 12 }}>Distribution of {yCol}</div>
-                    <div style={{ height: 200 }}>
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={chartData}>
-                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(0,0,0,0.05)" />
-                          <XAxis 
-                            dataKey="name" 
-                            tick={{ fontSize: 10, fill: 'var(--color-text-tertiary)' }} 
-                            axisLine={false} 
-                            tickLine={false}
-                            tickFormatter={(str) => {
-                              try {
-                                if (str.includes('T')) {
-                                  const d = new Date(str);
-                                  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-                                }
-                                return str;
-                              } catch(e) { return str; }
-                            }}
-                          />
-                          <YAxis 
-                            tick={{ fontSize: 10, fill: 'var(--color-text-tertiary)' }} 
-                            axisLine={false} 
-                            tickLine={false} 
-                            domain={[0, 'auto']}
-                          />
-                          <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: 'rgba(0,0,0,0.02)' }} />
-                          <Bar dataKey="value" fill="#378ADD" radius={[4,4,0,0]} />
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-text-secondary)', marginBottom: 12 }}>Trend of {yCol}</div>
-                    <div style={{ height: 200 }}>
-                      <ResponsiveContainer width="100%" height="100%">
-                        <LineChart data={chartData}>
-                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(0,0,0,0.05)" />
-                          <XAxis 
-                            dataKey="name" 
-                            tick={{ fontSize: 10, fill: 'var(--color-text-tertiary)' }} 
-                            axisLine={false} 
-                            tickLine={false}
-                            tickFormatter={(str) => {
-                              try {
-                                if (str.includes('T')) {
-                                  const d = new Date(str);
-                                  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-                                }
-                                return str;
-                              } catch(e) { return str; }
-                            }}
-                          />
-                          <YAxis 
-                            tick={{ fontSize: 10, fill: 'var(--color-text-tertiary)' }} 
-                            axisLine={false} 
-                            tickLine={false} 
-                            domain={[0, 'auto']}
-                          />
-                          <Tooltip contentStyle={TOOLTIP_STYLE} />
-                          <Line type="monotone" dataKey="value" stroke="#1D9E75" strokeWidth={2} dot={false} />
-                        </LineChart>
-                      </ResponsiveContainer>
-                    </div>
-                  </div>
-                </div>
-              )}
+            {/* KPIs */}
+            <div style={{ display:'grid', gridTemplateColumns:`repeat(${Math.min(numCols.length||1,4)},1fr)`, gap:10 }}>
+              {numCols.length ? numCols.map((col,i) => {
+                const vals = result.data.map(r=>r[col]||0)
+                const total = vals.reduce((a,b)=>a+b,0)
+                const display = result.data.length===1 ? result.data[0][col] : (col.includes('avg')||col.includes('pct')||col.includes('rate') ? (total/vals.length) : total)
+                return <KPICard key={col} label={col.replace(/_/g,' ')} value={typeof display==='number'?display.toLocaleString(undefined,{maximumFractionDigits:1}):display} color={['var(--blue)','var(--green)','var(--purple)','var(--amber)'][i%4]} />
+              }) : <KPICard label="Rows" value={result.row_count} />}
             </div>
-          </Card>
 
-          {/* Data table */}
-          <Card style={{ overflow: 'hidden' }}>
-            <div style={{ padding: '12px 16px', borderBottom: '0.5px solid var(--color-border-tertiary)', fontSize: 12, color: 'var(--color-text-secondary)', fontWeight: 500 }}>
-              Full Dataset · {result.row_count} rows
-            </div>
-            <div style={{ overflowX: 'auto', maxHeight: 340, overflowY: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                <thead style={{ background: 'var(--color-background-secondary)', position: 'sticky', top: 0, zIndex: 1 }}>
-                  <tr>
-                    {result.columns.map(c => (
-                      <th key={c} style={{ padding: '10px 16px', textAlign: 'left', color: 'var(--color-text-tertiary)', fontWeight: 500, borderBottom: '0.5px solid var(--color-border-tertiary)', whiteSpace: 'nowrap' }}>
-                        {c}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {result.data.map((row, i) => (
-                    <tr key={i} style={{ borderBottom: '0.5px solid var(--color-border-tertiary)' }} onMouseEnter={(e) => e.currentTarget.style.background = 'var(--color-background-secondary)'} onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>
-                      {result.columns.map(c => (
-                        <td key={c} style={{ padding: '9px 16px', color: isNumeric(row[c]) ? '#378ADD' : 'var(--color-text-primary)', fontFamily: isNumeric(row[c]) ? 'var(--font-mono)' : 'inherit', whiteSpace: 'nowrap' }}>
-                          {row[c] === null ? <span style={{ color: 'var(--color-text-tertiary)' }}>null</span> : String(row[c])}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Card>
-        </div>
-      )}
+            {/* Chart */}
+            {yCols.length > 0 && chartData.length > 1 && (
+              <Card style={{ padding:18 }}>
+                <div style={{ fontSize:12, color:'var(--text3)', marginBottom:12 }}>{yCols.join(' & ')} by {xCol}</div>
+                <ResponsiveContainer width="100%" height={220}>
+                  <ComposedChart data={chartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                    <XAxis dataKey="name" tick={{fontSize:10,fill:'#5a5f7d'}} axisLine={false} tickLine={false} />
+                    <YAxis tick={{fontSize:10,fill:'#5a5f7d'}} axisLine={false} tickLine={false} />
+                    <Tooltip contentStyle={TT} />
+                    {yCols[0] && <Bar dataKey={yCols[0]} fill="var(--blue)" radius={[4,4,0,0]} barSize={chartData.length > 12 ? 6 : 22} />}
+                    {yCols[1] && <Line dataKey={yCols[1]} stroke="var(--green)" strokeWidth={2} dot={false} />}
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </Card>
+            )}
+
+            {/* Table */}
+            <Card style={{ overflow:'hidden' }}>
+              <div style={{ padding:'11px 16px', borderBottom:'1px solid var(--border)', fontSize:12, fontWeight:500, color:'var(--text2)' }}>Results · {result.row_count} rows</div>
+              <DataTable columns={result.columns} data={result.data} maxHeight={360} />
+            </Card>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
