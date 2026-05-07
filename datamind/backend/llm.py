@@ -1,61 +1,187 @@
+"""
+LLM module — Gemini + DeepSeek.
+
+KEY FIX: Every function that calls an LLM now accepts an explicit `api_key`
+parameter.  The key MUST come from the user's saved settings.
+The .env file is only used as a global fallback when NO user key is set.
+This means DeepSeek actually uses DeepSeek, not Gemini.
+"""
+
 import os
 import json
 import requests
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
+
+from logger import get_logger
 from db import schema_to_text
 
+log = get_logger(__name__)
 
-def call_gemini(prompt: str, system: str = "", max_tokens: int = 2000) -> str:
-    api_key = os.getenv("GEMINI_API_KEY", "")
-    if not api_key or api_key == "your_gemini_api_key_here":
-        raise ValueError("GEMINI_API_KEY not set in .env")
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+
+# ── Core callers ──────────────────────────────────────────────────────────────
+
+def call_gemini(prompt: str, system: str = "", max_tokens: int = 2000,
+                api_key: str = "") -> str:
+    key = api_key or os.getenv("GEMINI_API_KEY", "")
+    if not key or key in ("your_gemini_api_key_here", ""):
+        raise ValueError(
+            "Gemini API key is not set. Go to Settings → LLM API Keys and add your key."
+        )
+
+    # Model fallback chain — tries newest first, falls back on 404
+    MODELS = [
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
+        "gemini-1.5-flash-latest",
+        "gemini-1.5-flash",
+        "gemini-1.5-pro-latest",
+        "gemini-pro",
+    ]
+    BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+
     body = {
         "contents": [{"parts": [{"text": f"{system}\n\n{prompt}" if system else prompt}]}],
-        "generationConfig": {"temperature": 0.2, "maxOutputTokens": max_tokens}
+        "generationConfig": {"temperature": 0.2, "maxOutputTokens": max_tokens},
     }
-    for attempt in range(2):
+    log.debug("Calling Gemini API", max_tokens=max_tokens, prompt_len=len(prompt))
+
+    last_error = None
+    for model in MODELS:
+        url = f"{BASE}/{model}:generateContent?key={key}"
+        log.debug("Trying Gemini model", model=model)
         try:
             resp = requests.post(url, json=body, timeout=90)
-            resp.raise_for_status()
-            return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+
+            if resp.status_code == 404:
+                log.debug("Gemini model not found, trying next", model=model)
+                continue  # try next model in chain
+
+            if not resp.ok:
+                err_body = resp.text[:400]
+                log.warning("Gemini API error", model=model,
+                            status=resp.status_code, body=err_body)
+                if resp.status_code in (400, 401, 403):
+                    raise ValueError(
+                        f"Gemini API key error (status {resp.status_code}): {err_body}"
+                    )
+                resp.raise_for_status()
+
+            data = resp.json()
+            # Handle blocked / empty responses
+            candidates = data.get("candidates", [])
+            if not candidates:
+                block_reason = data.get("promptFeedback", {}).get("blockReason", "unknown")
+                raise ValueError(f"Gemini blocked the request: {block_reason}")
+
+            result = candidates[0]["content"]["parts"][0]["text"].strip()
+            log.debug("Gemini response OK", model=model, response_len=len(result))
+            return result
+
         except requests.exceptions.Timeout:
-            if attempt == 0: continue
-            raise Exception("Gemini API timed out.")
+            log.warning("Gemini timeout", model=model)
+            last_error = Exception(f"Gemini model {model} timed out.")
+            continue
+        except ValueError:
+            raise  # key / block errors bubble up immediately
         except Exception as e:
-            raise e
+            log.error("Gemini exception", model=model, error=str(e))
+            last_error = e
+            continue
+
+    raise last_error or Exception("All Gemini models failed. Check your API key and quota.")
 
 
-def call_deepseek(prompt: str, system: str = "", max_tokens: int = 2000) -> str:
-    api_key = os.getenv("DEEPSEEK_API_KEY", "")
-    if not api_key or api_key == "your_deepseek_api_key_here":
-        raise ValueError("DEEPSEEK_API_KEY not set in .env")
+def call_deepseek(prompt: str, system: str = "", max_tokens: int = 2000,
+                  api_key: str = "") -> str:
+    key = api_key or os.getenv("DEEPSEEK_API_KEY", "")
+    if not key or key in ("your_deepseek_api_key_here", ""):
+        raise ValueError(
+            "DeepSeek API key is not set. Go to Settings → LLM API Keys and add your key."
+        )
     url = "https://api.deepseek.com/v1/chat/completions"
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    body = {"model": "deepseek-chat", "messages": messages, "temperature": 0.2, "max_tokens": max_tokens}
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+    body = {
+        "model": "deepseek-chat",
+        "messages": messages,
+        "temperature": 0.2,
+        "max_tokens": max_tokens,
+    }
+    log.debug("Calling DeepSeek API", max_tokens=max_tokens, prompt_len=len(prompt))
     for attempt in range(2):
         try:
             resp = requests.post(url, json=body, headers=headers, timeout=90)
-            resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"].strip()
+            if not resp.ok:
+                err_body = resp.text[:300]
+                log.warning("DeepSeek API error response",
+                            status=resp.status_code, body=err_body, attempt=attempt)
+                if resp.status_code in (401, 403):
+                    raise ValueError(f"DeepSeek API key is invalid or has no credits. "
+                                     f"Status {resp.status_code}: {err_body}")
+                resp.raise_for_status()
+            result = resp.json()["choices"][0]["message"]["content"].strip()
+            log.debug("DeepSeek response received", response_len=len(result))
+            return result
         except requests.exceptions.Timeout:
-            if attempt == 0: continue
-            raise Exception("DeepSeek API timed out.")
+            log.warning("DeepSeek API timeout", attempt=attempt)
+            if attempt == 1:
+                raise Exception("DeepSeek API timed out after 90s on both attempts.")
+        except ValueError:
+            raise
         except Exception as e:
-            raise e
+            log.error("DeepSeek API exception", error=str(e), attempt=attempt)
+            if attempt == 1:
+                raise
 
 
-def call_llm(prompt: str, system: str = "", llm: str = "gemini", max_tokens: int = 2000) -> str:
-    if str(llm).lower() == "deepseek":
-        return call_deepseek(prompt, system, max_tokens)
-    return call_gemini(prompt, system, max_tokens)
+def call_llm(prompt: str, system: str = "", llm: str = "gemini",
+             max_tokens: int = 2000, api_key: str = "") -> str:
+    """
+    Main dispatcher. Always use the explicit api_key.
+    llm must be 'gemini' or 'deepseek' — this is respected exactly.
+    """
+    llm = (llm or "gemini").lower().strip()
+    log.debug("LLM dispatch", llm=llm, has_key=bool(api_key))
+    if llm == "deepseek":
+        return call_deepseek(prompt, system, max_tokens, api_key)
+    elif llm == "gemini":
+        return call_gemini(prompt, system, max_tokens, api_key)
+    else:
+        raise ValueError(f"Unknown LLM provider: '{llm}'. Use 'gemini' or 'deepseek'.")
 
 
-def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "gemini", fkeys: list = None) -> str:
+# ── API key validation ────────────────────────────────────────────────────────
+
+def validate_llm_key(llm: str, api_key: str) -> Dict[str, Any]:
+    """
+    Send a tiny test prompt to verify the key works and has credits.
+    Returns {"ok": True/False, "error": str, "model": str}
+    """
+    log.info("Validating LLM API key", llm=llm)
+    test_prompt = "Reply with exactly the word: WORKING"
+    try:
+        result = call_llm(test_prompt, "", llm, max_tokens=20, api_key=api_key)
+        ok = "WORKING" in result.upper() or len(result.strip()) > 0
+        log.info("LLM key validation result", llm=llm, ok=ok, response=result[:50])
+        return {"ok": ok, "model": llm, "response": result.strip()}
+    except ValueError as e:
+        log.warning("LLM key validation failed (invalid key)", llm=llm, error=str(e))
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        log.error("LLM key validation failed (unexpected)", llm=llm, error=str(e))
+        return {"ok": False, "error": str(e)}
+
+
+# ── Text-to-SQL ───────────────────────────────────────────────────────────────
+
+def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "gemini",
+                 fkeys: list = None, api_key: str = "") -> str:
     schema_text = schema_to_text(schemas, fkeys)
     system = (
         "You are an expert MySQL query writer. "
@@ -65,81 +191,18 @@ def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "gemini", fk
         "Never use DROP, DELETE, INSERT, UPDATE, or any mutating statement."
     )
     prompt = f"Schema:\n{schema_text}\n\nQuestion: {question}\n\nSQL:"
-    raw = call_llm(prompt, system, llm)
-    return raw.replace("```sql", "").replace("```", "").strip()
+    log.info("Generating SQL from NL question", llm=llm, question=question[:80])
+    raw = call_llm(prompt, system, llm, max_tokens=800, api_key=api_key)
+    sql = raw.replace("```sql", "").replace("```", "").strip()
+    log.debug("SQL generated", sql=sql[:200])
+    return sql
 
 
-def discover_analytics(schemas: Dict, fkeys: list, samples: Dict) -> List[Dict]:
-    """
-    Ask the LLM to analyse the schema + sample data and return a structured catalogue
-    of all analytics & predictions that are possible.
-    Falls back to a hardcoded catalogue if LLM call fails.
-    """
-    schema_text = schema_to_text(schemas, fkeys)
-    sample_text = ""
-    for table, info in samples.items():
-        cols = ", ".join(info["columns"])
-        sample_text += f"\nTable `{table}` columns: {cols}\n"
-        if info["rows"]:
-            sample_text += f"  Sample: {info['rows'][0]}\n"
+# ── Report generation ─────────────────────────────────────────────────────────
 
-    system = (
-        "You are a data analytics expert. Analyse this MySQL database schema and sample data. "
-        "Return a JSON array of analytics templates that can be run on this data. "
-        "Each item must have: id (snake_case), title, description, category, "
-        "icon (emoji), complexity (simple|medium|advanced), "
-        "tables_used (array), insight (one-line value proposition). "
-        "Include 20-25 diverse items covering revenue, products, customers, employees, "
-        "payments, inventory, forecasting, anomaly detection, cohort analysis, basket analysis, growth. "
-        "Return ONLY the JSON array, no other text."
-    )
-    prompt = f"Database Schema:\n{schema_text}\n\nSample Data:{sample_text}\n\nReturn JSON array of analytics templates:"
-
-    try:
-        raw = call_llm(prompt, system, "gemini", max_tokens=3000)
-        raw = raw.replace("```json", "").replace("```", "").strip()
-        # Find the JSON array
-        start = raw.find("[")
-        end = raw.rfind("]") + 1
-        if start >= 0 and end > start:
-            return json.loads(raw[start:end])
-    except Exception:
-        pass
-
-    # Fallback hardcoded catalogue
-    return _fallback_catalogue()
-
-
-def _fallback_catalogue() -> List[Dict]:
-    return [
-        {"id":"revenue_trend","title":"Monthly Revenue Trend","description":"Track revenue, transaction count, and average ticket size month by month","category":"Revenue","icon":"📈","complexity":"simple","tables_used":["invoices"],"insight":"Identify growth months and seasonal patterns"},
-        {"id":"revenue_by_category","title":"Revenue by Product Category","description":"Break down sales, gross profit, and margin by product category","category":"Revenue","icon":"🏷️","complexity":"simple","tables_used":["invoice_items","products"],"insight":"See which categories drive profitability"},
-        {"id":"revenue_by_location","title":"Revenue by Location","description":"Compare sales performance across all store locations","category":"Revenue","icon":"📍","complexity":"simple","tables_used":["invoices","locations"],"insight":"Find your highest and lowest performing locations"},
-        {"id":"hourly_pattern","title":"Hourly Sales Pattern","description":"Discover peak trading hours to optimise staffing and promotions","category":"Revenue","icon":"🕐","complexity":"simple","tables_used":["invoices"],"insight":"Staff smartly — know your rush hours"},
-        {"id":"daily_trend_7","title":"Last 7 Days Performance","description":"Daily revenue, orders, and customer counts for the past week","category":"Revenue","icon":"📅","complexity":"simple","tables_used":["invoices"],"insight":"Spot recent dips or spikes immediately"},
-        {"id":"discount_analysis","title":"Discount Impact Analysis","description":"See how discount levels affect average order value and total revenue","category":"Revenue","icon":"🏷️","complexity":"medium","tables_used":["invoices"],"insight":"Are discounts driving revenue or eroding it?"},
-        {"id":"tax_analysis","title":"Tax Analysis","description":"Monthly tax collected vs effective tax rate","category":"Revenue","icon":"🧾","complexity":"simple","tables_used":["invoices"],"insight":"Stay on top of tax obligations"},
-        {"id":"top_products","title":"Top Products by Revenue","description":"Rank all products by revenue, units sold, and profit margin","category":"Products","icon":"🥇","complexity":"simple","tables_used":["invoice_items","products"],"insight":"Double down on your bestsellers"},
-        {"id":"slow_products","title":"Slow-Moving Products","description":"Flag products with low sales velocity or not sold recently","category":"Products","icon":"🐌","complexity":"medium","tables_used":["invoice_items","products","invoices"],"insight":"Clear deadstock before it becomes a loss"},
-        {"id":"margin_by_category","title":"Margin Analysis by Category","description":"Compare gross margin percentage across product categories","category":"Products","icon":"💰","complexity":"medium","tables_used":["products","invoice_items"],"insight":"Know where you make — and lose — money"},
-        {"id":"product_velocity","title":"Product Sales Velocity","description":"Rank products by speed of sale — units per day","category":"Products","icon":"⚡","complexity":"medium","tables_used":["invoice_items","invoices","products"],"insight":"Identify fast movers to prioritise restocking"},
-        {"id":"basket_analysis","title":"Basket / Co-purchase Analysis","description":"Discover which products are frequently bought together","category":"Products","icon":"🛒","complexity":"advanced","tables_used":["invoice_items","products"],"insight":"Power up upsell and bundle strategies"},
-        {"id":"top_customers","title":"Top Customers by LTV","description":"Rank customers by lifetime value, order frequency, and recency","category":"Customers","icon":"👑","complexity":"simple","tables_used":["customers","invoices"],"insight":"Know your most valuable relationships"},
-        {"id":"customer_rfm","title":"RFM Customer Segmentation","description":"Segment customers into Champions, Loyal, At-Risk, Lost etc.","category":"Customers","icon":"🎯","complexity":"advanced","tables_used":["invoices","customers"],"insight":"Target the right message to the right segment"},
-        {"id":"customer_cohort","title":"Cohort Retention Analysis","description":"Track how well each acquisition cohort retains over time","category":"Customers","icon":"🔄","complexity":"advanced","tables_used":["invoices","customers"],"insight":"Measure the true health of customer loyalty"},
-        {"id":"customer_retention","title":"Monthly Retention Rate","description":"What % of new customers come back in subsequent months","category":"Customers","icon":"🔁","complexity":"medium","tables_used":["invoices"],"insight":"A rising retention rate means a healthy business"},
-        {"id":"loyalty_tiers","title":"Loyalty Tier Performance","description":"Compare spend and order frequency across loyalty point tiers","category":"Customers","icon":"⭐","complexity":"medium","tables_used":["customers","invoices"],"insight":"Is your loyalty programme driving revenue?"},
-        {"id":"cashier_performance","title":"Cashier / Staff Performance","description":"Rank employees by sales volume, transaction count, and avg ticket","category":"Employees","icon":"👤","complexity":"medium","tables_used":["invoices","employees","locations"],"insight":"Reward top performers and coach the rest"},
-        {"id":"payment_methods","title":"Payment Method Breakdown","description":"Revenue split by cash, card, credit, and digital payments","category":"Payments","icon":"💳","complexity":"simple","tables_used":["invoices"],"insight":"Understand how customers prefer to pay"},
-        {"id":"credit_outstanding","title":"Credit & Outstanding Balance","description":"Track credit invoices, collections, and outstanding amounts by month","category":"Payments","icon":"⚠️","complexity":"medium","tables_used":["invoices"],"insight":"Stay on top of your receivables"},
-        {"id":"growth_metrics","title":"Month-over-Month Growth","description":"Calculate MoM revenue growth, transaction growth, and AOV trends","category":"Growth","icon":"🚀","complexity":"medium","tables_used":["invoices"],"insight":"Quantify whether the business is accelerating"},
-        {"id":"location_comparison","title":"Location KPI Comparison","description":"Side-by-side KPI comparison of all locations","category":"Growth","icon":"🗺️","complexity":"medium","tables_used":["invoices","locations"],"insight":"Benchmark locations against each other"},
-        {"id":"order_types","title":"Revenue by Order Type & Channel","description":"Dine-in vs takeaway vs delivery vs online revenue split","category":"Growth","icon":"📦","complexity":"simple","tables_used":["invoices"],"insight":"Know which channel to invest in"},
-        {"id":"inventory_movement","title":"Inventory Movement Log","description":"Track stock changes by product, reason (sale/restock/damage)","category":"Inventory","icon":"📦","complexity":"medium","tables_used":["inventory_logs","products"],"insight":"Prevent stockouts and identify waste"},
-    ]
-
-
-def generate_report_summary(title: str, kpis: Dict, section_data: Dict, llm: str, format: str = "full") -> str:
+def generate_report_summary(title: str, kpis: Dict, section_data: Dict,
+                            llm: str, format: str = "full",
+                            api_key: str = "") -> str:
     kpi_text = "\n".join(f"  {k}: {v}" for k, v in kpis.items())
     sections_text = ""
     for sid, data in section_data.items():
@@ -148,21 +211,19 @@ def generate_report_summary(title: str, kpis: Dict, section_data: Dict, llm: str
         rows = data.get("data", [])[:5]
         if rows:
             sections_text += f"Columns: {', '.join(cols)}\n"
-            sections_text += "Top rows:\n"
             for row in rows:
                 sections_text += f"  {row}\n"
 
     if format == "executive":
-        length_instruction = "Write 3-4 concise paragraphs (executive summary style). Focus on the 3 most important findings and one strategic recommendation."
+        length_instruction = "Write 3-4 concise paragraphs (executive summary). Focus on 3 most important findings and one strategic recommendation."
     elif format == "quick":
         length_instruction = "Write 5-7 bullet points covering key findings. Be very concise."
     else:
-        length_instruction = "Write a detailed professional report with 5-7 paragraphs covering: overview, key findings per section, risks, opportunities, and strategic recommendations."
+        length_instruction = "Write a detailed professional report with 5-7 paragraphs: overview, findings per section, risks, opportunities, strategic recommendations."
 
     system = (
         "You are a senior business analyst writing a professional analytics report. "
         "Use concrete numbers from the data. Be direct and actionable. "
-        "Structure your writing with clear topic sentences. "
         "Do not invent data — only reference what is provided."
     )
     prompt = (
@@ -171,4 +232,25 @@ def generate_report_summary(title: str, kpis: Dict, section_data: Dict, llm: str
         f"Data Sections:{sections_text}\n\n"
         f"Instructions: {length_instruction}"
     )
-    return call_llm(prompt, system, llm, max_tokens=2500)
+    log.info("Generating report", llm=llm, title=title, sections=list(section_data.keys()), format=format)
+    return call_llm(prompt, system, llm, max_tokens=2500, api_key=api_key)
+
+
+def list_gemini_models(api_key: str) -> list:
+    """
+    Query Google's API to return all currently available Gemini models.
+    Useful for debugging 404 issues.
+    """
+    key = api_key or os.getenv("GEMINI_API_KEY", "")
+    if not key:
+        return []
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key}"
+        resp = requests.get(url, timeout=15)
+        if not resp.ok:
+            return []
+        models = resp.json().get("models", [])
+        return [m["name"].replace("models/", "") for m in models
+                if "generateContent" in m.get("supportedGenerationMethods", [])]
+    except Exception:
+        return []

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import AuthPage       from './pages/AuthPage'
+import OnboardingWizard  from './pages/OnboardingWizard'
 import DiscoverPage   from './pages/DiscoverPage'
 import QueryPage      from './pages/QueryPage'
 import ForecastPage   from './pages/ForecastPage'
@@ -7,7 +8,7 @@ import AnomalyPage    from './pages/AnomalyPage'
 import ReportsPage    from './pages/ReportsPage'
 import SettingsPage   from './pages/SettingsPage'
 import Sidebar        from './components/Sidebar'
-import { fetchTables, fetchCacheStatus } from './utils/api'
+import { fetchTables, fetchCacheStatus, fetchSettings } from './utils/api'
 
 const PAGE_TITLES = {
   discover: 'Analytics Hub',
@@ -61,11 +62,20 @@ export default function App() {
   const [llm, setLlm]             = useState('gemini')
   const [tables, setTables]       = useState([])
   const [cacheStatus, setCacheStatus] = useState(null)
+  const [showOnboarding, setShowOnboarding] = useState(false)
   const pollRef = useRef(null)
 
-  // Load tables + cache status when user logs in
+  // On login: check if onboarding needed, load tables, start polling
   useEffect(() => {
     if (!user) return
+    fetchSettings()
+      .then(s => {
+        const hasDB  = s.db_configs?.length > 0
+        const hasKey = !!(s.gemini_api_key || s.deepseek_api_key)
+        if (!hasDB || !hasKey) setShowOnboarding(true)
+        if (s.default_llm) setLlm(s.default_llm)
+      })
+      .catch(() => {})
     fetchTables()
       .then(d => setTables(d.tables || []))
       .catch(() => setTables([]))
@@ -108,6 +118,13 @@ export default function App() {
   }
 
   if (!user) return <AuthPage onAuth={handleAuth} />
+  if (showOnboarding) return (
+    <OnboardingWizard onComplete={() => {
+      setShowOnboarding(false)
+      fetchTables().then(d => setTables(d.tables || [])).catch(() => {})
+      pollCacheStatus()
+    }} />
+  )
 
   const fillHeight = ['discover', 'query', 'reports'].includes(page)
 
