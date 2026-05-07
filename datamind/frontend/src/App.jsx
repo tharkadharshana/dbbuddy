@@ -65,6 +65,12 @@ export default function App() {
   const [showOnboarding, setShowOnboarding] = useState(false)
   const pollRef = useRef(null)
 
+  function refreshTables() {
+    fetchTables()
+      .then(d => setTables(d.tables || []))
+      .catch(() => setTables([]))
+  }
+
   // On login: check if onboarding needed, load tables, start polling
   useEffect(() => {
     if (!user) return
@@ -76,9 +82,7 @@ export default function App() {
         if (s.default_llm) setLlm(s.default_llm)
       })
       .catch(() => {})
-    fetchTables()
-      .then(d => setTables(d.tables || []))
-      .catch(() => setTables([]))
+    refreshTables()
     pollCacheStatus()
   }, [user])
 
@@ -134,7 +138,7 @@ export default function App() {
     forecast: <ForecastPage />,
     anomaly:  <AnomalyPage />,
     reports:  <ReportsPage  llm={llm} setLlm={setLlm} />,
-    settings: <SettingsPage user={user} onLogout={handleLogout} />,
+    settings: <SettingsPage user={user} onLogout={handleLogout} onSettingsChange={refreshTables} />,
   }[page] ?? <DiscoverPage llm={llm} setLlm={setLlm} />
 
   return (
