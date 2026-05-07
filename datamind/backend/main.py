@@ -190,7 +190,7 @@ def _background_build(email: str, db_config: dict, llm: str, api_key: str):
 
         def progress(msg):
             logs.append(msg)
-            log.debug("Cache build progress", user=email, msg=msg)
+            log.debug("Cache build progress", user=email, step=msg)
 
         def llm_caller(prompt, system, llm_name, max_tokens):
             return call_llm(prompt, system, llm_name, max_tokens, api_key=api_key)
