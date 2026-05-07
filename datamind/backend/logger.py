@@ -55,7 +55,9 @@ class JsonFormatter(logging.Formatter):
         }
         # Extra fields attached via log.info("msg", **kwargs)
         for key, val in record.__dict__.items():
-            if key not in (
+            if key.startswith("arg_"):
+                payload[key[4:]] = val
+            elif key not in (
                 "args", "asctime", "created", "exc_info", "exc_text",
                 "filename", "funcName", "id", "levelname", "levelno",
                 "lineno", "message", "module", "msecs", "msg", "name",
@@ -100,7 +102,9 @@ class PrettyFormatter(logging.Formatter):
         # Collect extra fields
         extras = {}
         for key, val in record.__dict__.items():
-            if key not in (
+            if key.startswith("arg_"):
+                extras[key[4:]] = val
+            elif key not in (
                 "args", "asctime", "created", "exc_info", "exc_text",
                 "filename", "funcName", "id", "levelname", "levelno",
                 "lineno", "message", "module", "msecs", "msg", "name",
@@ -161,7 +165,8 @@ class DataMindLogger:
 
     def _emit(self, level: int, msg: str, **kwargs):
         if self._log.isEnabledFor(level):
-            extra = {k: v for k, v in kwargs.items()}
+            # Prefix all extra keys with 'arg_' to avoid collisions with reserved LogRecord fields
+            extra = {f"arg_{k}": v for k, v in kwargs.items()}
             self._log.log(level, msg, extra=extra, stacklevel=3)
 
     def debug(self, msg: str, **kw):   self._emit(logging.DEBUG,   msg, **kw)

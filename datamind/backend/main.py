@@ -415,7 +415,7 @@ def patch_settings(req: SettingsPatch, user: dict = Depends(current_user)):
 @app.post("/settings/db")
 def add_db_config(cfg: DBConfig, background_tasks: BackgroundTasks,
                   user: dict = Depends(current_user)):
-    log.info("Add DB config", user=user["email"], name=cfg.name, host=cfg.host)
+    log.info("Add DB config", user=user["email"], db_name=cfg.name, host=cfg.host)
     s = get_user_settings(user["email"])
     configs = s.get("db_configs", [])
     configs.append(cfg.dict())
