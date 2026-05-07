@@ -1,146 +1,109 @@
-import React, { useState, useEffect } from 'react'
-import { fetchDiscover, runAnalytics } from '../utils/api'
-import { Card, Badge, Spinner, Spinner2, ErrorBox, KPICard, ChartCard, DataTable, BarChartSimple, LineChartSimple, PieChartSimple, LLMToggle, COLORS } from '../components/UI'
-import { ComposedChart, Bar, Line, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, RadarChart, Radar, PolarGrid, PolarAngleAxis, ScatterChart, Scatter } from 'recharts'
+import React, { useState, useEffect, useRef } from 'react'
+import { fetchDiscover, runAnalytics, fetchCacheProgress, rebuildCache } from '../utils/api'
+import { Card, Badge, Spinner, Spinner2, ErrorBox, KPICard, ChartCard, DataTable,
+         BarChartSimple, LineChartSimple, PieChartSimple, LLMToggle, COLORS, Btn } from '../components/UI'
+import { ComposedChart, Bar, Line, Area, XAxis, YAxis, CartesianGrid, Tooltip,
+         ResponsiveContainer } from 'recharts'
 
-const TT = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.1)', borderRadius:8, fontSize:12, color:'#f0f1fa', boxShadow:'0 8px 24px rgba(0,0,0,0.4)' }
+const TT = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)', borderRadius:8, fontSize:12, color:'#f0f1fa' }
 
 const CATEGORY_COLORS = {
   Revenue:'var(--blue)', Products:'var(--green)', Customers:'var(--purple)',
-  Employees:'var(--amber)', Payments:'var(--teal)', Growth:'var(--pink)', Inventory:'var(--red)',
+  Employees:'var(--amber)', Payments:'var(--teal)', Growth:'var(--pink)',
+  Inventory:'var(--red)', Other:'var(--text3)',
 }
 const COMPLEXITY_COLOR = { simple:'green', medium:'amber', advanced:'purple' }
 
-export default function DiscoverPage({ llm, setLlm }) {
-  const [catalogue, setCatalogue] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
-  const [selected, setSelected] = useState(null)
-  const [running, setRunning] = useState(false)
-  const [result, setResult] = useState(null)
-  const [runError, setRunError] = useState(null)
-  const [filter, setFilter] = useState('All')
+// ── Build Progress Panel ──────────────────────────────────────────────────────
+function BuildProgress({ onDone }) {
+  const [logs, setLogs]     = useState([])
+  const [status, setStatus] = useState('building')
+  const [pct, setPct]       = useState(0)
+  const logRef = useRef(null)
+  const pollRef = useRef(null)
 
   useEffect(() => {
-    fetchDiscover()
-      .then(d => { setCatalogue(d.catalogue || []); setLoading(false) })
-      .catch(e => { setError(e.response?.data?.detail || e.message); setLoading(false) })
+    pollRef.current = setInterval(async () => {
+      try {
+        const data = await fetchCacheProgress()
+        setLogs(data.progress || [])
+        setStatus(data.status || 'building')
+        // Estimate progress from log count (we know ~24 templates)
+        const logCount = (data.progress || []).length
+        setPct(Math.min(95, Math.round((logCount / 28) * 100)))
+        if (data.status === 'done' || data.status === 'error') {
+          clearInterval(pollRef.current)
+          setPct(100)
+          setTimeout(() => onDone(), 1200)
+        }
+      } catch(e) {}
+    }, 1500)
+    return () => clearInterval(pollRef.current)
   }, [])
 
-  const categories = ['All', ...new Set(catalogue.map(c => c.category))]
-  const visible = filter === 'All' ? catalogue : catalogue.filter(c => c.category === filter)
-
-  async function handleRun(item) {
-    setSelected(item)
-    setRunning(true)
-    setResult(null)
-    setRunError(null)
-    try {
-      const data = await runAnalytics(item.id, llm, {})
-      setResult(data)
-    } catch (e) {
-      setRunError(e.response?.data?.detail || e.message)
-    } finally {
-      setRunning(false)
-    }
-  }
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
+  }, [logs])
 
   return (
-    <div style={{ display:'flex', gap:0, height:'100%', overflow:'hidden' }}>
-
-      {/* Left — catalogue */}
-      <div style={{ width:440, flexShrink:0, display:'flex', flexDirection:'column', borderRight:'1px solid var(--border)', overflow:'hidden' }}>
-        <div style={{ padding:'16px 16px 0' }}>
-          <div style={{ marginBottom:14 }}>
-            <div style={{ fontSize:18, fontWeight:700, marginBottom:3 }}>Analytics Hub</div>
-            <div style={{ fontSize:12, color:'var(--text3)' }}>Select any analysis below — the AI detects what's possible from your database structure.</div>
+    <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%', padding:32 }}>
+      <div style={{ width:'100%', maxWidth:520 }}>
+        {/* Icon + title */}
+        <div style={{ textAlign:'center', marginBottom:24 }}>
+          <div style={{ fontSize:48, marginBottom:12 }}>🧠</div>
+          <div style={{ fontSize:20, fontWeight:700, marginBottom:6 }}>
+            {status === 'done' ? 'Analytics Ready!' : status === 'error' ? 'Build Failed' : 'Learning Your Database…'}
           </div>
-          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12 }}>
-            <LLMToggle value={llm} onChange={setLlm} />
-          </div>
-          {/* Category filter tabs */}
-          <div style={{ display:'flex', gap:4, flexWrap:'wrap', marginBottom:12 }}>
-            {categories.map(cat => (
-              <button key={cat} onClick={() => setFilter(cat)} style={{
-                padding:'3px 11px', borderRadius:20, fontSize:11, fontWeight:500,
-                background: filter===cat ? (CATEGORY_COLORS[cat]||'var(--blue)') : 'var(--bg2)',
-                color: filter===cat ? '#fff' : 'var(--text3)',
-                border:'none', cursor:'pointer'
-              }}>{cat}</button>
-            ))}
+          <div style={{ fontSize:13, color:'var(--text3)', maxWidth:360, margin:'0 auto' }}>
+            {status === 'done'
+              ? 'All SQL queries have been generated and cached. Loading your analytics…'
+              : status === 'error'
+              ? 'Something went wrong. Check your API keys and try rebuilding.'
+              : 'The AI is reading your schema and generating custom SQL for every analytics template. This runs once and is then cached forever.'}
           </div>
         </div>
 
-        {loading && <Spinner2 label="Discovering analytics from your database…" />}
-        {error && <div style={{ padding:16 }}><ErrorBox message={error} /></div>}
+        {/* Progress bar */}
+        <div style={{ background:'var(--bg3)', borderRadius:99, height:6, marginBottom:20, overflow:'hidden' }}>
+          <div style={{
+            height:'100%', borderRadius:99,
+            background: status === 'error' ? 'var(--red)' : status === 'done' ? 'var(--green)' : 'var(--blue)',
+            width:`${pct}%`, transition:'width .4s ease'
+          }} />
+        </div>
 
-        <div style={{ flex:1, overflowY:'auto', padding:'0 12px 16px' }}>
-          {visible.map(item => (
-            <AnalyticsCard key={item.id} item={item} isSelected={selected?.id===item.id} onRun={() => handleRun(item)} />
+        {/* Log */}
+        <div ref={logRef} style={{ background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'var(--r-lg)', padding:'14px 16px', maxHeight:280, overflowY:'auto', fontFamily:'var(--mono)', fontSize:11, color:'var(--text2)', lineHeight:1.8 }}>
+          {logs.length === 0 && <div style={{ color:'var(--text3)' }}>Starting…</div>}
+          {logs.map((l, i) => (
+            <div key={i} style={{
+              color: l.startsWith('✅') ? 'var(--green)' : l.startsWith('❌') ? 'var(--red)' : l.startsWith('  ⚠') ? 'var(--amber)' : 'var(--text2)'
+            }}>{l}</div>
           ))}
+          {status === 'building' && <div style={{ color:'var(--text3)' }}>▋</div>}
         </div>
-      </div>
 
-      {/* Right — result panel */}
-      <div style={{ flex:1, overflowY:'auto', padding:20, display:'flex', flexDirection:'column', gap:14 }}>
-        {!selected && (
-          <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%', color:'var(--text3)', textAlign:'center' }}>
-            <div style={{ fontSize:48, marginBottom:16, opacity:.3 }}>⬡</div>
-            <div style={{ fontSize:16, fontWeight:600, color:'var(--text2)', marginBottom:8 }}>Pick an analysis</div>
-            <div style={{ fontSize:13, maxWidth:320 }}>Choose from the catalogue on the left. Results will appear here with charts, tables, and insights.</div>
-          </div>
-        )}
-
-        {selected && (
-          <>
-            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-              <div>
-                <div style={{ fontSize:18, fontWeight:700, marginBottom:2 }}>{selected.title}</div>
-                <div style={{ fontSize:12, color:'var(--text3)' }}>{selected.description}</div>
-              </div>
-              <button onClick={() => handleRun(selected)} disabled={running} style={{
-                padding:'8px 18px', borderRadius:'var(--r-md)', fontSize:13, fontWeight:500,
-                background:'var(--blue)', color:'#fff', opacity: running ? 0.6 : 1, cursor: running ? 'not-allowed' : 'pointer',
-                display:'flex', alignItems:'center', gap:7
-              }}>
-                {running ? <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" style={{animation:'spin .8s linear infinite'}}><circle cx="12" cy="12" r="9" stroke="#fff" strokeWidth="2.5" strokeDasharray="40 20" strokeLinecap="round"/></svg>Running…</> : '↻ Re-run'}
-              </button>
-            </div>
-
-            {runError && <ErrorBox message={runError} />}
-
-            {running && (
-              <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
-                {[100,70,85,60].map((w,i) => <div key={i} className="skeleton" style={{ height:i===0?160:40, width:`${w}%` }} />)}
-              </div>
-            )}
-
-            {result && !running && (
-              <ResultPanel result={result} templateId={selected.id} />
-            )}
-          </>
-        )}
+        <div style={{ textAlign:'center', marginTop:14, fontSize:11, color:'var(--text3)' }}>
+          {status === 'done' ? `✓ Done` : status === 'error' ? '' : `This runs once per database — future loads are instant.`}
+        </div>
       </div>
     </div>
   )
 }
 
-
+// ── Analytics Card ────────────────────────────────────────────────────────────
 function AnalyticsCard({ item, isSelected, onRun }) {
-  const catColor = CATEGORY_COLORS[item.category] || 'var(--blue)'
   return (
     <div onClick={onRun} style={{
-      padding:'12px 14px', borderRadius:'var(--r-md)', marginBottom:6, cursor:'pointer',
+      padding:'12px 14px', borderRadius:'var(--r-md)', marginBottom:5, cursor:'pointer',
       background: isSelected ? 'var(--blue-dim)' : 'var(--bg2)',
-      border: `1px solid ${isSelected ? 'rgba(79,142,247,0.3)' : 'var(--border)'}`,
+      border:`1px solid ${isSelected ? 'rgba(79,142,247,0.3)' : 'var(--border)'}`,
       transition:'all .1s'
     }}>
       <div style={{ display:'flex', alignItems:'flex-start', gap:10 }}>
-        <div style={{ fontSize:20, flexShrink:0, marginTop:1 }}>{item.icon}</div>
+        <div style={{ fontSize:18, flexShrink:0, marginTop:1 }}>{item.icon}</div>
         <div style={{ flex:1, minWidth:0 }}>
-          <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:4 }}>
-            <div style={{ fontSize:13, fontWeight:600, color: isSelected ? 'var(--blue)' : 'var(--text)' }}>{item.title}</div>
-          </div>
+          <div style={{ fontSize:13, fontWeight:600, color: isSelected ? 'var(--blue)' : 'var(--text)', marginBottom:4 }}>{item.title}</div>
           <div style={{ fontSize:11, color:'var(--text3)', marginBottom:6, lineHeight:1.5 }}>{item.description}</div>
           <div style={{ display:'flex', gap:5, flexWrap:'wrap' }}>
             <Badge color={COMPLEXITY_COLOR[item.complexity]||'gray'}>{item.complexity}</Badge>
@@ -155,114 +118,64 @@ function AnalyticsCard({ item, isSelected, onRun }) {
   )
 }
 
+// ── Source badge ──────────────────────────────────────────────────────────────
+function SourceBadge({ source }) {
+  if (!source) return null
+  const info = {
+    cache:    { label:'⚡ From cache',    color:'green' },
+    python:   { label:'🐍 Python analytics', color:'blue' },
+    fallback: { label:'⚠ Fallback SQL',  color:'amber' },
+  }[source] || { label: source, color:'gray' }
+  return <Badge color={info.color} style={{ fontSize:10 }}>{info.label}</Badge>
+}
 
+// ── Result Panel ──────────────────────────────────────────────────────────────
 function ResultPanel({ result, templateId }) {
-  const { title, columns, data, row_count } = result
+  const { title, columns, data, row_count, source } = result
 
-  // Pick the right chart type based on template
   const renderChart = () => {
     if (!data?.length) return null
+    const numCols = columns.filter(c => typeof data[0]?.[c] === 'number')
+    const strCols = columns.filter(c => typeof data[0]?.[c] === 'string')
 
-    // RFM segment chart
     if (templateId === 'customer_rfm') {
-      return (
-        <ChartCard title="Customer Segment Distribution">
-          <BarChartSimple data={data} xKey="segment" yKey="customers" color="var(--purple)" horizontal />
-        </ChartCard>
-      )
+      return <ChartCard title="Customer Segments"><BarChartSimple data={data} xKey="segment" yKey="customers" color="var(--purple)" horizontal /></ChartCard>
     }
-
-    // Revenue trend — line chart
     if (templateId === 'revenue_trend') {
+      const chartData = [...data].reverse()
       return (
         <ChartCard title="Monthly Revenue & Transactions">
           <ResponsiveContainer width="100%" height={240}>
-            <ComposedChart data={[...data].reverse()}>
+            <ComposedChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
-              <XAxis dataKey="month" tick={{fontSize:10,fill:'#5a5f7d'}} axisLine={false} tickLine={false} />
-              <YAxis yAxisId="left" tick={{fontSize:10,fill:'#5a5f7d'}} axisLine={false} tickLine={false} />
-              <YAxis yAxisId="right" orientation="right" tick={{fontSize:10,fill:'#5a5f7d'}} axisLine={false} tickLine={false} />
+              <XAxis dataKey={strCols[0]||'month'} tick={{fontSize:10,fill:'#5a5f7d'}} axisLine={false} tickLine={false} />
+              <YAxis yAxisId="l" tick={{fontSize:10,fill:'#5a5f7d'}} axisLine={false} tickLine={false} />
+              <YAxis yAxisId="r" orientation="right" tick={{fontSize:10,fill:'#5a5f7d'}} axisLine={false} tickLine={false} />
               <Tooltip contentStyle={TT} />
-              <Bar yAxisId="left" dataKey="revenue" fill="var(--blue)" radius={[4,4,0,0]} opacity={.8} />
-              <Line yAxisId="right" dataKey="transactions" stroke="var(--green)" strokeWidth={2} dot={false} />
+              {numCols[0] && <Bar yAxisId="l" dataKey={numCols[0]} fill="var(--blue)" radius={[4,4,0,0]} opacity={.8} />}
+              {numCols[1] && <Line yAxisId="r" dataKey={numCols[1]} stroke="var(--green)" strokeWidth={2} dot={false} />}
             </ComposedChart>
           </ResponsiveContainer>
         </ChartCard>
       )
     }
-
-    // Payment methods — pie
     if (templateId === 'payment_methods') {
-      return (
-        <ChartCard title="Payment Method Share">
-          <PieChartSimple data={data} nameKey="payment_method" valueKey="revenue" height={240} />
-        </ChartCard>
-      )
+      const nameKey = strCols[0] || 'payment_method'
+      return <ChartCard title="Payment Share"><PieChartSimple data={data} nameKey={nameKey} valueKey={numCols[0]||'revenue'} height={220} /></ChartCard>
     }
-
-    // Growth — line chart with MoM
-    if (templateId === 'growth_metrics') {
-      return (
-        <ChartCard title="Monthly Revenue Growth %">
-          <LineChartSimple data={data} xKey="month" yKeys={['revenue_growth']} colors={['var(--green)']} height={220} />
-        </ChartCard>
-      )
-    }
-
-    // Category breakdowns — horizontal bar
-    if (['revenue_by_category','margin_by_category','top_products'].includes(templateId)) {
-      const yKey = data[0]?.revenue !== undefined ? 'revenue' : Object.keys(data[0]||{}).find(k => typeof data[0][k]==='number') || 'value'
-      const xKey = data[0]?.category !== undefined ? 'category' : data[0]?.name !== undefined ? 'name' : columns[0]
-      return (
-        <ChartCard title={`${yKey.replace(/_/g,' ')} by ${xKey}`}>
-          <BarChartSimple data={data.slice(0,12)} xKey={xKey} yKey={yKey} color="var(--blue)" horizontal />
-        </ChartCard>
-      )
-    }
-
-    // Hourly pattern — bar chart
-    if (templateId === 'hourly_pattern') {
-      return (
-        <ChartCard title="Hourly Revenue Pattern">
-          <BarChartSimple data={data} xKey="hour" yKey="total_revenue" color="var(--teal)" />
-        </ChartCard>
-      )
-    }
-
-    // Customer retention — line
-    if (templateId === 'customer_retention') {
-      return (
-        <ChartCard title="Retention Rate by Cohort Month">
-          <LineChartSimple data={data} xKey="cohort" yKeys={['retention_pct']} colors={['var(--purple)']} height={220} />
-        </ChartCard>
-      )
-    }
-
-    // Location — multi bar
-    if (['revenue_by_location','location_comparison'].includes(templateId)) {
-      return (
-        <ChartCard title="Revenue & Avg Ticket by Location">
-          <BarChartSimple data={data} xKey="location_name" yKey="revenue" color="var(--blue)" horizontal />
-        </ChartCard>
-      )
-    }
-
-    // Loyalty tiers — pie
     if (templateId === 'loyalty_tiers') {
-      return (
-        <ChartCard title="Customers per Loyalty Tier">
-          <PieChartSimple data={data} nameKey="tier" valueKey="customers" height={220} />
-        </ChartCard>
-      )
+      return <ChartCard title="Customers per Tier"><PieChartSimple data={data} nameKey={strCols[0]||'tier'} valueKey={numCols[0]||'customers'} height={220} /></ChartCard>
     }
-
-    // Default: first numeric col bar chart
-    const numCols = columns.filter(c => typeof data[0]?.[c] === 'number')
-    const strCols = columns.filter(c => typeof data[0]?.[c] === 'string')
+    if (['growth_metrics','customer_retention'].includes(templateId)) {
+      const yKey = numCols.find(c => c.includes('growth')||c.includes('pct')||c.includes('rate')) || numCols[0]
+      return <ChartCard title={yKey?.replace(/_/g,' ')}><LineChartSimple data={data} xKey={strCols[0]||'month'} yKeys={[yKey]} colors={['var(--green)']} height={200} /></ChartCard>
+    }
+    // Default: bar/horizontal bar
     if (numCols.length && strCols.length) {
+      const horizontal = data.length > 8 || strCols[0]?.toLowerCase().includes('name') || strCols[0]?.toLowerCase().includes('product')
       return (
         <ChartCard title={`${numCols[0].replace(/_/g,' ')} by ${strCols[0].replace(/_/g,' ')}`}>
-          <BarChartSimple data={data.slice(0,15)} xKey={strCols[0]} yKey={numCols[0]} color="var(--blue)" horizontal={data.length>6} />
+          <BarChartSimple data={data.slice(0,15)} xKey={strCols[0]} yKey={numCols[0]} color="var(--blue)" horizontal={horizontal} />
         </ChartCard>
       )
     }
@@ -270,33 +183,182 @@ function ResultPanel({ result, templateId }) {
   }
 
   const numCols = columns?.filter(c => typeof data[0]?.[c] === 'number') || []
-  const stats = numCols.slice(0,4)
+  const kpiCols = numCols.slice(0, 4)
 
   return (
     <div className="fade-up" style={{ display:'flex', flexDirection:'column', gap:14 }}>
-      {/* KPI row */}
-      {stats.length > 0 && (
-        <div style={{ display:'grid', gridTemplateColumns:`repeat(${Math.min(stats.length,4)},1fr)`, gap:10 }}>
-          {stats.map((col,i) => {
-            const total = data.reduce((s,r)=>s+(r[col]||0),0)
-            const avg = total/data.length
-            const val = data.length === 1 ? data[0][col] : (col.includes('avg')||col.includes('pct')||col.includes('rate') ? avg : total)
+      <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+        <SourceBadge source={source} />
+        {source === 'fallback' && (
+          <span style={{ fontSize:11, color:'var(--amber)' }}>Using generic fallback SQL — connect a DB and rebuild cache for schema-specific queries</span>
+        )}
+      </div>
+
+      {kpiCols.length > 0 && (
+        <div style={{ display:'grid', gridTemplateColumns:`repeat(${Math.min(kpiCols.length,4)},1fr)`, gap:10 }}>
+          {kpiCols.map((col, i) => {
+            const vals = data.map(r => r[col]||0)
+            const total = vals.reduce((a,b)=>a+b,0)
+            const isAvg = col.includes('avg')||col.includes('pct')||col.includes('rate')||col.includes('margin')
+            const val = data.length===1 ? data[0][col] : (isAvg ? total/vals.length : total)
             const colors = ['var(--blue)','var(--green)','var(--purple)','var(--amber)']
             return <KPICard key={col} label={col.replace(/_/g,' ')} value={typeof val==='number'?val.toLocaleString(undefined,{maximumFractionDigits:1}):val} color={colors[i%4]} />
           })}
         </div>
       )}
 
-      {/* Chart */}
       {renderChart()}
 
-      {/* Data table */}
       <Card style={{ overflow:'hidden' }}>
         <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'12px 16px', borderBottom:'1px solid var(--border)' }}>
           <span style={{ fontSize:12, fontWeight:500, color:'var(--text2)' }}>Data · {row_count} rows</span>
         </div>
         <DataTable columns={columns} data={data} maxHeight={320} />
       </Card>
+    </div>
+  )
+}
+
+// ── Main Page ─────────────────────────────────────────────────────────────────
+export default function DiscoverPage({ llm, setLlm }) {
+  const [catalogue, setCatalogue]   = useState([])
+  const [loading, setLoading]       = useState(true)
+  const [building, setBuilding]     = useState(false)
+  const [needsBuild, setNeedsBuild] = useState(false)
+  const [cacheInfo, setCacheInfo]   = useState(null)
+  const [error, setError]           = useState(null)
+  const [selected, setSelected]     = useState(null)
+  const [running, setRunning]       = useState(false)
+  const [result, setResult]         = useState(null)
+  const [runError, setRunError]     = useState(null)
+  const [filter, setFilter]         = useState('All')
+
+  const load = async () => {
+    setLoading(true); setError(null)
+    try {
+      const d = await fetchDiscover()
+      if (d.building) { setBuilding(true); setCatalogue([]); }
+      else if (d.needs_build) { setNeedsBuild(true); setCatalogue([]); }
+      else {
+        setCatalogue(d.catalogue || [])
+        setCacheInfo({ built_at: d.built_at, template_count: d.template_count })
+        setBuilding(false); setNeedsBuild(false)
+      }
+    } catch(e) { setError(e.response?.data?.detail || e.message) }
+    finally { setLoading(false) }
+  }
+
+  useEffect(() => { load() }, [])
+
+  async function handleRun(item) {
+    setSelected(item); setRunning(true); setResult(null); setRunError(null)
+    try {
+      const data = await runAnalytics(item.id, llm, {})
+      setResult(data)
+    } catch(e) { setRunError(e.response?.data?.detail || e.message) }
+    finally { setRunning(false) }
+  }
+
+  async function handleRebuild() {
+    await rebuildCache()
+    setBuilding(true); setCatalogue([]); setNeedsBuild(false)
+  }
+
+  const categories = ['All', ...new Set(catalogue.map(c => c.category))]
+  const visible = filter === 'All' ? catalogue : catalogue.filter(c => c.category === filter)
+
+  // Show build progress screen
+  if (building) return <BuildProgress onDone={() => { setBuilding(false); load() }} />
+
+  // Show "needs build" prompt
+  if (needsBuild && !loading) return (
+    <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%', padding:32, textAlign:'center' }}>
+      <div style={{ fontSize:48, marginBottom:16 }}>🔌</div>
+      <div style={{ fontSize:18, fontWeight:700, marginBottom:8 }}>No analytics cache yet</div>
+      <div style={{ fontSize:13, color:'var(--text3)', maxWidth:380, marginBottom:24 }}>
+        Connect a database in Settings, then click below to let the AI analyse your schema and generate all SQL queries. This runs <strong style={{color:'var(--text2)'}}>once</strong> and is cached forever.
+      </div>
+      <Btn onClick={handleRebuild}>🧠 Build Analytics Cache</Btn>
+    </div>
+  )
+
+  return (
+    <div style={{ display:'flex', gap:0, height:'100%', overflow:'hidden' }}>
+      {/* Left — catalogue */}
+      <div style={{ width:440, flexShrink:0, display:'flex', flexDirection:'column', borderRight:'1px solid var(--border)', overflow:'hidden' }}>
+        <div style={{ padding:'16px 16px 0' }}>
+          <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:10 }}>
+            <div>
+              <div style={{ fontSize:17, fontWeight:700, marginBottom:2 }}>Analytics Hub</div>
+              <div style={{ fontSize:11, color:'var(--text3)' }}>
+                {cacheInfo
+                  ? `⚡ ${cacheInfo.template_count} templates cached · built ${new Date(cacheInfo.built_at).toLocaleDateString()}`
+                  : 'Select any analysis — results load from cache instantly.'}
+              </div>
+            </div>
+            <div style={{ display:'flex', gap:6 }}>
+              <button onClick={handleRebuild} title="Rebuild cache" style={{ padding:'5px 10px', background:'var(--bg3)', border:'1px solid var(--border)', borderRadius:'var(--r-sm)', fontSize:11, color:'var(--text3)', cursor:'pointer' }}>↺ Rebuild</button>
+            </div>
+          </div>
+          <div style={{ marginBottom:12 }}><LLMToggle value={llm} onChange={setLlm} /></div>
+          <div style={{ display:'flex', gap:4, flexWrap:'wrap', marginBottom:10 }}>
+            {categories.map(cat => (
+              <button key={cat} onClick={() => setFilter(cat)} style={{
+                padding:'3px 10px', borderRadius:20, fontSize:11, fontWeight:500,
+                background: filter===cat ? (CATEGORY_COLORS[cat]||'var(--blue)') : 'var(--bg2)',
+                color: filter===cat ? '#fff' : 'var(--text3)',
+                border:'none', cursor:'pointer'
+              }}>{cat}</button>
+            ))}
+          </div>
+        </div>
+
+        {loading && <Spinner2 label="Loading analytics catalogue…" />}
+        {error && <div style={{ padding:16 }}><ErrorBox message={error} /></div>}
+
+        <div style={{ flex:1, overflowY:'auto', padding:'0 10px 16px' }}>
+          {visible.map(item => (
+            <AnalyticsCard key={item.id} item={item} isSelected={selected?.id===item.id} onRun={() => handleRun(item)} />
+          ))}
+        </div>
+      </div>
+
+      {/* Right — result */}
+      <div style={{ flex:1, overflowY:'auto', padding:20, display:'flex', flexDirection:'column', gap:14 }}>
+        {!selected && (
+          <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%', color:'var(--text3)', textAlign:'center' }}>
+            <div style={{ fontSize:48, marginBottom:16, opacity:.2 }}>⬡</div>
+            <div style={{ fontSize:15, fontWeight:600, color:'var(--text2)', marginBottom:8 }}>Pick an analysis</div>
+            <div style={{ fontSize:13, maxWidth:320 }}>Click any card on the left. Results load from the pre-generated cache — no LLM tokens used.</div>
+          </div>
+        )}
+
+        {selected && (
+          <>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+              <div>
+                <div style={{ fontSize:17, fontWeight:700, marginBottom:2 }}>{selected.title}</div>
+                <div style={{ fontSize:12, color:'var(--text3)' }}>{selected.description}</div>
+              </div>
+              <button onClick={() => handleRun(selected)} disabled={running} style={{
+                padding:'8px 16px', borderRadius:'var(--r-md)', fontSize:13, fontWeight:500,
+                background:'var(--blue)', color:'#fff', opacity:running?0.6:1,
+                cursor:running?'not-allowed':'pointer', display:'flex', alignItems:'center', gap:7, border:'none'
+              }}>
+                {running ? <><Spinner size={13} color="#fff"/>Running…</> : '↻ Re-run'}
+              </button>
+            </div>
+
+            {runError && <ErrorBox message={runError} />}
+
+            {running && <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+              {[160,40,220].map((h,i) => <div key={i} className="skeleton" style={{ height:h }} />)}
+            </div>}
+
+            {result && !running && <ResultPanel result={result} templateId={selected.id} />}
+          </>
+        )}
+      </div>
     </div>
   )
 }
