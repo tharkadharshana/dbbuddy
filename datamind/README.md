@@ -236,3 +236,41 @@ Full interactive docs: http://localhost:8000/docs
 - Gemini API key → https://aistudio.google.com/app/apikey
 - DeepSeek API key → https://platform.deepseek.com/api_keys
 
+
+---
+
+## v3 — Fully Dynamic + Cached Architecture
+
+### The problem with v2
+All analytics SQL was hardcoded for a specific POS database schema (`invoices`, `products`, `customers`…). Any other database would break.
+
+### How v3 fixes it
+
+**One-time LLM build (when you add a DB):**
+1. DataMind reads your full schema — every table, column, type, foreign key
+2. LLM generates custom MySQL SQL for all 21 analytics templates based on YOUR column names
+3. LLM detects the best date/value columns for auto-forecast and auto-anomaly
+4. LLM writes a personalised analytics catalogue describing what's possible
+5. All of this is saved to `backend/data/cache/{user}_{db}.json`
+
+**Every visit after that:**
+- Analytics Hub loads instantly — reads catalogue from cache file
+- Each template runs the pre-generated SQL directly on your DB
+- Zero LLM tokens used for any analytics
+
+**Three-tier fallback:**
+```
+Cache SQL → Python analytics (RFM, Cohort, Basket…) → Hardcoded POS SQL
+```
+
+### New files
+- `backend/cache.py` — read/write/invalidate per-user, per-DB JSON cache files
+- `backend/schema_builder.py` — LLM prompt builder + SQL validator + one-time build engine
+
+### New API endpoints
+| Method | Path | Description |
+|---|---|---|
+| GET | `/cache/status` | Is cache built? How many templates? When? |
+| GET | `/cache/progress` | Live build log (poll while building) |
+| POST | `/cache/rebuild` | Force a full rebuild for the active DB |
+

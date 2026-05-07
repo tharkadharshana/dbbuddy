@@ -35,3 +35,5 @@ button{font-family:var(--font);cursor:pointer;border:none;transition:all .15s}
 .data-table td.num{font-family:var(--mono);color:var(--blue);text-align:right}
 .data-table td.pos{color:var(--green);font-family:var(--mono)}
 .data-table td.neg{color:var(--red);font-family:var(--mono)}
+
+@keyframes pulseGlow{0%,100%{opacity:1}50%{opacity:.35}}

@@ -46,3 +46,8 @@ export const runAutoForecast      = (periods=90) => api.get(`/forecast/auto?peri
 export const runAnomalies         = (table, value_column, date_column=null) => api.post('/anomalies', { table, value_column, date_column }).then(r => r.data)
 export const runAutoAnomalies     = () => api.get('/anomalies/auto').then(r => r.data)
 export const generateReport       = (title, sections, llm, format='full') => api.post('/report', { title, sections, llm, format }).then(r => r.data)
+
+// Cache
+export const fetchCacheStatus  = () => api.get('/cache/status').then(r => r.data)
+export const fetchCacheProgress = () => api.get('/cache/progress').then(r => r.data)
+export const rebuildCache       = () => api.post('/cache/rebuild').then(r => r.data)
