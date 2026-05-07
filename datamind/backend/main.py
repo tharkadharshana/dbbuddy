@@ -1,49 +1,43 @@
 """
-DataMind AI v2 — main.py
+DataMind AI v3 — main.py
 
-Architecture:
-  ┌─────────────────────────────────────────────────────────┐
-  │  First DB connect                                        │
-  │  → schema_builder.build_schema_cache()                  │
-  │  → LLM generates SQL for ALL templates once             │
-  │  → saved to data/cache/{user}_{db}.json                 │
-  └─────────────────────────────────────────────────────────┘
-  ┌─────────────────────────────────────────────────────────┐
-  │  Every subsequent request                                │
-  │  → cache.get_cache() reads from disk (0 LLM tokens)     │
-  │  → runs the pre-generated SQL against live DB            │
-  └─────────────────────────────────────────────────────────┘
-  ┌─────────────────────────────────────────────────────────┐
-  │  Fallback (if cache missing or SQL fails)                │
-  │  → analytics.py Python functions (hardcoded POS SQL)     │
-  │  → only used when dynamic SQL is unavailable             │
-  └─────────────────────────────────────────────────────────┘
+Three fixes in this version:
+  1. DB config ALWAYS comes from user settings — .env is only a global fallback
+     for server admins who want a default DB.
+  2. LLM selection is respected exactly — DeepSeek uses DeepSeek key,
+     Gemini uses Gemini key. Keys come from user settings, not os.environ.
+  3. Comprehensive structured logging throughout.
 """
 
-from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
+import os
+import decimal
+import datetime
+import traceback
+from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional, List, Any, Dict
-import os, json, decimal, datetime
 from dotenv import load_dotenv
 
-from db import get_connection, get_table_schemas, get_foreign_keys, get_sample_data, schema_to_text
-from llm import query_to_sql, generate_report_summary, call_llm
+from logger import get_logger
+from db import get_connection, get_table_schemas, get_foreign_keys, get_sample_data
+from llm import query_to_sql, generate_report_summary, call_llm, validate_llm_key, list_gemini_models
 from cache import get_cache, save_cache, invalidate_cache, get_cache_status
-from schema_builder import build_schema_cache, TEMPLATE_GOALS
+from schema_builder import build_schema_cache
 from analytics import (
-    run_forecast, run_anomaly_detection,
-    run_cohort_analysis, run_rfm_analysis,
-    run_basket_analysis, run_growth_metrics,
+    run_forecast, run_anomaly_detection, run_cohort_analysis,
+    run_rfm_analysis, run_basket_analysis, run_growth_metrics,
     run_employee_performance, run_product_velocity,
     run_payment_breakdown, run_location_comparison,
 )
 from auth import (
     create_user, authenticate_user, create_token,
-    get_user_settings, update_user_settings, current_user
+    get_user_settings, update_user_settings, current_user,
 )
 
 load_dotenv()
+log = get_logger(__name__)
 
 app = FastAPI(title="DataMind AI", version="3.0.0")
 app.add_middleware(
@@ -54,11 +48,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# In-memory build status tracker (template_id → "building" | "done" | "error")
+# In-memory build progress tracker
 _build_status: Dict[str, Any] = {}
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# HELPERS — key resolution (user settings first, env fallback only)
+# ══════════════════════════════════════════════════════════════════════════════
 
 def _safe(v):
     if isinstance(v, decimal.Decimal): return float(v)
@@ -67,46 +63,120 @@ def _safe(v):
 
 
 def _resolve_db(user: dict) -> dict:
+    """
+    Return the active DB config from user settings.
+    Falls back to env vars ONLY if the user has no configs at all.
+    Logs clearly which source is being used.
+    """
     s = user.get("settings", {})
     configs = s.get("db_configs", [])
-    idx = s.get("active_db_index", 0)
+    idx = int(s.get("active_db_index", 0))
     if configs and 0 <= idx < len(configs):
-        return configs[idx]
-    return {}
+        cfg = configs[idx]
+        log.debug("Using user DB config",
+                  user=user.get("email"), config_name=cfg.get("name"),
+                  host=cfg.get("host"), database=cfg.get("database"))
+        return cfg
+    log.warning("No user DB config found, falling back to .env",
+                user=user.get("email"))
+    return {}   # get_connection() will use env vars
 
 
-def _resolve_llm_keys(user: dict, llm: str) -> str:
+def _resolve_api_key(user: dict, llm: str) -> str:
+    """
+    Return the correct API key for the requested LLM.
+    Source: user settings ONLY. .env is never touched here.
+    Raises clear error if missing.
+    """
     s = user.get("settings", {})
-    if llm == "gemini" and s.get("gemini_api_key"):
-        os.environ["GEMINI_API_KEY"] = s["gemini_api_key"]
-    elif llm == "deepseek" and s.get("deepseek_api_key"):
-        os.environ["DEEPSEEK_API_KEY"] = s["deepseek_api_key"]
-    return llm
+    llm = (llm or "gemini").lower().strip()
+    if llm == "gemini":
+        key = s.get("gemini_api_key", "").strip()
+        if not key:
+            # Last resort: server-level env var (for server admins only)
+            key = os.getenv("GEMINI_API_KEY", "").strip()
+        if not key:
+            raise HTTPException(
+                status_code=422,
+                detail="Gemini API key not set. Go to Settings → LLM API Keys."
+            )
+        log.debug("Resolved Gemini API key", user=user.get("email"), source="settings" if s.get("gemini_api_key") else "env")
+        return key
+
+    elif llm == "deepseek":
+        key = s.get("deepseek_api_key", "").strip()
+        if not key:
+            key = os.getenv("DEEPSEEK_API_KEY", "").strip()
+        if not key:
+            raise HTTPException(
+                status_code=422,
+                detail="DeepSeek API key not set. Go to Settings → LLM API Keys."
+            )
+        log.debug("Resolved DeepSeek API key", user=user.get("email"), source="settings" if s.get("deepseek_api_key") else "env")
+        return key
+
+    raise HTTPException(status_code=422, detail=f"Unknown LLM: '{llm}'. Use 'gemini' or 'deepseek'.")
 
 
-def _run_sql(conn, sql: str, title: str) -> dict:
-    cursor = conn.cursor()
-    cursor.execute(sql)
-    cols = [d[0] for d in cursor.description]
-    rows = cursor.fetchall()
-    data = [{c: _safe(v) for c, v in zip(cols, row)} for row in rows]
-    return {"title": title, "columns": cols, "data": data, "row_count": len(data)}
+def _get_llm(user: dict) -> str:
+    """Return user's preferred LLM from settings."""
+    return user.get("settings", {}).get("default_llm", "gemini") or "gemini"
 
 
-def _build_status_key(email: str, db_config: dict) -> str:
+def _status_key(email: str, db_config: dict) -> str:
     import hashlib
     key = f"{email}:{db_config.get('host','env')}:{db_config.get('database','env')}"
     return hashlib.md5(key.encode()).hexdigest()[:16]
 
 
-# ── Background cache builder ───────────────────────────────────────────────────
+def _run_sql(conn, sql: str, title: str) -> dict:
+    cursor = conn.cursor()
+    log.debug("Executing SQL", title=title, sql=sql[:120])
+    cursor.execute(sql)
+    cols = [d[0] for d in cursor.description]
+    rows = cursor.fetchall()
+    data = [{c: _safe(v) for c, v in zip(cols, row)} for row in rows]
+    log.debug("SQL result", title=title, rows=len(data))
+    return {"title": title, "columns": cols, "data": data, "row_count": len(data)}
 
-def _background_build(email: str, db_config: dict, llm: str):
-    """Runs in background after DB is connected. Builds and saves the full cache."""
-    status_key = _build_status_key(email, db_config)
-    _build_status[status_key] = {"status": "building", "progress": [], "started_at": str(datetime.datetime.utcnow())}
-    logs = _build_status[status_key]["progress"]
 
+# ══════════════════════════════════════════════════════════════════════════════
+# REQUEST LOGGING MIDDLEWARE
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start = datetime.datetime.utcnow()
+    log.debug("Request started", method=request.method, path=request.url.path)
+    try:
+        response = await call_next(request)
+        duration = (datetime.datetime.utcnow() - start).total_seconds() * 1000
+        log.info("Request completed",
+                 method=request.method, path=request.url.path,
+                 status=response.status_code, duration_ms=round(duration, 1))
+        return response
+    except Exception as e:
+        duration = (datetime.datetime.utcnow() - start).total_seconds() * 1000
+        log.error("Request failed",
+                  method=request.method, path=request.url.path,
+                  error=str(e), duration_ms=round(duration, 1))
+        raise
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BACKGROUND CACHE BUILDER
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _background_build(email: str, db_config: dict, llm: str, api_key: str):
+    sk = _status_key(email, db_config)
+    _build_status[sk] = {
+        "status": "building",
+        "progress": [],
+        "started_at": datetime.datetime.utcnow().isoformat(),
+    }
+    logs = _build_status[sk]["progress"]
+    log.info("Cache build started",
+             user=email, db=db_config.get("database"), llm=llm)
     try:
         conn = get_connection(db_config)
         cursor = conn.cursor()
@@ -115,34 +185,57 @@ def _background_build(email: str, db_config: dict, llm: str):
         schemas = get_table_schemas(conn, tables)
         fkeys = get_foreign_keys(conn)
         samples = get_sample_data(conn, tables, rows=3)
+        log.info("Schema loaded for cache build",
+                 user=email, tables=len(tables), fkeys=len(fkeys))
 
         def progress(msg):
             logs.append(msg)
+            log.debug("Cache build progress", user=email, msg=msg)
 
         def llm_caller(prompt, system, llm_name, max_tokens):
-            return call_llm(prompt, system, llm_name, max_tokens)
+            return call_llm(prompt, system, llm_name, max_tokens, api_key=api_key)
 
         cache_data = build_schema_cache(
-            conn=conn,
-            schemas=schemas,
-            fkeys=fkeys,
-            samples=samples,
-            llm_caller=llm_caller,
-            llm=llm,
-            progress_callback=progress,
+            conn=conn, schemas=schemas, fkeys=fkeys, samples=samples,
+            llm_caller=llm_caller, llm=llm, progress_callback=progress,
         )
         conn.close()
         save_cache(email, db_config, cache_data)
-        _build_status[status_key]["status"] = "done"
-        _build_status[status_key]["successful"] = cache_data["successful_count"]
-        _build_status[status_key]["failed"] = cache_data["failed_count"]
-        logs.append(f"✅ Cache built: {cache_data['successful_count']} templates ready.")
-
+        _build_status[sk]["status"] = "done"
+        _build_status[sk]["successful"] = cache_data["successful_count"]
+        _build_status[sk]["failed"] = cache_data["failed_count"]
+        logs.append(f"✅ Done — {cache_data['successful_count']} templates cached, "
+                    f"{cache_data['failed_count']} failed.")
+        log.info("Cache build complete",
+                 user=email, successful=cache_data["successful_count"],
+                 failed=cache_data["failed_count"])
     except Exception as e:
-        _build_status[status_key]["status"] = "error"
-        _build_status[status_key]["error"] = str(e)
+        _build_status[sk]["status"] = "error"
+        _build_status[sk]["error"] = str(e)
         logs.append(f"❌ Build failed: {e}")
+        log.error("Cache build failed", user=email, error=str(e),
+                  traceback=traceback.format_exc())
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# HEALTH
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/health")
+def health():
+    log.debug("Health check")
+    return {"status": "ok", "version": "3.0.0"}
+
+
+
+@app.get("/llm/models")
+def llm_models(user: dict = Depends(current_user)):
+    """Return all Gemini models available for this API key. Useful for debugging."""
+    s = user.get("settings", {})
+    gemini_key = s.get("gemini_api_key", "") or os.getenv("GEMINI_API_KEY", "")
+    models = list_gemini_models(gemini_key)
+    log.info("Listed Gemini models", user=user["email"], count=len(models))
+    return {"gemini_models": models, "count": len(models)}
 
 # ══════════════════════════════════════════════════════════════════════════════
 # AUTH
@@ -160,21 +253,122 @@ class LoginRequest(BaseModel):
 
 @app.post("/auth/register")
 def register(req: RegisterRequest):
+    log.info("Register attempt", email=req.email)
     user = create_user(req.name, req.email, req.password)
     token = create_token(req.email)
+    log.info("User registered", email=req.email)
     return {"token": token, "user": {"name": user["name"], "email": user["email"]}}
 
 
 @app.post("/auth/login")
 def login(req: LoginRequest):
+    log.info("Login attempt", email=req.email)
     user = authenticate_user(req.email, req.password)
     token = create_token(req.email)
+    log.info("User logged in", email=req.email)
     return {"token": token, "user": {"name": user["name"], "email": user["email"]}}
 
 
 @app.get("/auth/me")
 def me(user: dict = Depends(current_user)):
     return {"name": user["name"], "email": user["email"]}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ONBOARDING — validate LLM key + check DB + trigger build (all in one flow)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class ValidateKeyRequest(BaseModel):
+    llm: str
+    api_key: str
+
+class OnboardingDBRequest(BaseModel):
+    name: str
+    host: str
+    port: int = 3306
+    database: str
+    user: str
+    password: str
+    llm: str = "gemini"   # which LLM to use for the cache build
+
+
+@app.post("/onboarding/validate-key")
+def onboarding_validate_key(req: ValidateKeyRequest,
+                             user: dict = Depends(current_user)):
+    """Step 1 of onboarding: test the LLM API key."""
+    log.info("Onboarding: validating LLM key", user=user["email"], llm=req.llm)
+    result = validate_llm_key(req.llm, req.api_key)
+    if result["ok"]:
+        # Save key to user settings immediately
+        patch = {}
+        if req.llm == "gemini":
+            patch["gemini_api_key"] = req.api_key
+        else:
+            patch["deepseek_api_key"] = req.api_key
+        patch["default_llm"] = req.llm
+        update_user_settings(user["email"], patch)
+        log.info("Onboarding: LLM key saved", user=user["email"], llm=req.llm)
+    return result
+
+
+@app.post("/onboarding/test-db")
+def onboarding_test_db(req: OnboardingDBRequest,
+                       user: dict = Depends(current_user)):
+    """Step 2: test DB connection and return table list."""
+    log.info("Onboarding: testing DB connection",
+             user=user["email"], host=req.host, database=req.database)
+    try:
+        conn = get_connection(req.dict())
+        cursor = conn.cursor()
+        cursor.execute("SHOW TABLES")
+        tables = [r[0] for r in cursor.fetchall()]
+        cursor.execute("SHOW TABLE STATUS")
+        status_rows = cursor.fetchall()
+        conn.close()
+        log.info("Onboarding: DB connection OK",
+                 user=user["email"], tables=len(tables))
+        return {"ok": True, "tables": tables, "table_count": len(tables)}
+    except Exception as e:
+        log.warning("Onboarding: DB connection failed",
+                    user=user["email"], error=str(e))
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/onboarding/connect-db")
+def onboarding_connect_db(req: OnboardingDBRequest,
+                           background_tasks: BackgroundTasks,
+                           user: dict = Depends(current_user)):
+    """
+    Step 3: save DB config, then immediately trigger cache build.
+    Returns instantly — cache builds in background.
+    """
+    log.info("Onboarding: connecting DB",
+             user=user["email"], host=req.host, database=req.database)
+    s = get_user_settings(user["email"])
+    configs = s.get("db_configs", [])
+    db_dict = {
+        "name": req.name, "host": req.host, "port": req.port,
+        "database": req.database, "user": req.user, "password": req.password,
+    }
+    configs.append(db_dict)
+    new_idx = len(configs) - 1
+    update_user_settings(user["email"], {
+        "db_configs": configs,
+        "active_db_index": new_idx,
+    })
+
+    # Get the API key that was just validated
+    llm = req.llm or _get_llm(user)
+    try:
+        api_key = _resolve_api_key(user, llm)
+    except HTTPException:
+        api_key = ""
+        log.warning("No API key available for cache build", user=user["email"], llm=llm)
+
+    log.info("Onboarding: triggering background cache build",
+             user=user["email"], llm=llm)
+    background_tasks.add_task(_background_build, user["email"], db_dict, llm, api_key)
+    return {"ok": True, "building_cache": True, "db_index": new_idx}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -185,9 +379,8 @@ class SettingsPatch(BaseModel):
     gemini_api_key: Optional[str] = None
     deepseek_api_key: Optional[str] = None
     default_llm: Optional[str] = None
-    theme: Optional[str] = None
     active_db_index: Optional[int] = None
-
+    onboarding_complete: Optional[bool] = None
 
 class DBConfig(BaseModel):
     name: str
@@ -200,6 +393,7 @@ class DBConfig(BaseModel):
 
 @app.get("/settings")
 def get_settings(user: dict = Depends(current_user)):
+    log.debug("Get settings", user=user["email"])
     s = get_user_settings(user["email"])
     safe_configs = []
     for cfg in s.get("db_configs", []):
@@ -213,40 +407,48 @@ def get_settings(user: dict = Depends(current_user)):
 @app.patch("/settings")
 def patch_settings(req: SettingsPatch, user: dict = Depends(current_user)):
     patch = {k: v for k, v in req.dict().items() if v is not None}
+    log.info("Patch settings", user=user["email"], keys=list(patch.keys()))
     updated = update_user_settings(user["email"], patch)
-    return {"ok": True, "settings": updated}
+    return {"ok": True}
 
 
 @app.post("/settings/db")
-def add_db_config(cfg: DBConfig, background_tasks: BackgroundTasks, user: dict = Depends(current_user)):
+def add_db_config(cfg: DBConfig, background_tasks: BackgroundTasks,
+                  user: dict = Depends(current_user)):
+    log.info("Add DB config", user=user["email"], name=cfg.name, host=cfg.host)
     s = get_user_settings(user["email"])
     configs = s.get("db_configs", [])
     configs.append(cfg.dict())
     new_idx = len(configs) - 1
     update_user_settings(user["email"], {"db_configs": configs, "active_db_index": new_idx})
-    # Trigger background cache build
-    llm = s.get("default_llm", "gemini")
-    _resolve_llm_keys(user, llm)
-    background_tasks.add_task(_background_build, user["email"], cfg.dict(), llm)
-    return {"ok": True, "db_configs_count": len(configs), "building_cache": True}
+    llm = _get_llm(user)
+    try:
+        api_key = _resolve_api_key(user, llm)
+        background_tasks.add_task(_background_build, user["email"], cfg.dict(), llm, api_key)
+        return {"ok": True, "building_cache": True}
+    except HTTPException:
+        log.warning("Skipping cache build — no API key set", user=user["email"])
+        return {"ok": True, "building_cache": False, "warning": "Add an API key in Settings to build the analytics cache."}
 
 
 @app.put("/settings/db/{index}")
-def update_db_config(index: int, cfg: DBConfig, background_tasks: BackgroundTasks, user: dict = Depends(current_user)):
+def update_db_config(index: int, cfg: DBConfig,
+                     background_tasks: BackgroundTasks,
+                     user: dict = Depends(current_user)):
     s = get_user_settings(user["email"])
     configs = s.get("db_configs", [])
     if index < 0 or index >= len(configs):
         raise HTTPException(status_code=404, detail="Index out of range")
-    old_cfg = configs[index]
-    # Invalidate old cache
-    invalidate_cache(user["email"], old_cfg)
+    invalidate_cache(user["email"], configs[index])
     configs[index] = cfg.dict()
     update_user_settings(user["email"], {"db_configs": configs})
-    # Rebuild cache for new config
-    llm = s.get("default_llm", "gemini")
-    _resolve_llm_keys(user, llm)
-    background_tasks.add_task(_background_build, user["email"], cfg.dict(), llm)
-    return {"ok": True, "building_cache": True}
+    llm = _get_llm(user)
+    try:
+        api_key = _resolve_api_key(user, llm)
+        background_tasks.add_task(_background_build, user["email"], cfg.dict(), llm, api_key)
+    except HTTPException:
+        pass
+    return {"ok": True}
 
 
 @app.delete("/settings/db/{index}")
@@ -255,6 +457,7 @@ def delete_db_config(index: int, user: dict = Depends(current_user)):
     configs = s.get("db_configs", [])
     if index < 0 or index >= len(configs):
         raise HTTPException(status_code=404, detail="Index out of range")
+    log.info("Delete DB config", user=user["email"], index=index)
     invalidate_cache(user["email"], configs[index])
     configs.pop(index)
     update_user_settings(user["email"], {"db_configs": configs, "active_db_index": 0})
@@ -262,117 +465,119 @@ def delete_db_config(index: int, user: dict = Depends(current_user)):
 
 
 @app.post("/settings/db/{index}/activate")
-def activate_db(index: int, background_tasks: BackgroundTasks, user: dict = Depends(current_user)):
+def activate_db(index: int, background_tasks: BackgroundTasks,
+                user: dict = Depends(current_user)):
     s = get_user_settings(user["email"])
     configs = s.get("db_configs", [])
     if index < 0 or index >= len(configs):
         raise HTTPException(status_code=404, detail="Index out of range")
     update_user_settings(user["email"], {"active_db_index": index})
-    # Build cache if not already cached
     db_config = configs[index]
     if not get_cache(user["email"], db_config):
-        llm = s.get("default_llm", "gemini")
-        _resolve_llm_keys(user, llm)
-        background_tasks.add_task(_background_build, user["email"], db_config, llm)
-        return {"ok": True, "active": index, "building_cache": True}
+        llm = _get_llm(user)
+        try:
+            api_key = _resolve_api_key(user, llm)
+            background_tasks.add_task(_background_build, user["email"], db_config, llm, api_key)
+            return {"ok": True, "active": index, "building_cache": True}
+        except HTTPException:
+            return {"ok": True, "active": index, "building_cache": False}
     return {"ok": True, "active": index, "building_cache": False}
 
 
 @app.post("/settings/db/test")
 def test_db_connection(cfg: DBConfig, user: dict = Depends(current_user)):
+    log.info("Test DB connection", user=user["email"], host=cfg.host, database=cfg.database)
     try:
         conn = get_connection(cfg.dict())
         cursor = conn.cursor()
         cursor.execute("SHOW TABLES")
         tables = [r[0] for r in cursor.fetchall()]
         conn.close()
+        log.info("DB test OK", user=user["email"], tables=len(tables))
         return {"ok": True, "tables": tables, "table_count": len(tables)}
     except Exception as e:
+        log.warning("DB test failed", user=user["email"], error=str(e))
         return {"ok": False, "error": str(e)}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CACHE STATUS
+# CACHE
 # ══════════════════════════════════════════════════════════════════════════════
 
 @app.get("/cache/status")
 def cache_status(user: dict = Depends(current_user)):
     db_config = _resolve_db(user)
-    status_key = _build_status_key(user["email"], db_config)
-    build_info = _build_status.get(status_key, {})
+    sk = _status_key(user["email"], db_config)
     cache_info = get_cache_status(user["email"], db_config)
+    build_info = _build_status.get(sk, {})
     return {**cache_info, "build": build_info}
-
-
-@app.post("/cache/rebuild")
-def rebuild_cache(background_tasks: BackgroundTasks, user: dict = Depends(current_user)):
-    """Force a full cache rebuild for the active DB."""
-    db_config = _resolve_db(user)
-    invalidate_cache(user["email"], db_config)
-    s = user.get("settings", {})
-    llm = s.get("default_llm", "gemini")
-    _resolve_llm_keys(user, llm)
-    background_tasks.add_task(_background_build, user["email"], db_config, llm)
-    return {"ok": True, "message": "Cache rebuild started in background"}
 
 
 @app.get("/cache/progress")
 def cache_progress(user: dict = Depends(current_user)):
-    """Poll build progress — used by frontend to show a progress log."""
     db_config = _resolve_db(user)
-    status_key = _build_status_key(user["email"], db_config)
-    return _build_status.get(status_key, {"status": "unknown"})
+    sk = _status_key(user["email"], db_config)
+    return _build_status.get(sk, {"status": "unknown"})
+
+
+@app.post("/cache/rebuild")
+def rebuild_cache(background_tasks: BackgroundTasks,
+                  user: dict = Depends(current_user)):
+    db_config = _resolve_db(user)
+    invalidate_cache(user["email"], db_config)
+    llm = _get_llm(user)
+    api_key = _resolve_api_key(user, llm)
+    log.info("Cache rebuild requested", user=user["email"], llm=llm)
+    background_tasks.add_task(_background_build, user["email"], db_config, llm, api_key)
+    return {"ok": True, "message": "Rebuild started"}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# HEALTH & TABLES
+# TABLES
 # ══════════════════════════════════════════════════════════════════════════════
-
-@app.get("/health")
-def health():
-    return {"status": "ok", "version": "3.0.0"}
-
 
 @app.get("/tables")
 def list_tables(user: dict = Depends(current_user)):
+    db_config = _resolve_db(user)
+    log.info("List tables", user=user["email"])
     try:
-        conn = get_connection(_resolve_db(user))
+        conn = get_connection(db_config)
         cursor = conn.cursor()
         cursor.execute("SHOW TABLES")
         tables = [row[0] for row in cursor.fetchall()]
         schemas = get_table_schemas(conn, tables)
         fkeys = get_foreign_keys(conn)
         conn.close()
+        log.info("Tables loaded", user=user["email"], count=len(tables))
         return {"tables": tables, "schemas": schemas, "foreign_keys": fkeys}
     except Exception as e:
+        log.error("Failed to list tables", user=user["email"], error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# DISCOVER — reads from cache (0 LLM tokens)
+# DISCOVER
 # ══════════════════════════════════════════════════════════════════════════════
 
 @app.get("/discover")
 def discover(user: dict = Depends(current_user)):
     db_config = _resolve_db(user)
     cache = get_cache(user["email"], db_config)
-
     if cache:
-        # ✅ Serve from cache — zero LLM tokens
+        log.debug("Discover: serving from cache", user=user["email"],
+                  templates=len(cache.get("template_sql", {})))
         return {
             "catalogue": cache.get("catalogue", []),
             "from_cache": True,
             "built_at": cache.get("built_at"),
             "template_count": len(cache.get("template_sql", {})),
         }
-
-    # Cache not built yet — return status
-    status_key = _build_status_key(user["email"], db_config)
-    build_info = _build_status.get(status_key, {})
+    sk = _status_key(user["email"], db_config)
+    build_info = _build_status.get(sk, {})
     if build_info.get("status") == "building":
-        return {"catalogue": [], "from_cache": False, "building": True, "progress": build_info.get("progress", [])}
-
-    # No cache, not building — return empty (frontend should trigger a rebuild)
+        return {"catalogue": [], "from_cache": False, "building": True,
+                "progress": build_info.get("progress", [])}
+    log.info("Discover: no cache found", user=user["email"])
     return {"catalogue": [], "from_cache": False, "building": False, "needs_build": True}
 
 
@@ -387,25 +592,30 @@ class NLQueryRequest(BaseModel):
 
 @app.post("/query")
 def natural_language_query(req: NLQueryRequest, user: dict = Depends(current_user)):
+    log.info("NL query", user=user["email"], llm=req.llm, question=req.question[:80])
+    api_key = _resolve_api_key(user, req.llm)
     try:
-        _resolve_llm_keys(user, req.llm)
         conn = get_connection(_resolve_db(user))
         schemas = get_table_schemas(conn, None)
         fkeys = get_foreign_keys(conn)
-        sql = query_to_sql(req.question, schemas, req.llm, fkeys)
+        sql = query_to_sql(req.question, schemas, req.llm, fkeys, api_key=api_key)
         cursor = conn.cursor()
         cursor.execute(sql)
         columns = [desc[0] for desc in cursor.description]
         rows = cursor.fetchall()
         conn.close()
         data = [{k: _safe(v) for k, v in dict(zip(columns, row)).items()} for row in rows]
+        log.info("NL query complete", user=user["email"], rows=len(data))
         return {"sql": sql, "columns": columns, "data": data, "row_count": len(data)}
+    except HTTPException:
+        raise
     except Exception as e:
+        log.error("NL query failed", user=user["email"], error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ANALYTICS TEMPLATES — dynamic from cache, fallback to hardcoded
+# ANALYTICS TEMPLATES
 # ══════════════════════════════════════════════════════════════════════════════
 
 class AnalyticsRunRequest(BaseModel):
@@ -416,105 +626,93 @@ class AnalyticsRunRequest(BaseModel):
 
 @app.post("/analytics/run")
 def run_analytics(req: AnalyticsRunRequest, user: dict = Depends(current_user)):
+    log.info("Run analytics", user=user["email"], template=req.template_id)
     db_config = _resolve_db(user)
     conn = get_connection(db_config)
-
     try:
-        # ── Step 1: Try dynamic SQL from cache ────────────────────────────────
+        # 1. Cache SQL
         cache = get_cache(user["email"], db_config)
         if cache and req.template_id in cache.get("template_sql", {}):
             sql = cache["template_sql"][req.template_id]
-            # Get title from catalogue
-            title = req.template_id.replace("_", " ").title()
-            for item in cache.get("catalogue", []):
-                if item.get("id") == req.template_id:
-                    title = item.get("title", title)
-                    break
+            title = next(
+                (i.get("title", req.template_id) for i in cache.get("catalogue", [])
+                 if i.get("id") == req.template_id),
+                req.template_id.replace("_", " ").title()
+            )
             try:
                 result = _run_sql(conn, sql, title)
                 result["source"] = "cache"
+                log.info("Analytics served from cache", template=req.template_id)
                 conn.close()
                 return result
             except Exception as sql_err:
-                # Cached SQL failed (schema changed?) — fall through to hardcoded
-                pass
+                log.warning("Cached SQL failed, trying fallbacks",
+                            template=req.template_id, error=str(sql_err))
 
-        # ── Step 2: Try Python analytics functions (RFM, Cohort, Basket etc.) ─
-        python_result = _try_python_analytics(req.template_id, conn)
-        if python_result:
-            python_result["source"] = "python"
+        # 2. Python analytics
+        r = _try_python(req.template_id, conn)
+        if r:
+            r["source"] = "python"
             conn.close()
-            return python_result
+            return r
 
-        # ── Step 3: Try hardcoded fallback SQL (original POS queries) ─────────
-        fallback_result = _hardcoded_fallback(req.template_id, conn)
-        if fallback_result:
-            fallback_result["source"] = "fallback"
+        # 3. Hardcoded fallback
+        r = _hardcoded(req.template_id, conn)
+        if r:
+            r["source"] = "fallback"
+            log.warning("Analytics using hardcoded fallback SQL", template=req.template_id)
             conn.close()
-            return fallback_result
+            return r
 
         conn.close()
-        raise HTTPException(status_code=404, detail=f"Template '{req.template_id}' not available for this database.")
-
+        raise HTTPException(status_code=404,
+                            detail=f"Template '{req.template_id}' not available. Rebuild the cache.")
     except HTTPException:
         raise
     except Exception as e:
         conn.close()
+        log.error("Analytics run failed", template=req.template_id, error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _try_python_analytics(tid: str, conn) -> Optional[Dict]:
-    """Run templates that need Python logic (RFM, cohort, basket, etc.)."""
+def _try_python(tid: str, conn) -> Optional[Dict]:
     try:
-        if tid == "customer_rfm":       return run_rfm_analysis(conn)
-        if tid == "customer_cohort":    return run_cohort_analysis(conn)
-        if tid == "basket_analysis":    return run_basket_analysis(conn)
-        if tid == "growth_metrics":     return run_growth_metrics(conn)
-        if tid == "cashier_performance":return run_employee_performance(conn)
-        if tid == "product_velocity":   return run_product_velocity(conn)
-        if tid == "payment_methods":    return run_payment_breakdown(conn)
-        if tid == "location_comparison":return run_location_comparison(conn)
-    except Exception:
-        pass
+        if tid == "customer_rfm":        return run_rfm_analysis(conn)
+        if tid == "customer_cohort":     return run_cohort_analysis(conn)
+        if tid == "basket_analysis":     return run_basket_analysis(conn)
+        if tid == "growth_metrics":      return run_growth_metrics(conn)
+        if tid == "cashier_performance": return run_employee_performance(conn)
+        if tid == "product_velocity":    return run_product_velocity(conn)
+        if tid == "payment_methods":     return run_payment_breakdown(conn)
+        if tid == "location_comparison": return run_location_comparison(conn)
+    except Exception as e:
+        log.warning("Python analytics failed", tid=tid, error=str(e))
     return None
 
 
-def _run_sql_safe(conn, sql, title):
+def _hardcoded(tid: str, conn) -> Optional[Dict]:
+    QUERIES = {
+        "revenue_trend":       ("SELECT DATE_FORMAT(invoiceDate,'%Y-%m') as month, ROUND(SUM(invoiceTotal),2) as revenue, COUNT(*) as transactions, ROUND(AVG(invoiceTotal),2) as avg_ticket FROM invoices WHERE invoiceDate IS NOT NULL GROUP BY month ORDER BY month DESC LIMIT 24", "Monthly Revenue Trend"),
+        "revenue_by_category": ("SELECT p.category, ROUND(SUM(ii.qty*ii.itemPrice),2) as revenue, ROUND(SUM(ii.qty*(ii.itemPrice-ii.itemCost)),2) as gross_profit, ROUND(AVG((ii.itemPrice-ii.itemCost)/NULLIF(ii.itemPrice,0)*100),1) as margin_pct FROM invoice_items ii JOIN products p ON ii.itemCode=p.itemCode GROUP BY p.category ORDER BY revenue DESC", "Revenue by Category"),
+        "revenue_by_location": ("SELECT l.location_name, ROUND(SUM(i.invoiceTotal),2) as revenue, COUNT(*) as transactions, ROUND(AVG(i.invoiceTotal),2) as avg_ticket FROM invoices i JOIN locations l ON i.location_id=l.location_id GROUP BY l.location_id,l.location_name ORDER BY revenue DESC", "Revenue by Location"),
+        "hourly_pattern":      ("SELECT HOUR(invoiceTime) as hour, ROUND(SUM(invoiceTotal),2) as total_revenue, COUNT(*) as transactions FROM invoices WHERE invoiceTime IS NOT NULL GROUP BY hour ORDER BY hour", "Hourly Pattern"),
+        "daily_trend_7":       ("SELECT invoiceDate as date, ROUND(SUM(invoiceTotal),2) as revenue, COUNT(*) as orders FROM invoices WHERE invoiceDate >= CURDATE()-INTERVAL 7 DAY GROUP BY invoiceDate ORDER BY invoiceDate", "Last 7 Days"),
+        "top_products":        ("SELECT p.name, p.category, ROUND(SUM(ii.qty*ii.itemPrice),2) as revenue, SUM(ii.qty) as units FROM invoice_items ii JOIN products p ON ii.itemCode=p.itemCode GROUP BY p.itemCode,p.name,p.category ORDER BY revenue DESC LIMIT 20", "Top Products"),
+        "top_customers":       ("SELECT c.name, COUNT(DISTINCT i.invoiceNumber) as orders, ROUND(SUM(i.invoiceTotal),2) as lifetime_value FROM customers c JOIN invoices i ON c.customerId=i.customerId GROUP BY c.customerId,c.name ORDER BY lifetime_value DESC LIMIT 25", "Top Customers"),
+        "payment_methods":     ("SELECT payMethod as payment_method, COUNT(*) as transactions, ROUND(SUM(invoiceTotal),2) as revenue FROM invoices WHERE payMethod IS NOT NULL GROUP BY payMethod ORDER BY revenue DESC", "Payment Methods"),
+    }
+    if tid not in QUERIES:
+        return None
+    sql, title = QUERIES[tid]
     try:
         return _run_sql(conn, sql, title)
-    except Exception:
+    except Exception as e:
+        log.warning("Hardcoded fallback SQL failed", tid=tid, error=str(e))
         return None
-
-
-def _hardcoded_fallback(tid: str, conn) -> Optional[Dict]:
-    """Original hardcoded POS SQL — last resort fallback."""
-    queries = {
-        "revenue_trend": ("SELECT DATE_FORMAT(invoiceDate,'%Y-%m') as month, ROUND(SUM(invoiceTotal),2) as revenue, COUNT(*) as transactions, ROUND(AVG(invoiceTotal),2) as avg_ticket, ROUND(SUM(totalDiscount),2) as total_discounts FROM invoices WHERE invoiceDate IS NOT NULL GROUP BY month ORDER BY month DESC LIMIT 24", "Monthly Revenue Trend"),
-        "revenue_by_category": ("SELECT p.category, ROUND(SUM(ii.qty*ii.itemPrice),2) as revenue, ROUND(SUM(ii.qty*(ii.itemPrice-ii.itemCost)),2) as gross_profit, ROUND(AVG((ii.itemPrice-ii.itemCost)/NULLIF(ii.itemPrice,0)*100),1) as margin_pct, SUM(ii.qty) as units_sold FROM invoice_items ii JOIN products p ON ii.itemCode=p.itemCode GROUP BY p.category ORDER BY revenue DESC", "Revenue by Category"),
-        "revenue_by_location": ("SELECT l.location_name, ROUND(SUM(i.invoiceTotal),2) as revenue, COUNT(*) as transactions, ROUND(AVG(i.invoiceTotal),2) as avg_ticket FROM invoices i JOIN locations l ON i.location_id=l.location_id WHERE i.invoiceDate IS NOT NULL GROUP BY l.location_id,l.location_name ORDER BY revenue DESC", "Revenue by Location"),
-        "hourly_pattern": ("SELECT HOUR(invoiceTime) as hour, ROUND(SUM(invoiceTotal),2) as total_revenue, COUNT(*) as transactions FROM invoices WHERE invoiceTime IS NOT NULL GROUP BY hour ORDER BY hour", "Hourly Sales Pattern"),
-        "daily_trend_7": ("SELECT invoiceDate as date, ROUND(SUM(invoiceTotal),2) as revenue, COUNT(*) as orders FROM invoices WHERE invoiceDate >= CURDATE()-INTERVAL 7 DAY GROUP BY invoiceDate ORDER BY invoiceDate", "Last 7 Days"),
-        "discount_analysis": ("SELECT CASE WHEN totalDiscount=0 THEN 'No Discount' WHEN totalDiscount/NULLIF(invoiceTotal,0)<0.05 THEN '<5%' WHEN totalDiscount/NULLIF(invoiceTotal,0)<0.10 THEN '5-10%' WHEN totalDiscount/NULLIF(invoiceTotal,0)<0.20 THEN '10-20%' ELSE '>20%' END as discount_band, COUNT(*) as invoices, ROUND(AVG(invoiceTotal),2) as avg_order, ROUND(SUM(invoiceTotal),2) as total_revenue FROM invoices WHERE invoiceTotal>0 GROUP BY discount_band ORDER BY avg_order DESC", "Discount Analysis"),
-        "top_products": ("SELECT p.name, p.category, ROUND(SUM(ii.qty*ii.itemPrice),2) as revenue, SUM(ii.qty) as units, ROUND(SUM(ii.qty*(ii.itemPrice-ii.itemCost)),2) as gross_profit FROM invoice_items ii JOIN products p ON ii.itemCode=p.itemCode GROUP BY p.itemCode,p.name,p.category ORDER BY revenue DESC LIMIT 20", "Top Products"),
-        "slow_products": ("SELECT p.name, p.category, COALESCE(SUM(ii.qty),0) as total_sold, DATEDIFF(CURDATE(),MAX(i.invoiceDate)) as days_since_sold FROM products p LEFT JOIN invoice_items ii ON p.itemCode=ii.itemCode LEFT JOIN invoices i ON ii.invoiceNumber=i.invoiceNumber GROUP BY p.itemCode,p.name,p.category HAVING total_sold<10 OR days_since_sold>30 OR days_since_sold IS NULL ORDER BY days_since_sold DESC LIMIT 20", "Slow Products"),
-        "margin_by_category": ("SELECT p.category, COUNT(DISTINCT p.itemCode) as skus, ROUND(AVG((p.basePrice-p.baseCost)/NULLIF(p.basePrice,0)*100),1) as avg_margin_pct, ROUND(SUM(ii.qty*(ii.itemPrice-ii.itemCost)),2) as total_profit FROM products p LEFT JOIN invoice_items ii ON p.itemCode=ii.itemCode GROUP BY p.category ORDER BY total_profit DESC", "Margin by Category"),
-        "top_customers": ("SELECT c.name, COUNT(DISTINCT i.invoiceNumber) as orders, ROUND(SUM(i.invoiceTotal),2) as lifetime_value, ROUND(AVG(i.invoiceTotal),2) as avg_order, c.loyaltyPoints, MAX(i.invoiceDate) as last_seen FROM customers c JOIN invoices i ON c.customerId=i.customerId GROUP BY c.customerId,c.name,c.loyaltyPoints ORDER BY lifetime_value DESC LIMIT 25", "Top Customers"),
-        "customer_retention": ("SELECT DATE_FORMAT(first_purchase,'%Y-%m') as cohort, COUNT(*) as new_customers, ROUND(SUM(CASE WHEN total_orders>1 THEN 1 ELSE 0 END)/COUNT(*)*100,1) as retention_pct FROM (SELECT customerId,MIN(invoiceDate) as first_purchase,COUNT(*) as total_orders FROM invoices WHERE customerId IS NOT NULL GROUP BY customerId) t GROUP BY cohort ORDER BY cohort DESC LIMIT 18", "Customer Retention"),
-        "loyalty_tiers": ("SELECT CASE WHEN loyaltyPoints=0 THEN 'No Points' WHEN loyaltyPoints<100 THEN 'Bronze' WHEN loyaltyPoints<500 THEN 'Silver' WHEN loyaltyPoints<1000 THEN 'Gold' ELSE 'Platinum' END as tier, COUNT(*) as customers, ROUND(AVG(sub.total_spent),2) as avg_ltv FROM customers c JOIN (SELECT customerId,SUM(invoiceTotal) as total_spent FROM invoices GROUP BY customerId) sub ON c.customerId=sub.customerId GROUP BY tier ORDER BY avg_ltv DESC", "Loyalty Tiers"),
-        "payment_methods": ("SELECT payMethod as payment_method, COUNT(*) as transactions, ROUND(SUM(invoiceTotal),2) as revenue, ROUND(AVG(invoiceTotal),2) as avg_ticket FROM invoices WHERE payMethod IS NOT NULL GROUP BY payMethod ORDER BY revenue DESC", "Payment Methods"),
-        "credit_outstanding": ("SELECT DATE_FORMAT(invoiceDate,'%Y-%m') as month, COUNT(*) as credit_invoices, ROUND(SUM(creditAmount),2) as credit_given, ROUND(SUM(CASE WHEN creditComplete THEN creditAmount ELSE 0 END),2) as collected, ROUND(SUM(CASE WHEN NOT creditComplete THEN creditAmount ELSE 0 END),2) as outstanding FROM invoices WHERE creditAmount>0 GROUP BY month ORDER BY month DESC LIMIT 12", "Credit & Outstanding"),
-        "order_types": ("SELECT orderType, COUNT(*) as orders, ROUND(SUM(invoiceTotal),2) as revenue, ROUND(AVG(invoiceTotal),2) as avg_order FROM invoices WHERE orderType IS NOT NULL GROUP BY orderType ORDER BY revenue DESC", "Order Types"),
-        "tax_analysis": ("SELECT DATE_FORMAT(invoiceDate,'%Y-%m') as month, ROUND(SUM(chargeTotalTax),2) as total_tax, ROUND(SUM(invoiceTotal),2) as gross_revenue FROM invoices WHERE invoiceDate IS NOT NULL GROUP BY month ORDER BY month DESC LIMIT 12", "Tax Analysis"),
-        "inventory_movement": ("SELECT p.name, p.category, il.reason, ROUND(SUM(il.change_qty),2) as net_qty, COUNT(*) as entries FROM inventory_logs il JOIN products p ON il.itemCode=p.itemCode GROUP BY p.itemCode,p.name,p.category,il.reason ORDER BY ABS(SUM(il.change_qty)) DESC LIMIT 30", "Inventory Movement"),
-    }
-    if tid not in queries:
-        return None
-    sql, title = queries[tid]
-    return _run_sql_safe(conn, sql, title)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# FORECAST — uses cached auto-columns, or manual, or env fallback
+# FORECAST
 # ══════════════════════════════════════════════════════════════════════════════
 
 class ForecastRequest(BaseModel):
@@ -526,46 +724,57 @@ class ForecastRequest(BaseModel):
 
 @app.post("/forecast")
 def forecast(req: ForecastRequest, user: dict = Depends(current_user)):
+    log.info("Forecast (manual)", user=user["email"],
+             table=req.table, date_col=req.date_column, value_col=req.value_column)
     try:
         conn = get_connection(_resolve_db(user))
         cursor = conn.cursor()
-        cursor.execute(f"SELECT DATE(`{req.date_column}`) as ds, SUM(`{req.value_column}`) as y FROM `{req.table}` WHERE `{req.date_column}` IS NOT NULL GROUP BY ds ORDER BY ds")
+        cursor.execute(
+            f"SELECT DATE(`{req.date_column}`) as ds, SUM(`{req.value_column}`) as y "
+            f"FROM `{req.table}` WHERE `{req.date_column}` IS NOT NULL GROUP BY ds ORDER BY ds"
+        )
         rows = cursor.fetchall()
         conn.close()
+        log.info("Forecast data loaded", rows=len(rows))
         return run_forecast(rows, req.periods)
     except Exception as e:
+        log.error("Forecast failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/forecast/auto")
 def auto_forecast(periods: int = 90, user: dict = Depends(current_user)):
-    """Auto-detect best columns from cache, fall back to env-based defaults."""
     db_config = _resolve_db(user)
     cache = get_cache(user["email"], db_config)
     auto = cache.get("auto_columns", {}) if cache else {}
-
-    table  = auto.get("forecast_table")  or "invoices"
-    d_col  = auto.get("forecast_date_col")  or "invoiceDate"
-    v_col  = auto.get("forecast_value_col") or "invoiceTotal"
-
+    table  = auto.get("forecast_table")    or "invoices"
+    d_col  = auto.get("forecast_date_col") or "invoiceDate"
+    v_col  = auto.get("forecast_value_col")or "invoiceTotal"
+    log.info("Auto forecast", user=user["email"],
+             table=table, date_col=d_col, value_col=v_col,
+             from_cache=bool(cache and auto.get("forecast_table")))
     try:
         conn = get_connection(db_config)
         cursor = conn.cursor()
-        cursor.execute(f"SELECT DATE(`{d_col}`) as ds, SUM(`{v_col}`) as y FROM `{table}` WHERE `{d_col}` IS NOT NULL GROUP BY ds ORDER BY ds")
+        cursor.execute(
+            f"SELECT DATE(`{d_col}`) as ds, SUM(`{v_col}`) as y "
+            f"FROM `{table}` WHERE `{d_col}` IS NOT NULL GROUP BY ds ORDER BY ds"
+        )
         rows = cursor.fetchall()
         conn.close()
         result = run_forecast(rows, periods)
-        result["used_table"] = table
-        result["used_date_col"] = d_col
+        result["used_table"]     = table
+        result["used_date_col"]  = d_col
         result["used_value_col"] = v_col
-        result["from_cache"] = bool(cache and auto.get("forecast_table"))
+        result["from_cache"]     = bool(cache and auto.get("forecast_table"))
         return result
     except Exception as e:
+        log.error("Auto forecast failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ANOMALIES — same pattern as forecast
+# ANOMALIES
 # ══════════════════════════════════════════════════════════════════════════════
 
 class AnomalyRequest(BaseModel):
@@ -576,17 +785,23 @@ class AnomalyRequest(BaseModel):
 
 @app.post("/anomalies")
 def anomalies(req: AnomalyRequest, user: dict = Depends(current_user)):
+    log.info("Anomaly detection (manual)", user=user["email"], table=req.table)
     try:
         conn = get_connection(_resolve_db(user))
         cursor = conn.cursor()
         if req.date_column:
-            cursor.execute(f"SELECT `{req.date_column}`, `{req.value_column}` FROM `{req.table}` WHERE `{req.date_column}` IS NOT NULL ORDER BY `{req.date_column}`")
+            cursor.execute(
+                f"SELECT `{req.date_column}`, `{req.value_column}` "
+                f"FROM `{req.table}` WHERE `{req.date_column}` IS NOT NULL "
+                f"ORDER BY `{req.date_column}`"
+            )
         else:
             cursor.execute(f"SELECT `{req.value_column}` FROM `{req.table}`")
         rows = cursor.fetchall()
         conn.close()
         return run_anomaly_detection(rows, has_date=bool(req.date_column))
     except Exception as e:
+        log.error("Anomaly detection failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -595,24 +810,28 @@ def auto_anomalies(user: dict = Depends(current_user)):
     db_config = _resolve_db(user)
     cache = get_cache(user["email"], db_config)
     auto = cache.get("auto_columns", {}) if cache else {}
-
-    table  = auto.get("anomaly_table")     or "invoices"
-    d_col  = auto.get("anomaly_date_col")  or "invoiceDate"
-    v_col  = auto.get("anomaly_value_col") or "invoiceTotal"
-
+    table  = auto.get("anomaly_table")    or "invoices"
+    d_col  = auto.get("anomaly_date_col") or "invoiceDate"
+    v_col  = auto.get("anomaly_value_col")or "invoiceTotal"
+    log.info("Auto anomaly detection", user=user["email"],
+             table=table, date_col=d_col, value_col=v_col)
     try:
         conn = get_connection(db_config)
         cursor = conn.cursor()
-        cursor.execute(f"SELECT `{d_col}`, SUM(`{v_col}`) FROM `{table}` WHERE `{d_col}` IS NOT NULL GROUP BY `{d_col}` ORDER BY `{d_col}`")
+        cursor.execute(
+            f"SELECT `{d_col}`, SUM(`{v_col}`) FROM `{table}` "
+            f"WHERE `{d_col}` IS NOT NULL GROUP BY `{d_col}` ORDER BY `{d_col}`"
+        )
         rows = cursor.fetchall()
         conn.close()
         result = run_anomaly_detection(rows, has_date=True)
-        result["used_table"] = table
-        result["used_date_col"] = d_col
+        result["used_table"]     = table
+        result["used_date_col"]  = d_col
         result["used_value_col"] = v_col
-        result["from_cache"] = bool(cache and auto.get("anomaly_table"))
+        result["from_cache"]     = bool(cache and auto.get("anomaly_table"))
         return result
     except Exception as e:
+        log.error("Auto anomaly detection failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -629,73 +848,71 @@ class ReportRequest(BaseModel):
 
 @app.post("/report")
 def generate_report(req: ReportRequest, user: dict = Depends(current_user)):
+    log.info("Generate report", user=user["email"], llm=req.llm,
+             title=req.title, sections=req.sections)
+    api_key = _resolve_api_key(user, req.llm)
     try:
-        _resolve_llm_keys(user, req.llm)
         db_config = _resolve_db(user)
         conn = get_connection(db_config)
         cache = get_cache(user["email"], db_config)
-
         section_data = {}
         for sid in req.sections:
             try:
-                # Try cache first, then python, then fallback
-                result = None
+                r = None
                 if cache and sid in cache.get("template_sql", {}):
                     try:
                         sql = cache["template_sql"][sid]
-                        title = sid.replace("_", " ").title()
-                        for item in cache.get("catalogue", []):
-                            if item.get("id") == sid:
-                                title = item.get("title", title)
-                                break
-                        result = _run_sql(conn, sql, title)
-                        result["source"] = "cache"
+                        title_s = next(
+                            (i.get("title", sid) for i in cache.get("catalogue", [])
+                             if i.get("id") == sid), sid
+                        )
+                        r = _run_sql(conn, sql, title_s)
+                        r["source"] = "cache"
                     except Exception:
-                        result = None
-                if not result:
-                    result = _try_python_analytics(sid, conn)
-                    if result:
-                        result["source"] = "python"
-                if not result:
-                    result = _hardcoded_fallback(sid, conn)
-                    if result:
-                        result["source"] = "fallback"
-                if result:
-                    section_data[sid] = result
-            except Exception:
-                pass
+                        r = None
+                if not r:
+                    r = _try_python(sid, conn)
+                    if r: r["source"] = "python"
+                if not r:
+                    r = _hardcoded(sid, conn)
+                    if r: r["source"] = "fallback"
+                if r:
+                    section_data[sid] = r
+            except Exception as e:
+                log.warning("Report section failed", sid=sid, error=str(e))
 
-        # Get overall KPIs — try to find date+amount columns dynamically
-        kpis = _get_kpis(conn, user, cache)
+        # KPIs
+        kpis = _get_kpis(conn, cache)
         conn.close()
-
         narrative = generate_report_summary(
-            title=req.title, kpis=kpis,
-            section_data=section_data, llm=req.llm, format=req.format
+            title=req.title, kpis=kpis, section_data=section_data,
+            llm=req.llm, format=req.format, api_key=api_key
         )
+        log.info("Report generated", user=user["email"], sections=len(section_data))
         return {"title": req.title, "kpis": kpis, "sections": section_data, "narrative": narrative}
+    except HTTPException:
+        raise
     except Exception as e:
+        log.error("Report generation failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _get_kpis(conn, user, cache) -> Dict:
-    """Try to get global KPIs using cached auto-columns, fall back to invoices."""
+def _get_kpis(conn, cache) -> Dict:
     auto = cache.get("auto_columns", {}) if cache else {}
-    table = auto.get("forecast_table") or "invoices"
+    table = auto.get("forecast_table")    or "invoices"
     d_col = auto.get("forecast_date_col") or "invoiceDate"
-    v_col = auto.get("forecast_value_col") or "invoiceTotal"
-
+    v_col = auto.get("forecast_value_col")or "invoiceTotal"
     try:
         cursor = conn.cursor()
-        cursor.execute(f"""
-            SELECT ROUND(SUM(`{v_col}`),2), COUNT(*), ROUND(AVG(`{v_col}`),2),
-                   MIN(`{d_col}`), MAX(`{d_col}`)
-            FROM `{table}` WHERE `{d_col}` IS NOT NULL
-        """)
+        cursor.execute(
+            f"SELECT ROUND(SUM(`{v_col}`),2), COUNT(*), ROUND(AVG(`{v_col}`),2), "
+            f"MIN(`{d_col}`), MAX(`{d_col}`) "
+            f"FROM `{table}` WHERE `{d_col}` IS NOT NULL"
+        )
         row = cursor.fetchone()
         if row:
-            keys = ["total_revenue", "total_transactions", "avg_transaction", "from_date", "to_date"]
+            keys = ["total_revenue","total_transactions","avg_transaction","from_date","to_date"]
             return {k: _safe(v) for k, v in zip(keys, row)}
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning("KPI fetch failed", error=str(e))
     return {}

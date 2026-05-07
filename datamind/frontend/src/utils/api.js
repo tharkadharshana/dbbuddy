@@ -51,3 +51,9 @@ export const generateReport       = (title, sections, llm, format='full') => api
 export const fetchCacheStatus  = () => api.get('/cache/status').then(r => r.data)
 export const fetchCacheProgress = () => api.get('/cache/progress').then(r => r.data)
 export const rebuildCache       = () => api.post('/cache/rebuild').then(r => r.data)
+
+// Onboarding
+export const onboardingValidateKey = (llm, api_key) => api.post('/onboarding/validate-key', { llm, api_key }).then(r => r.data)
+export const onboardingTestDB      = (cfg)           => api.post('/onboarding/test-db', cfg).then(r => r.data)
+export const onboardingConnectDB   = (cfg)           => api.post('/onboarding/connect-db', cfg).then(r => r.data)
+export const fetchLLMModels        = ()              => api.get('/llm/models').then(r => r.data)
