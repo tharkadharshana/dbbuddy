@@ -232,6 +232,17 @@ Full interactive docs: http://localhost:8000/docs
 
 - Python 3.10+
 - Node.js 18+
+- MySQL 8.0+
+- Gemini API key (from [AI Studio](https://aistudio.google.com))
+
+
+Copyright (c) 2026 POTHUMULLA KANKANAMALAGE THARKA DHARSHANA KARUNANAYAKE. All rights reserved.
+
+This software and its source code are proprietary and confidential.
+Unauthorized copying, distribution, modification, or deployment
+of this software, via any medium, is strictly prohibited.
+
+For licensing inquiries: tharkadharshana@gmail.com
 - MySQL 5.7+ or 8.0
 - Gemini API key → https://aistudio.google.com/app/apikey
 - DeepSeek API key → https://platform.deepseek.com/api_keys
