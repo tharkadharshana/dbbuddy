@@ -1,0 +1,40 @@
+{
+  "schema_text": "Table `customers`: (`customerId` varchar(50), `name` varchar(100), `email` varchar(100), `loyaltyPoints` int(11), `created_at` timestamp, `updated_at` timestamp)\nTable `employees`: (`empId` varchar(50), `cashierName` varchar(100), `location_id` int(11), `created_at` timestamp, `updated_at` timestamp)\nTable `inventory_logs`: (`log_id` int(11), `itemCode` varchar(50), `location_id` int(11), `change_qty` decimal(12,3), `reason` varchar(100), `log_date` date, `log_time` time, `created_at` timestamp)\nTable `invoice_items`: (`id` int(11), `invoiceNumber` varchar(50), `itemCode` varchar(50), `qty` decimal(12,3), `itemPrice` decimal(12,2), `itemCost` decimal(12,2), `discount` decimal(12,2), `taxValue` decimal(12,2), `itemRemark` text, `itemsDataList` text, `invoiceLineDiscountList` text, `invoiceItemAddonList` text)\nTable `invoices`: (`invoiceNumber` varchar(50), `mainInvoiceNumber` varchar(50), `invoiceCentralizeId` varchar(50), `uniqueId` varchar(100), `reference` varchar(100), `kotNumber` varchar(50), `orderNumber` varchar(50), `licenceKey` varchar(100), `customerId` varchar(50), `customerCash` decimal(12,2), `customerBalance` decimal(12,2), `invoiceCustomerSignatures` text, `invoiceTotal` decimal(12,2), `totalDiscount` decimal(12,2), `chargeTotalTax` decimal(12,2), `chargeTotalCharge` decimal(12,2), `creditAmount` decimal(12,2), `creditComplete` tinyint(1), `creditDays` int(11), `payMethod` varchar(50), `chequeNo` varchar(100), `cardNo` varchar(20), `payment` text, `splitPayment` text, `loyaltyPoints` int(11), `invoiceDate` date, `invoiceTime` time, `customizeTime` time, `startDateTime` datetime, `startTime` time, `endTime` time, `cashierName` varchar(100), `empId` varchar(50), `tableCode` varchar(50), `orderType` varchar(50), `pickupDetails` text, `billNote` text, `channel` varchar(50), `location_id` int(11))\nTable `locations`: (`location_id` int(11), `location_name` varchar(100), `address` text, `licenceKey` varchar(100), `created_at` timestamp, `updated_at` timestamp)\nTable `products`: (`itemCode` varchar(50), `name` varchar(255), `category` varchar(100), `basePrice` decimal(12,2), `baseCost` decimal(12,2), `created_at` timestamp, `updated_at` timestamp)\n\nRelationships:\n  employees.location_id \u2192 locations.location_id\n  inventory_logs.itemCode \u2192 products.itemCode\n  inventory_logs.location_id \u2192 locations.location_id\n  invoices.customerId \u2192 customers.customerId\n  invoices.empId \u2192 employees.empId\n  invoices.location_id \u2192 locations.location_id\n  invoice_items.invoiceNumber \u2192 invoices.invoiceNumber\n  invoice_items.itemCode \u2192 products.itemCode",
+  "catalogue": [],
+  "template_sql": {},
+  "template_errors": {
+    "revenue_trend": "404 Client Error: Not Found for url: https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=AIzaSyCbAIlX9jRCsDOsYtKDWWSZmL2D_CVyYJo",
+    "revenue_by_category": "404 Client Error: Not Found for url: https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=AIzaSyCbAIlX9jRCsDOsYtKDWWSZmL2D_CVyYJo",
+    "revenue_by_location": "404 Client Error: Not Found for url: https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=AIzaSyCbAIlX9jRCsDOsYtKDWWSZmL2D_CVyYJo",
+    "hourly_pattern": "404 Client Error: Not Found for url: https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=AIzaSyCbAIlX9jRCsDOsYtKDWWSZmL2D_CVyYJo",
+    "daily_trend_7": "404 Client Error: Not Found for url: https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=AIzaSyCbAIlX9jRCsDOsYtKDWWSZmL2D_CVyYJo",
+    "discount_analysis": "404 Client Error: Not Found for url: https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=AIzaSyCbAIlX9jRCsDOsYtKDWWSZmL2D_CVyYJo",
+    "tax_analysis": "404 Client Error: Not Found for url: https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=AIzaSyCbAIlX9jRCsDOsYtKDWWSZmL2D_CVyYJo",
+    "top_products": "404 Client Error: Not Found for url: https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=AIzaSyCbAIlX9jRCsDOsYtKDWWSZmL2D_CVyYJo",
+    "slow_products": "404 Client Error: Not Found for url: https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=AIzaSyCbAIlX9jRCsDOsYtKDWWSZmL2D_CVyYJo",
+    "margin_by_category": "404 Client Error: Not Found for url: https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=AIzaSyCbAIlX9jRCsDOsYtKDWWSZmL2D_CVyYJo",
+    "product_velocity": "404 Client Error: Not Found for url: https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=AIzaSyCbAIlX9jRCsDOsYtKDWWSZmL2D_CVyYJo",
+    "top_customers": "404 Client Error: Not Found for url: https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=AIzaSyCbAIlX9jRCsDOsYtKDWWSZmL2D_CVyYJo",
+    "customer_retention": "404 Client Error: Not Found for url: https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=AIzaSyCbAIlX9jRCsDOsYtKDWWSZmL2D_CVyYJo",
+    "loyalty_tiers": "404 Client Error: Not Found for url: https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=AIzaSyCbAIlX9jRCsDOsYtKDWWSZmL2D_CVyYJo",
+    "cashier_performance": "404 Client Error: Not Found for url: https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=AIzaSyCbAIlX9jRCsDOsYtKDWWSZmL2D_CVyYJo",
+    "payment_methods": "404 Client Error: Not Found for url: https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=AIzaSyCbAIlX9jRCsDOsYtKDWWSZmL2D_CVyYJo",
+    "credit_outstanding": "404 Client Error: Not Found for url: https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=AIzaSyCbAIlX9jRCsDOsYtKDWWSZmL2D_CVyYJo",
+    "growth_metrics": "404 Client Error: Not Found for url: https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=AIzaSyCbAIlX9jRCsDOsYtKDWWSZmL2D_CVyYJo",
+    "location_comparison": "404 Client Error: Not Found for url: https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=AIzaSyCbAIlX9jRCsDOsYtKDWWSZmL2D_CVyYJo",
+    "order_types": "404 Client Error: Not Found for url: https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=AIzaSyCbAIlX9jRCsDOsYtKDWWSZmL2D_CVyYJo",
+    "inventory_movement": "404 Client Error: Not Found for url: https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=AIzaSyCbAIlX9jRCsDOsYtKDWWSZmL2D_CVyYJo"
+  },
+  "auto_columns": {
+    "forecast_table": null,
+    "forecast_date_col": null,
+    "forecast_value_col": null,
+    "anomaly_table": null,
+    "anomaly_date_col": null,
+    "anomaly_value_col": null
+  },
+  "successful_count": 0,
+  "failed_count": 21,
+  "db_fingerprint": "fbc8ee64ac75",
+  "built_at": "2026-05-07T01:21:11.009533"
+}

@@ -26,3 +26,4 @@ Thumbs.db
 # Project specific
 sql_analytics_ai_dashboard.html
 datamind/backend/scratch/
+datamind/backend/data/users.json
