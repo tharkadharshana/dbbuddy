@@ -108,3 +108,12 @@ The system is ready for the following realistic predictions out of the box:
 - Node.js 18+
 - MySQL 8.0+
 - Gemini API key (from [AI Studio](https://aistudio.google.com))
+
+
+Copyright (c) 2026 POTHUMULLA KANKANAMALAGE THARKA DHARSHANA KARUNANAYAKE. All rights reserved.
+
+This software and its source code are proprietary and confidential.
+Unauthorized copying, distribution, modification, or deployment
+of this software, via any medium, is strictly prohibited.
+
+For licensing inquiries: tharkadharshana@gmail.com
