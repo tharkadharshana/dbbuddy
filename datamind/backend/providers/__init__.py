@@ -11,14 +11,16 @@ Example — adding Shopify:
   REGISTRY["shopify"] = ShopifyProvider()
 """
 
-from providers.loyverse.provider import LoyverseProvider
+from providers.loyverse.provider  import LoyverseProvider
+from providers.salesplay.provider import SalesPlayProvider
 
 # ── Registry ──────────────────────────────────────────────────────────────────
 # key = provider_id (must match manifest.json provider_id)
 # value = instantiated provider object
 
 REGISTRY: dict = {
-    "loyverse": LoyverseProvider(),
+    "loyverse":  LoyverseProvider(),
+    "salesplay": SalesPlayProvider(),
     # "shopify":  ShopifyProvider(),
     # "square":   SquareProvider(),
     # "woocommerce": WooCommerceProvider(),
