@@ -1,26 +1,95 @@
-import React from 'react'
+import React, { useState } from 'react'
 
-const NAV = [
-  { id:'discover', label:'Analytics Hub',        icon:'⬡' },
-  { id:'query',    label:'Ask a Question',        icon:'⌕' },
-  { id:'forecast', label:'Forecasting',           icon:'📈' },
-  { id:'anomaly',  label:'Anomaly Detection',     icon:'⚠' },
-  { id:'reports',  label:'Report Builder',        icon:'📋' },
-  { id:'settings', label:'Settings',              icon:'⚙' },
+// ── Icons ─────────────────────────────────────────────────────────────────────
+const IC = {
+  chat:      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>,
+  chart:     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>,
+  trend:     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>,
+  alert:     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>,
+  report:    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>,
+  plug:      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>,
+  settings:  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>,
+  chevron:   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 12 15 18 9"/></svg>,
+  grid:      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>,
+}
+
+const ANALYTICS_SUB = [
+  { id:'discover',  label:'All Analytics',  icon: IC.grid },
+  { id:'reports',   label:'Reports',        icon: IC.report },
+]
+const PREDICTIONS_SUB = [
+  { id:'forecast',  label:'Forecasting',    icon: IC.trend },
+  { id:'anomaly',   label:'Anomaly Alerts', icon: IC.alert },
 ]
 
-export default function Sidebar({ active, setActive, tables, cacheStatus }) {
+function NavGroup({ label, icon, items, active, setActive, defaultOpen=false }) {
+  const [open, setOpen] = useState(defaultOpen || items.some(i => i.id === active))
+  const isGroupActive = items.some(i => i.id === active)
+
+  return (
+    <div style={{ marginBottom:2 }}>
+      <div onClick={() => setOpen(o => !o)} style={{
+        display:'flex', alignItems:'center', gap:10, padding:'8px 12px',
+        borderRadius:'var(--r-sm)', cursor:'pointer',
+        background: isGroupActive && !open ? 'var(--blue-dim)' : 'transparent',
+        color: isGroupActive ? 'var(--blue)' : 'var(--text2)',
+        fontWeight:500, fontSize:13, userSelect:'none',
+      }}>
+        <span style={{ flexShrink:0 }}>{icon}</span>
+        <span style={{ flex:1 }}>{label}</span>
+        <span style={{ transform: open ? 'rotate(180deg)' : 'rotate(0)', transition:'transform .2s', opacity:.5 }}>{IC.chevron}</span>
+      </div>
+      {open && (
+        <div style={{ marginLeft:14, marginTop:2, borderLeft:'1px solid var(--border)', paddingLeft:10 }}>
+          {items.map(item => (
+            <div key={item.id} onClick={() => setActive(item.id)} style={{
+              display:'flex', alignItems:'center', gap:9, padding:'7px 10px',
+              borderRadius:'var(--r-sm)', cursor:'pointer', fontSize:13, marginBottom:1,
+              background: active===item.id ? 'var(--blue-dim)' : 'transparent',
+              color: active===item.id ? 'var(--blue)' : 'var(--text2)',
+              fontWeight: active===item.id ? 600 : 400,
+            }}>
+              <span style={{ opacity:.7 }}>{item.icon}</span>
+              {item.label}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function NavItem({ id, label, icon, active, setActive, badge }) {
+  return (
+    <div onClick={() => setActive(id)} style={{
+      display:'flex', alignItems:'center', gap:10, padding:'8px 12px',
+      borderRadius:'var(--r-sm)', cursor:'pointer', marginBottom:2,
+      background: active===id ? 'var(--blue-dim)' : 'transparent',
+      color: active===id ? 'var(--blue)' : 'var(--text2)',
+      fontWeight: active===id ? 600 : 400, fontSize:13,
+    }}>
+      <span style={{ flexShrink:0 }}>{icon}</span>
+      <span style={{ flex:1 }}>{label}</span>
+      {badge && <span style={{ fontSize:10, background:'var(--red)', color:'#fff', borderRadius:99, padding:'1px 6px', fontWeight:600 }}>{badge}</span>}
+    </div>
+  )
+}
+
+export default function Sidebar({ active, setActive, connection, cacheStatus }) {
   const cacheOk      = cacheStatus?.cached
   const cacheBuilding= cacheStatus?.build?.status === 'building'
 
   return (
-    <aside style={{ width:'var(--sidebar)', background:'var(--bg1)', borderRight:'1px solid var(--border)', display:'flex', flexDirection:'column', flexShrink:0, overflow:'hidden' }}>
-
+    <aside style={{
+      width:'var(--sidebar)', background:'var(--bg1)',
+      borderRight:'1px solid var(--border)',
+      display:'flex', flexDirection:'column', flexShrink:0, overflow:'hidden',
+    }}>
       {/* Logo */}
-      <div style={{ padding:'16px 16px 12px', borderBottom:'1px solid var(--border)' }}>
+      <div style={{ padding:'16px 14px 12px', borderBottom:'1px solid var(--border)' }}>
         <div style={{ display:'flex', alignItems:'center', gap:9 }}>
-          <div style={{ width:30, height:30, borderRadius:8, background:'linear-gradient(135deg,#4f8ef7,#a78bfa)', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
-            <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+          <div style={{ width:32, height:32, borderRadius:9, background:'linear-gradient(135deg,#4f8ef7,#a78bfa)', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
               <rect x="2" y="2" width="5" height="5" rx="1" fill="rgba(255,255,255,0.95)"/>
               <rect x="9" y="2" width="5" height="5" rx="1" fill="rgba(255,255,255,0.5)"/>
               <rect x="2" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.5)"/>
@@ -29,66 +98,65 @@ export default function Sidebar({ active, setActive, tables, cacheStatus }) {
           </div>
           <div>
             <div style={{ fontWeight:700, fontSize:14, lineHeight:1.1 }}>DataMind</div>
-            <div style={{ fontSize:10, color:'var(--text3)' }}>AI Analytics v3</div>
+            <div style={{ fontSize:10, color:'var(--text3)' }}>AI Analytics</div>
           </div>
         </div>
       </div>
 
-      {/* Nav */}
-      <nav style={{ padding:'10px 8px', flex:1, overflowY:'auto' }}>
-        <div style={{ fontSize:10, color:'var(--text3)', textTransform:'uppercase', letterSpacing:'.1em', padding:'0 8px', marginBottom:6, fontWeight:600 }}>Navigation</div>
-        {NAV.map(({ id, label, icon }) => {
-          const isActive = active === id
-          // Show a status dot on Analytics Hub
-          const showDot = id === 'discover'
-          const dotColor = cacheBuilding ? 'var(--amber)' : cacheOk ? 'var(--green)' : 'var(--text3)'
-
-          return (
-            <div key={id} onClick={() => setActive(id)} style={{
-              display:'flex', alignItems:'center', gap:9,
-              padding:'8px 10px', borderRadius:'var(--r-sm)', marginBottom:1, cursor:'pointer',
-              background: isActive ? 'var(--blue-dim)' : 'transparent',
-              color: isActive ? 'var(--blue)' : 'var(--text2)',
-              fontWeight: isActive ? 600 : 400, fontSize:13,
-              borderLeft: isActive ? '2px solid var(--blue)' : '2px solid transparent',
-            }}>
-              <span style={{ fontSize:14, flexShrink:0 }}>{icon}</span>
-              <span style={{ flex:1 }}>{label}</span>
-              {showDot && (
-                <div style={{
-                  width:7, height:7, borderRadius:'50%', flexShrink:0,
-                  background: dotColor,
-                  boxShadow: cacheOk ? '0 0 6px var(--green)' : cacheBuilding ? '0 0 6px var(--amber)' : 'none',
-                  animation: cacheBuilding ? 'pulseGlow 1.2s ease-in-out infinite' : 'none',
-                }} />
-              )}
+      {/* Connection pill */}
+      <div style={{ padding:'10px 14px', borderBottom:'1px solid var(--border)' }}>
+        {connection ? (
+          <div style={{
+            display:'flex', alignItems:'center', gap:8, padding:'8px 11px',
+            background:'var(--bg3)', borderRadius:'var(--r-md)',
+            border:'1px solid var(--border)', cursor:'pointer',
+          }} onClick={() => setActive('connections')}>
+            <div style={{ width:7, height:7, borderRadius:'50%', flexShrink:0, background:'var(--green)', boxShadow:'0 0 6px var(--green)' }} />
+            <div style={{ flex:1, minWidth:0 }}>
+              <div style={{ fontSize:12, fontWeight:600, color:'var(--text)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{connection.display_name || connection.name}</div>
+              <div style={{ fontSize:10, color:'var(--text3)', marginTop:1 }}>
+                {cacheBuilding ? '⚡ Building cache…' : cacheOk ? `⚡ ${cacheStatus.template_count} analytics ready` : 'Connected'}
+              </div>
             </div>
-          )
-        })}
-      </nav>
-
-      {/* Tables list */}
-      <div style={{ padding:'10px 8px', borderTop:'1px solid var(--border)', maxHeight:200, overflowY:'auto' }}>
-        <div style={{ fontSize:10, color:'var(--text3)', textTransform:'uppercase', letterSpacing:'.1em', padding:'0 8px', marginBottom:6, fontWeight:600 }}>Tables</div>
-        {!tables.length && <div style={{ fontSize:11, color:'var(--text3)', padding:'4px 8px' }}>No DB connected</div>}
-        {tables.map(t => (
-          <div key={t} style={{ display:'flex', alignItems:'center', gap:7, padding:'4px 8px', borderRadius:'var(--r-sm)', color:'var(--text3)', fontSize:11, fontFamily:'var(--mono)' }}>
-            <div style={{ width:5, height:5, borderRadius:'50%', background:'var(--blue)', opacity:.45, flexShrink:0 }} />
-            {t}
+            <span style={{ fontSize:10, color:'var(--text3)' }}>›</span>
           </div>
-        ))}
+        ) : (
+          <div onClick={() => setActive('connections')} style={{
+            display:'flex', alignItems:'center', gap:8, padding:'8px 11px',
+            background:'var(--amber-dim)', borderRadius:'var(--r-md)',
+            border:'1px solid rgba(245,166,35,0.2)', cursor:'pointer',
+          }}>
+            <div style={{ width:7, height:7, borderRadius:'50%', background:'var(--amber)', flexShrink:0 }} />
+            <span style={{ fontSize:12, color:'var(--amber)', fontWeight:500 }}>No data source connected</span>
+          </div>
+        )}
       </div>
 
-      {/* DB pill */}
-      <div style={{ padding:'10px 16px', borderTop:'1px solid var(--border)', display:'flex', alignItems:'center', gap:7 }}>
-        <div style={{
-          width:7, height:7, borderRadius:'50%',
-          background: tables.length > 0 ? 'var(--green)' : 'var(--red)',
-          boxShadow: tables.length > 0 ? '0 0 8px var(--green)' : 'none',
-        }} />
-        <span style={{ fontSize:11, color:'var(--text3)' }}>
-          {tables.length > 0 ? `MySQL · ${tables.length} tables` : 'Not connected'}
-        </span>
+      {/* Navigation */}
+      <nav style={{ flex:1, overflowY:'auto', padding:'10px 8px' }}>
+        <NavItem id="chat"        label="Ask Your Data"  icon={IC.chat}     active={active} setActive={setActive} />
+        <div style={{ height:1, background:'var(--border)', margin:'8px 4px' }} />
+        <div style={{ fontSize:10, color:'var(--text3)', fontWeight:600, textTransform:'uppercase', letterSpacing:'.09em', padding:'4px 12px 6px' }}>Analytics</div>
+        <NavGroup label="Analytics" icon={IC.chart}  items={ANALYTICS_SUB}  active={active} setActive={setActive} defaultOpen={true} />
+        <NavGroup label="Predictions" icon={IC.trend} items={PREDICTIONS_SUB} active={active} setActive={setActive} />
+        <div style={{ height:1, background:'var(--border)', margin:'8px 4px' }} />
+        <NavItem id="connections" label="Connections"   icon={IC.plug}    active={active} setActive={setActive} />
+        <NavItem id="settings"    label="Settings"      icon={IC.settings} active={active} setActive={setActive} />
+      </nav>
+
+      {/* User pill */}
+      <div style={{ padding:'10px 14px', borderTop:'1px solid var(--border)' }}>
+        <div onClick={() => setActive('settings')} style={{ display:'flex', alignItems:'center', gap:9, cursor:'pointer' }}>
+          <div style={{ width:28, height:28, borderRadius:'50%', background:'linear-gradient(135deg,#4f8ef7,#a78bfa)', display:'flex', alignItems:'center', justifyContent:'center', fontWeight:700, fontSize:12, color:'#fff', flexShrink:0 }}>
+            {typeof window !== 'undefined' ? (JSON.parse(localStorage.getItem('dm_user')||'{}')?.name?.[0]?.toUpperCase()||'?') : '?'}
+          </div>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ fontSize:12, fontWeight:500, color:'var(--text)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+              {typeof window !== 'undefined' ? (JSON.parse(localStorage.getItem('dm_user')||'{}')?.name||'') : ''}
+            </div>
+            <div style={{ fontSize:10, color:'var(--text3)' }}>Settings & account</div>
+          </div>
+        </div>
       </div>
     </aside>
   )

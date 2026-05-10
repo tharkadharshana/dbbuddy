@@ -151,17 +151,34 @@ def _setup_root():
 _setup_root()
 
 
+# Python's logging.LogRecord has reserved built-in attributes.
+# Passing any of these as `extra` keys raises KeyError at runtime.
+# We prefix colliding keys with "_" so they still appear in output.
+_RESERVED_LOG_ATTRS = frozenset({
+    "args", "asctime", "created", "exc_info", "exc_text", "filename",
+    "funcName", "id", "levelname", "levelno", "lineno", "message",
+    "module", "msecs", "msg", "name", "pathname", "process",
+    "processName", "relativeCreated", "stack_info", "thread",
+    "threadName", "taskName",
+})
+
+
 class DataMindLogger:
     """
     Thin wrapper that lets you pass keyword args as structured fields:
       log.info("msg", user="alice", duration_ms=42)
+      log.info("Add DB config", name="prod")  # 'name' is safe — auto-prefixed to '_name'
     """
     def __init__(self, name: str):
         self._log = logging.getLogger(f"datamind.{name}")
 
     def _emit(self, level: int, msg: str, **kwargs):
         if self._log.isEnabledFor(level):
-            extra = {k: v for k, v in kwargs.items()}
+            # Rename any key that would collide with a built-in LogRecord field
+            extra = {
+                (f"_{k}" if k in _RESERVED_LOG_ATTRS else k): v
+                for k, v in kwargs.items()
+            }
             self._log.log(level, msg, extra=extra, stacklevel=3)
 
     def debug(self, msg: str, **kw):   self._emit(logging.DEBUG,   msg, **kw)
