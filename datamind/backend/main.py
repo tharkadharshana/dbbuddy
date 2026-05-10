@@ -31,6 +31,13 @@ from analytics import (
     run_employee_performance, run_product_velocity,
     run_payment_breakdown, run_location_comparison,
 )
+from integrations import (
+    bootstrap_integration_tables, start_scheduler,
+    connect_integration, trigger_sync, disconnect_integration,
+    get_integration, list_integrations, get_sync_logs,
+)
+from providers import list_providers, get_provider
+
 from auth import (
     create_user, authenticate_user, create_token,
     get_user_settings, update_user_settings, current_user,
@@ -916,3 +923,116 @@ def _get_kpis(conn, cache) -> Dict:
     except Exception as e:
         log.warning("KPI fetch failed", error=str(e))
     return {}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# EXTERNAL PROVIDER ROUTES
+# ══════════════════════════════════════════════════════════════════════════════
+
+from integrations import (
+    bootstrap_integration_tables,
+    connect_provider, disconnect_provider,
+    get_user_connections, get_connection_status,
+    trigger_sync, get_sync_history,
+)
+from providers import list_providers
+
+# Bootstrap on import
+try:
+    bootstrap_integration_tables()
+except Exception as _be:
+    log.warning("Integration table bootstrap failed (DB may not be configured yet)", error=str(_be))
+
+
+class ProviderConnectRequest(BaseModel):
+    provider_id: str
+    credentials: Dict[str, str]
+
+
+@app.get("/providers")
+def get_providers():
+    """List all available external API providers with their manifests."""
+    return {"providers": list_providers()}
+
+
+@app.get("/providers/connected")
+def get_connected_providers(user: dict = Depends(current_user)):
+    """List all providers this user has connected."""
+    try:
+        connections = get_user_connections(user["email"])
+        return {"connections": connections}
+    except Exception as e:
+        log.error("Failed to get connections", user=user["email"], error=str(e))
+        return {"connections": []}
+
+
+@app.post("/providers/validate")
+def validate_provider_credentials(req: ProviderConnectRequest, user: dict = Depends(current_user)):
+    """Test provider credentials before saving."""
+    from providers import get_provider as gp
+    log.info("Validating provider credentials", user=user["email"], provider=req.provider_id)
+    try:
+        provider = gp(req.provider_id)
+        result = provider.validate_credentials(req.credentials)
+        return {"ok": result.ok, "error": result.error, "details": result.details}
+    except Exception as e:
+        log.error("Provider validation error", provider=req.provider_id, error=str(e))
+        return {"ok": False, "error": str(e)}
+
+
+@app.post("/providers/connect")
+def connect_provider_route(req: ProviderConnectRequest,
+                           background_tasks: BackgroundTasks,
+                           user: dict = Depends(current_user)):
+    """
+    Connect a provider: validate, create tables, trigger full sync.
+    Sync runs in background.
+    """
+    log.info("Connecting provider", user=user["email"], provider=req.provider_id)
+    try:
+        connection_id = connect_provider(user["email"], req.provider_id, req.credentials)
+        background_tasks.add_task(trigger_sync, user["email"], connection_id, full=True)
+        return {"ok": True, "connection_id": connection_id}
+    except Exception as e:
+        log.error("Provider connect failed", provider=req.provider_id, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/providers/{connection_id}")
+def disconnect_provider_route(connection_id: str, user: dict = Depends(current_user)):
+    """Disconnect and remove a provider connection."""
+    log.info("Disconnecting provider", user=user["email"], connection_id=connection_id)
+    try:
+        disconnect_provider(user["email"], connection_id)
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/providers/{connection_id}/sync")
+def manual_sync(connection_id: str, background_tasks: BackgroundTasks,
+                user: dict = Depends(current_user)):
+    """Manually trigger a delta sync for a connection."""
+    log.info("Manual sync triggered", user=user["email"], connection_id=connection_id)
+    background_tasks.add_task(trigger_sync, user["email"], connection_id, full=False)
+    return {"ok": True, "message": "Sync started in background"}
+
+
+@app.get("/providers/{connection_id}/status")
+def provider_status(connection_id: str, user: dict = Depends(current_user)):
+    """Get live sync status and stats for a connection."""
+    try:
+        status = get_connection_status(user["email"], connection_id)
+        return status
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/providers/{connection_id}/history")
+def provider_history(connection_id: str, user: dict = Depends(current_user)):
+    """Get sync history for a connection."""
+    try:
+        history = get_sync_history(user["email"], connection_id)
+        return {"history": history}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

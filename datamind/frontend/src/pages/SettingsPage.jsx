@@ -128,7 +128,7 @@ function CacheStatusCard({ dbIndex, isActive }) {
   )
 }
 
-export default function SettingsPage({ user, onLogout, onSettingsChange }) {
+export default function SettingsPage({ user, onLogout }) {
   const [settings, setSettings]   = useState(null)
   const [loading, setLoading]     = useState(true)
   const [saving, setSaving]       = useState(false)
@@ -191,7 +191,6 @@ export default function SettingsPage({ user, onLogout, onSettingsChange }) {
       const s = await fetchSettings()
       setSettings(s)
       setShowDBForm(false); setEditingIdx(null); setDbForm(EMPTY_DB); setTestResult(null)
-      if (onSettingsChange) onSettingsChange()
     } catch(e) { setDbError(e.response?.data?.detail || e.message) }
     finally { setSaving(false) }
   }
@@ -205,7 +204,6 @@ export default function SettingsPage({ user, onLogout, onSettingsChange }) {
   async function handleActivateDB(i) {
     await activateDBConfig(i)
     const s = await fetchSettings(); setSettings(s)
-    if (onSettingsChange) onSettingsChange()
   }
 
   function openEditDB(i) {

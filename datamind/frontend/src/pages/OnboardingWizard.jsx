@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { onboardingValidateKey, onboardingTestDB, onboardingConnectDB, patchSettings } from '../utils/api'
+import { onboardingValidateKey, onboardingTestDB, onboardingConnectDB, patchSettings, fetchProviders, validateProviderCreds, connectProvider } from '../utils/api'
 import { Spinner } from '../components/UI'
 
 // ── Step indicator ────────────────────────────────────────────────────────────
@@ -47,6 +47,14 @@ export default function OnboardingWizard({ onComplete }) {
   const [apiKey, setApiKey]       = useState('')
   const [keyTesting, setKeyTesting]   = useState(false)
   const [keyResult, setKeyResult]     = useState(null)
+
+  // Step 0.5 — data source type
+  const [sourceType, setSourceType]   = useState('') // 'db' | 'provider'
+  const [providers, setProviders]     = useState([])
+  const [selProvider, setSelProvider] = useState(null)
+  const [providerCreds, setProvCreds] = useState({})
+  const [provTesting, setProvTesting] = useState(false)
+  const [provResult, setProvResult]   = useState(null)
 
   // Step 1 — DB config
   const [dbForm, setDbForm]       = useState({ name:'My Database', host:'localhost', port:3306, database:'', user:'root', password:'' })
@@ -216,8 +224,134 @@ export default function OnboardingWizard({ onComplete }) {
           </Card>
         )}
 
-        {/* ── STEP 1: Add database ───────────────────────────────────────── */}
-        {step === 1 && (
+        {/* ── STEP 0.5: Choose data source type ─────────────────────────── */}
+        {step === 1 && sourceType === '' && (
+          <Card>
+            <div style={{ fontSize:11, color:'rgba(255,255,255,0.3)', textTransform:'uppercase', letterSpacing:'.1em', marginBottom:6 }}>Step 2 of 3</div>
+            <div style={{ fontSize:19, fontWeight:700, color:'#f0f1fa', marginBottom:4 }}>How do you want to connect your data?</div>
+            <div style={{ fontSize:13, color:'rgba(255,255,255,0.4)', marginBottom:22, lineHeight:1.6 }}>
+              Choose whether you have a MySQL database you control, or you want to sync from a business tool like Loyverse.
+            </div>
+            <div style={{ display:'flex', flexDirection:'column', gap:10, marginBottom:20 }}>
+              <button onClick={() => setSourceType('db')} style={{
+                padding:'16px 18px', borderRadius:12, border:'1px solid rgba(255,255,255,0.1)',
+                background:'rgba(255,255,255,0.03)', color:'#f0f1fa', textAlign:'left', cursor:'pointer',
+                display:'flex', alignItems:'center', gap:14, transition:'all .15s',
+              }}
+                onMouseEnter={e => e.currentTarget.style.borderColor='rgba(79,142,247,0.4)'}
+                onMouseLeave={e => e.currentTarget.style.borderColor='rgba(255,255,255,0.1)'}
+              >
+                <span style={{ fontSize:32 }}>🗄</span>
+                <div>
+                  <div style={{ fontWeight:600, fontSize:14, marginBottom:3 }}>Bring Your Own Database</div>
+                  <div style={{ fontSize:12, color:'rgba(255,255,255,0.35)' }}>Connect directly to your MySQL database</div>
+                </div>
+              </button>
+              <button onClick={async () => {
+                setSourceType('provider')
+                const r = await fetchProviders().catch(() => ({providers:[]}))
+                setProviders(r.providers || [])
+              }} style={{
+                padding:'16px 18px', borderRadius:12, border:'1px solid rgba(255,255,255,0.1)',
+                background:'rgba(255,255,255,0.03)', color:'#f0f1fa', textAlign:'left', cursor:'pointer',
+                display:'flex', alignItems:'center', gap:14, transition:'all .15s',
+              }}
+                onMouseEnter={e => e.currentTarget.style.borderColor='rgba(167,139,250,0.4)'}
+                onMouseLeave={e => e.currentTarget.style.borderColor='rgba(255,255,255,0.1)'}
+              >
+                <span style={{ fontSize:32 }}>🔌</span>
+                <div>
+                  <div style={{ fontWeight:600, fontSize:14, marginBottom:3 }}>Connect via API Integration</div>
+                  <div style={{ fontSize:12, color:'rgba(255,255,255,0.35)' }}>Loyverse POS, Square, Shopify and more</div>
+                </div>
+              </button>
+            </div>
+            <button onClick={() => setStep(0)} style={{ fontSize:12, color:'rgba(255,255,255,0.3)', background:'none', border:'none', cursor:'pointer' }}>← Back</button>
+          </Card>
+        )}
+
+        {/* ── STEP 1b: Choose provider ──────────────────────────────────── */}
+        {step === 1 && sourceType === 'provider' && !selProvider && (
+          <Card>
+            <div style={{ fontSize:11, color:'rgba(255,255,255,0.3)', textTransform:'uppercase', letterSpacing:'.1em', marginBottom:6 }}>Step 2 of 3</div>
+            <div style={{ fontSize:19, fontWeight:700, color:'#f0f1fa', marginBottom:16 }}>Choose your integration</div>
+            <div style={{ display:'flex', flexDirection:'column', gap:8, marginBottom:16 }}>
+              {providers.map(p => (
+                <button key={p.provider_id} onClick={() => setSelProvider(p)} style={{
+                  padding:'14px 16px', borderRadius:12, border:'1px solid rgba(255,255,255,0.08)',
+                  background:'rgba(255,255,255,0.03)', color:'#f0f1fa', textAlign:'left', cursor:'pointer',
+                  display:'flex', alignItems:'center', gap:12,
+                }}>
+                  <span style={{ fontSize:28 }}>{p.logo_emoji}</span>
+                  <div>
+                    <div style={{ fontWeight:600, fontSize:13 }}>{p.display_name}</div>
+                    <div style={{ fontSize:11, color:'rgba(255,255,255,0.3)' }}>{p.description}</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+            <button onClick={() => setSourceType('')} style={{ fontSize:12, color:'rgba(255,255,255,0.3)', background:'none', border:'none', cursor:'pointer' }}>← Back</button>
+          </Card>
+        )}
+
+        {/* ── STEP 1c: Provider credentials ────────────────────────────── */}
+        {step === 1 && sourceType === 'provider' && selProvider && (
+          <Card>
+            <div style={{ fontSize:11, color:'rgba(255,255,255,0.3)', textTransform:'uppercase', letterSpacing:'.1em', marginBottom:6 }}>Step 2 of 3</div>
+            <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:16 }}>
+              <span style={{ fontSize:30 }}>{selProvider.logo_emoji}</span>
+              <div>
+                <div style={{ fontSize:17, fontWeight:700, color:'#f0f1fa' }}>Connect {selProvider.display_name}</div>
+                <div style={{ fontSize:12, color:'rgba(255,255,255,0.35)' }}>{selProvider.description}</div>
+              </div>
+            </div>
+            {selProvider.credential_fields?.map(f => (
+              <div key={f.key} style={{ marginBottom:14 }}>
+                <Label>{f.label}</Label>
+                <input type={f.type === 'password' ? 'password' : 'text'}
+                  value={providerCreds[f.key] || ''}
+                  onChange={e => setProvCreds(c => ({...c, [f.key]: e.target.value}))}
+                  placeholder={f.placeholder || ''}
+                  style={{ ...inp({fontFamily:'var(--mono)'}), marginBottom:4 }}
+                />
+                {f.hint && <div style={{ fontSize:11, color:'rgba(255,255,255,0.3)' }}>{f.hint}</div>}
+              </div>
+            ))}
+            {provResult && (
+              <StatusBox ok={provResult.ok} message={provResult.ok
+                ? `✓ Connected to ${provResult.details?.merchant_name || selProvider.display_name}`
+                : provResult.error} />
+            )}
+            <div style={{ display:'flex', gap:8 }}>
+              <button onClick={() => setSelProvider(null)} style={{ padding:'9px 14px', borderRadius:10, fontSize:13, background:'transparent', border:'1px solid rgba(255,255,255,0.1)', color:'rgba(255,255,255,0.4)', cursor:'pointer' }}>← Back</button>
+              <button onClick={async () => {
+                setProvTesting(true); setProvResult(null)
+                try {
+                  const r = await validateProviderCreds(selProvider.provider_id, providerCreds)
+                  setProvResult(r)
+                } catch(e) { setProvResult({ok:false, error:e.message}) }
+                finally { setProvTesting(false) }
+              }} disabled={provTesting} style={{ flex:1, padding:'10px', borderRadius:10, fontSize:13, fontWeight:600, background:'rgba(79,142,247,0.12)', color:'var(--blue)', border:'1px solid rgba(79,142,247,0.2)', cursor: provTesting ? 'not-allowed' : 'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:7 }}>
+                {provTesting ? <><span style={{fontSize:12}}>⟳</span> Testing…</> : '⚡ Test Connection'}
+              </button>
+            </div>
+            <NextBtn onClick={async () => {
+              setConnecting(true)
+              try {
+                await connectProvider(selProvider.provider_id, providerCreds)
+                setConnectDone(true)
+                setTimeout(() => setStep(3), 600)
+              } catch(e) { setConnectErr(e.message) }
+              finally { setConnecting(false) }
+            }} disabled={!provResult?.ok || connecting}>
+              {connecting ? 'Connecting…' : `Connect ${selProvider.display_name} & Sync Data →`}
+            </NextBtn>
+          </Card>
+        )}
+
+        {/* ── STEP 1 (DB): Add database ─────────────────────────────────── */}
+        {/* ── STEP 1 (DB original): ─────────────────────────────────────── */}
+        {step === 1 && sourceType === 'db' && (
           <Card>
             <div style={{ fontSize:11, color:'rgba(255,255,255,0.3)', textTransform:'uppercase', letterSpacing:'.1em', marginBottom:6 }}>Step 2 of 3</div>
             <div style={{ fontSize:19, fontWeight:700, color:'#f0f1fa', marginBottom:4 }}>Connect your MySQL database</div>

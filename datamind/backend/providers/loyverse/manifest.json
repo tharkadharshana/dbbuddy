@@ -1,0 +1,21 @@
+{
+  "provider_id": "loyverse",
+  "display_name": "Loyverse POS",
+  "description": "Sync sales, products, customers, employees and stores from your Loyverse point-of-sale system.",
+  "logo_emoji": "🛒",
+  "category": "POS",
+  "website": "https://loyverse.com",
+  "docs_url": "https://developer.loyverse.com/docs/",
+  "sync_interval_minutes": 30,
+  "supports_delta_sync": true,
+  "credential_fields": [
+    {
+      "key": "api_token",
+      "label": "API Access Token",
+      "type": "password",
+      "hint": "Go to Loyverse Back Office → Settings → API → Create Token",
+      "required": true,
+      "placeholder": "eyJh..."
+    }
+  ]
+}
