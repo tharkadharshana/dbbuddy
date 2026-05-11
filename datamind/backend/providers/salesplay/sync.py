@@ -39,8 +39,10 @@ class SalesPlayAPIClient:
 
     def __init__(self, api_token: str):
         self.session = requests.Session()
+        # SalesPlay Developer API uses 'Token' instead of 'Authorization'
         self.session.headers.update({
-            "Authorization": f"Bearer {api_token}",
+            "Token": f"Bearer {api_token}",
+            "Authorization": f"Bearer {api_token}", # Fallback
             "Content-Type":  "application/json",
         })
         self._token = api_token
@@ -50,7 +52,11 @@ class SalesPlayAPIClient:
         log.info("SalesPlay API Request", url=url, params=params)
         for attempt in range(3):
             try:
-                resp = self.session.get(url, params=params or {}, timeout=30)
+                # SalesPlay Developer API often expects GET filters in the JSON body
+                # We send them both as params and as json to be safe
+                resp = self.session.request("GET", url, params=params if endpoint == "/shops" else None, 
+                                            json=params if endpoint != "/shops" else None, 
+                                            timeout=30)
             except Exception as e:
                 log.error("SalesPlay Network Error", error=str(e), attempt=attempt)
                 time.sleep(2)
@@ -76,7 +82,7 @@ class SalesPlayAPIClient:
         p = dict(params or {})
         p["limit"] = PAGE_SIZE
         if since:
-            p["updated_at_min"] = since.strftime("%Y-%m-%dT%H:%M:%SZ")
+            p["created_at_min"] = since.strftime("%Y-%m-%d %H:%M:%S")
         cursor = None
 
         prev_cursor = None
@@ -209,6 +215,122 @@ def sync_categories(client: SalesPlayAPIClient, cursor, prefix: str,
     return count
 
 
+def sync_sub_categories(client: SalesPlayAPIClient, cursor, prefix: str,
+                        since: Optional[datetime] = None) -> int:
+    """Sync sub_categories → {prefix}sub_categories."""
+    items = client.paginate("/sub_category", "sub_categories", since=since)
+    
+    # Category lookup for names
+    cursor.execute(f"SELECT id, category_name FROM `{prefix}categories`")
+    cat_map = {row[0]: row[1] for row in cursor.fetchall()}
+    
+    count = 0
+    for sc in items:
+        cat_id = _str(sc.get("category_id"), 64)
+        cursor.execute(f"""
+            INSERT INTO `{prefix}sub_categories`
+                (id, sub_category_name, category_id, category_name, shop_id, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                sub_category_name=VALUES(sub_category_name), 
+                category_id=VALUES(category_id), category_name=VALUES(category_name),
+                updated_at=VALUES(updated_at), synced_at=NOW()
+        """, (
+            _str(sc.get("id"), 64),
+            _str(sc.get("name"), 255),
+            cat_id,
+            cat_map.get(cat_id),
+            _str(sc.get("shop_id"), 64),
+            _dt(sc.get("created_at")),
+            _dt(sc.get("updated_at")),
+        ))
+        count += 1
+    log.debug("Synced sub_categories", prefix=prefix, count=count)
+    return count
+
+
+def sync_measurements(client: SalesPlayAPIClient, cursor, prefix: str,
+                      since: Optional[datetime] = None) -> int:
+    """Sync measurements → {prefix}measurements."""
+    items = client.paginate("/measurements", "measurements", since=since)
+    count = 0
+    for m in items:
+        cursor.execute(f"""
+            INSERT INTO `{prefix}measurements`
+                (id, measurement_name, weight_scale_enable, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                measurement_name=VALUES(measurement_name), 
+                weight_scale_enable=VALUES(weight_scale_enable),
+                updated_at=VALUES(updated_at), synced_at=NOW()
+        """, (
+            _str(m.get("id"), 64),
+            _str(m.get("name"), 255),
+            1 if m.get("weight_scale_enable") else 0,
+            _dt(m.get("created_at")),
+            _dt(m.get("updated_at")),
+        ))
+        count += 1
+    return count
+
+
+def sync_suppliers(client: SalesPlayAPIClient, cursor, prefix: str,
+                   since: Optional[datetime] = None) -> int:
+    """Sync suppliers → {prefix}suppliers."""
+    items = client.paginate("/suppliers", "suppliers", since=since)
+    count = 0
+    for s in items:
+        cursor.execute(f"""
+            INSERT INTO `{prefix}suppliers`
+                (id, supplier_name, phone_number, email, address, description, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                supplier_name=VALUES(supplier_name), phone_number=VALUES(phone_number),
+                email=VALUES(email), address=VALUES(address), description=VALUES(description),
+                updated_at=VALUES(updated_at), synced_at=NOW()
+        """, (
+            _str(s.get("id"), 64),
+            _str(s.get("name"), 255),
+            _str(s.get("phone_number"), 50),
+            _str(s.get("email"), 255),
+            _str(s.get("address")),
+            _str(s.get("description")),
+            _dt(s.get("created_at")),
+            _dt(s.get("updated_at")),
+        ))
+        count += 1
+    return count
+
+
+def sync_taxes(client: SalesPlayAPIClient, cursor, prefix: str,
+               since: Optional[datetime] = None) -> int:
+    """Sync taxes → {prefix}taxes."""
+    items = client.paginate("/taxes", "taxes", since=since)
+    count = 0
+    for t in items:
+        cursor.execute(f"""
+            INSERT INTO `{prefix}taxes`
+                (id, tax_name, tax_type, calculation_method, rate, apply_after_taxes, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                tax_name=VALUES(tax_name), tax_type=VALUES(tax_type),
+                calculation_method=VALUES(calculation_method), rate=VALUES(rate),
+                apply_after_taxes=VALUES(apply_after_taxes),
+                updated_at=VALUES(updated_at), synced_at=NOW()
+        """, (
+            _str(t.get("id"), 64),
+            _str(t.get("name"), 255),
+            _str(t.get("tax_type"), 50),
+            _str(t.get("calculation_method"), 50),
+            _dec(t.get("rate"), 0),
+            1 if t.get("apply_tax_after_other_taxes") else 0,
+            _dt(t.get("created_at")),
+            _dt(t.get("updated_at")),
+        ))
+        count += 1
+    return count
+
+
 def sync_payment_types(client: SalesPlayAPIClient, cursor, prefix: str,
                        since: Optional[datetime] = None) -> int:
     """Sync payment types → {prefix}payment_types."""
@@ -240,20 +362,38 @@ def sync_products(client: SalesPlayAPIClient, cursor, prefix: str,
                   since: Optional[datetime] = None) -> int:
     """Sync products → {prefix}products. Flattens first variant."""
     items = client.paginate("/products", "products", since=since)
+    
+    # Lookups for names
+    cursor.execute(f"SELECT id, category_name FROM `{prefix}categories`")
+    cat_map = {row[0]: row[1] for row in cursor.fetchall()}
+    cursor.execute(f"SELECT id, sub_category_name FROM `{prefix}sub_categories`")
+    subcat_map = {row[0]: row[1] for row in cursor.fetchall()}
+    cursor.execute(f"SELECT id, measurement_name FROM `{prefix}measurements`")
+    meas_map = {row[0]: row[1] for row in cursor.fetchall()}
+
     count = 0
     for p in items:
+        cat_id    = _str(p.get("category_id"), 64)
+        subcat_id = _str(p.get("sub_category_id"), 64)
+        meas_id   = _str(p.get("measurement_id"), 64)
+
         variants = p.get("variants") or []
         first    = variants[0] if variants else {}
         cursor.execute(f"""
             INSERT INTO `{prefix}products`
-                (id, product_name, description, category_id, reference_id,
+                (id, product_name, description, 
+                 category_id, category_name, sub_category_id, sub_category_name,
+                 measurement_id, measurement_name, reference_id,
                  sold_by_weight, is_active, primary_supplier_id, track_stock,
                  variant_id, sku, barcode, cost, price, purchase_cost,
                  created_at, updated_at)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON DUPLICATE KEY UPDATE
                 product_name=VALUES(product_name), description=VALUES(description),
-                category_id=VALUES(category_id), is_active=VALUES(is_active),
+                category_id=VALUES(category_id), category_name=VALUES(category_name),
+                sub_category_id=VALUES(sub_category_id), sub_category_name=VALUES(sub_category_name),
+                measurement_id=VALUES(measurement_id), measurement_name=VALUES(measurement_name),
+                is_active=VALUES(is_active),
                 variant_id=VALUES(variant_id), sku=VALUES(sku), barcode=VALUES(barcode),
                 cost=VALUES(cost), price=VALUES(price), purchase_cost=VALUES(purchase_cost),
                 updated_at=VALUES(updated_at), synced_at=NOW()
@@ -261,7 +401,12 @@ def sync_products(client: SalesPlayAPIClient, cursor, prefix: str,
             _str(p.get("id"), 64),
             _str(p.get("name"), 500),
             _str(p.get("description")),
-            _str(p.get("category_id"), 64),
+            cat_id,
+            cat_map.get(cat_id),
+            subcat_id,
+            subcat_map.get(subcat_id),
+            meas_id,
+            meas_map.get(meas_id),
             _str(p.get("reference_id"), 100),
             1 if p.get("sold_by_weight") else 0,
             0 if p.get("deleted_at") else 1,
@@ -324,6 +469,16 @@ def sync_receipts(client: SalesPlayAPIClient, cursor, prefix: str,
     Fetches both SALE and REFUND receipt types.
     Returns total rows inserted across both tables.
     """
+    # Lookups for names
+    cursor.execute(f"SELECT id, shop_name FROM `{prefix}shops`")
+    shop_map = {row[0]: row[1] for row in cursor.fetchall()}
+    cursor.execute(f"SELECT id, customer_name FROM `{prefix}customers`")
+    cust_map = {row[0]: row[1] for row in cursor.fetchall()}
+    cursor.execute(f"SELECT id, payment_name FROM `{prefix}payment_types`")
+    pay_map = {row[0]: row[1] for row in cursor.fetchall()}
+    cursor.execute(f"SELECT id, product_name FROM `{prefix}products`")
+    prod_map = {row[0]: row[1] for row in cursor.fetchall()}
+
     total = 0
     # Try /receipts first, fallback to /pos/receipts if we get a 401/404
     endpoint = "/receipts"
@@ -349,30 +504,41 @@ def sync_receipts(client: SalesPlayAPIClient, cursor, prefix: str,
             log.warning(f"Failed to fetch {receipt_type} receipts", error=str(e))
             continue
         for r in items:
+            # ID handling: SalesPlay receipts often use receipt_number as the key
+            r_id = _str(r.get("id") or r.get("receipt_number"), 64)
+            shop_id = _str(r.get("shop_id"), 64)
+            cust_id = _str(r.get("customer_id"), 64)
+            
             # First payment method for simplicity
             payments = r.get("payments") or []
             first_pay = payments[0] if payments else {}
+            pay_type_id = _str(first_pay.get("payment_type_id"), 64)
 
             cursor.execute(f"""
                 INSERT INTO `{prefix}receipts`
-                    (id, receipt_number, shop_id, customer_id, created_at, updated_at,
+                    (id, receipt_number, shop_id, shop_name, customer_id, customer_name, 
+                     created_at, updated_at,
                      total_money, total_discount, total_tax,
                      points_earned, points_deducted, note,
-                     receipt_type, status, payment_type_id, payment_amount)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                     receipt_type, status, payment_type_id, payment_type_name, payment_amount)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 ON DUPLICATE KEY UPDATE
                     total_money=VALUES(total_money), total_discount=VALUES(total_discount),
                     total_tax=VALUES(total_tax), status=VALUES(status),
                     points_earned=VALUES(points_earned), points_deducted=VALUES(points_deducted),
-                    payment_type_id=VALUES(payment_type_id), payment_amount=VALUES(payment_amount),
+                    shop_name=VALUES(shop_name), customer_name=VALUES(customer_name),
+                    payment_type_id=VALUES(payment_type_id), payment_type_name=VALUES(payment_type_name),
+                    payment_amount=VALUES(payment_amount),
                     updated_at=VALUES(updated_at), synced_at=NOW()
             """, (
-                _str(r.get("id"), 64),
+                r_id,
                 _str(r.get("receipt_number"), 100),
-                _str(r.get("shop_id"), 64),
-                _str(r.get("customer_id"), 64),
-                _dt(r.get("created_at")),
-                _dt(r.get("updated_at")),
+                shop_id,
+                shop_map.get(shop_id),
+                cust_id,
+                cust_map.get(cust_id),
+                _dt(r.get("receipt_date_time") or r.get("created_at")),
+                _dt(r.get("receipt_date_time") or r.get("updated_at")),
                 _dec(r.get("total_money"), 0),
                 _dec(r.get("total_discount"), 0),
                 _dec(r.get("total_tax"), 0),
@@ -381,14 +547,21 @@ def sync_receipts(client: SalesPlayAPIClient, cursor, prefix: str,
                 _str(r.get("note")),
                 receipt_type,
                 _str(r.get("status"), 30),
-                _str(first_pay.get("payment_type_id"), 64),
+                pay_type_id,
+                pay_map.get(pay_type_id),
                 _dec(first_pay.get("money_amount")),
             ))
             total += 1
 
-            # Line items
-            for item in (r.get("line_items") or []):
-                item_id = _str(item.get("id"), 64) or f"{r.get('id')}_{item.get('variant_id','')}"
+            # Line items (API uses 'line_products')
+            line_items = r.get("line_products") or r.get("line_items") or []
+            for item in line_items:
+                prod_id = _str(item.get("product_id") or item.get("item_id"), 64)
+                item_id = _str(item.get("id"), 64) or f"{r_id}_{item.get('product_line_no') or item.get('variant_id','')}"
+                
+                # Use provided name or lookup from product map
+                prod_name = _str(item.get("product_name") or item.get("name"), 500) or prod_map.get(prod_id)
+
                 cursor.execute(f"""
                     INSERT INTO `{prefix}receipt_line_items`
                         (id, receipt_id, product_id, variant_id, product_name, sku,
@@ -399,21 +572,22 @@ def sync_receipts(client: SalesPlayAPIClient, cursor, prefix: str,
                         quantity=VALUES(quantity), price=VALUES(price),
                         gross_total_money=VALUES(gross_total_money),
                         total_discount=VALUES(total_discount), total_money=VALUES(total_money),
+                        product_name=VALUES(product_name),
                         cost=VALUES(cost), synced_at=NOW()
                 """, (
                     item_id,
-                    _str(r.get("id"), 64),
-                    _str(item.get("item_id"), 64),
+                    r_id,
+                    prod_id,
                     _str(item.get("variant_id"), 64),
-                    _str(item.get("name"), 500),
-                    _str(item.get("sku"), 100),
+                    prod_name,
+                    _str(item.get("product_code") or item.get("sku"), 100),
                     _dec(item.get("quantity"), 0),
                     _dec(item.get("price"), 0),
                     _dec(item.get("gross_total_money"), 0),
                     _dec(item.get("total_discount"), 0),
                     _dec(item.get("total_money"), 0),
                     _dec(item.get("cost")),
-                    _dt(r.get("created_at")),
+                    _dt(r.get("receipt_date_time") or r.get("created_at")),
                 ))
                 total += 1
 

@@ -96,6 +96,7 @@ function ConnectModal({ provider, onClose, onConnected }) {
   const [creds, setCreds]         = useState({})
   const [testing, setTesting]     = useState(false)
   const [testResult, setTestResult] = useState(null)
+  const [syncRange, setSyncRange] = useState(30) // Default 30 days
   const [connecting, setConnecting] = useState(false)
   const [error, setError]         = useState('')
 
@@ -111,7 +112,7 @@ function ConnectModal({ provider, onClose, onConnected }) {
   async function handleConnect() {
     setConnecting(true); setError('')
     try {
-      await connectProvider(provider.provider_id, creds)
+      await connectProvider(provider.provider_id, creds, syncRange)
       onConnected()
       onClose()
     } catch(e) { setError(e.response?.data?.detail || e.message) }
@@ -142,6 +143,23 @@ function ConnectModal({ provider, onClose, onConnected }) {
             {field.hint && <div style={{ fontSize:11, color:'var(--text3)', marginTop:4 }}>{field.hint}</div>}
           </div>
         ))}
+
+        {/* Sync Range Selector */}
+        <div style={{ marginBottom:14 }}>
+          <label style={{ fontSize:12, color:'var(--text2)', display:'block', marginBottom:5, fontWeight:500 }}>Initial Sync Range</label>
+          <select 
+            value={syncRange} 
+            onChange={e => setSyncRange(Number(e.target.value))}
+            style={{ width:'100%', padding:'9px 12px', fontSize:13, borderRadius:'var(--r-md)', background:'var(--bg2)', border:'1px solid var(--border)', color:'var(--text)' }}
+          >
+            <option value={7}>Last 7 Days</option>
+            <option value={30}>Last 30 Days</option>
+            <option value={90}>Last 90 Days</option>
+            <option value={365}>Last 1 Year</option>
+            <option value={0}>All Time (May be slow)</option>
+          </select>
+          <div style={{ fontSize:11, color:'var(--text3)', marginTop:4 }}>Choose how much historical data to fetch on the first sync.</div>
+        </div>
 
         {error && <div style={{ marginBottom:12 }}><ErrorBox message={error} /></div>}
 

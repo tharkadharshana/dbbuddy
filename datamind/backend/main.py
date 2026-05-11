@@ -950,6 +950,7 @@ def _get_kpis(conn, cache) -> Dict:
 class ProviderConnectRequest(BaseModel):
     provider_id: str
     credentials: Dict[str, str]
+    sync_range: Optional[int] = None  # Days to sync for first full sync
 
 
 @app.get("/providers")
@@ -999,10 +1000,12 @@ def connect_provider_route(req: ProviderConnectRequest,
     Connect a provider: validate, create tables, trigger full sync.
     Sync runs in background.
     """
-    log.info("Connecting provider", user=user["email"], provider=req.provider_id)
+    log.info("Connecting provider", user=user["email"], provider=req.provider_id, sync_range=req.sync_range)
     try:
-        connection_id = connect_provider(user["email"], req.provider_id, req.credentials)
-        background_tasks.add_task(trigger_sync, user["email"], connection_id, full=True)
+        connection_id = connect_provider(
+            user["email"], req.provider_id, req.credentials,
+            sync_range=req.sync_range
+        )
         return {"ok": True, "connection_id": connection_id}
     except Exception as e:
         log.error("Provider connect failed", provider=req.provider_id, error=str(e))

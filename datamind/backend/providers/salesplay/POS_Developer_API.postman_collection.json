@@ -1,0 +1,1972 @@
+{
+  "info": {
+    "_postman_id": "440388eb-857c-4f36-a398-61a0434f2af7",
+    "name": "POS_Developer_API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "25905857"
+  },
+  "item": [
+    {
+      "name": "Oauth 2.0",
+      "item": [
+        {
+          "name": "token",
+          "protocolProfileBehavior": {
+            "disabledSystemHeaders": {}
+          },
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "client_id",
+                  "value": "",
+                  "type": "text"
+                },
+                {
+                  "key": "client_secret",
+                  "value": "",
+                  "type": "text"
+                },
+                {
+                  "key": "code",
+                  "value": "",
+                  "type": "text"
+                },
+                {
+                  "key": "grant_type",
+                  "value": "authorization_code",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/oauth/token",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "oauth",
+                "token"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "refresh_token",
+          "protocolProfileBehavior": {
+            "disabledSystemHeaders": {}
+          },
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded",
+                "type": "text",
+                "disabled": true
+              }
+            ],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "client_id",
+                  "value": "",
+                  "type": "text"
+                },
+                {
+                  "key": "client_secret",
+                  "value": "",
+                  "type": "text"
+                },
+                {
+                  "key": "refresh_token",
+                  "value": "",
+                  "type": "text"
+                },
+                {
+                  "key": "grant_type",
+                  "value": "refresh_token",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/oauth/token",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "oauth",
+                "token"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Category",
+      "item": [
+        {
+          "name": "get categories",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"category_ids\": \"\",\r\n    \"created_at_min\": \"\",\r\n    \"created_at_max\": \"\",\r\n    \"limit\": \"\",\r\n    \"cursor\": \"\"\r\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/category",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "category"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "create category",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"category_name\": \"<string>\",\r\n    \"created_at\": \"<dateTime>\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/category",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "category"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "delete category",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"category_id\": \"<uuid>\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/category",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "category"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Sub Category",
+      "item": [
+        {
+          "name": "get sub categories",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"sub_category_ids\": \"\",\r\n    \"created_at_min\": \"2025-04-21 17:35:18\",\r\n    \"created_at_max\": \"2025-04-21 17:35:18\",\r\n    \"limit\": \"\",\r\n    \"cursor\": \"\"\r\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/sub_category",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sub_category"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "create sub category",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"category_id\":\"<uuid>\",\r\n    \"sub_category_name\": \"<string>\",\r\n    \"created_at\": \"<dateTime>\"\r\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/sub_category",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sub_category"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete sub category",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"category_id\":\"<uuid>\",\r\n    \"sub_category_id\": \"<string>\"\r\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/sub_category",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "sub_category"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Measurement",
+      "item": [
+        {
+          "name": "get measurement",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"measurement_ids\": \"\",\r\n    \"created_at_min\": \"\",\r\n    \"created_at_max\": \"\",\r\n    \"limit\": \"\",\r\n    \"cursor\": \"\"\r\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/measurements",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "measurements"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "create measurement",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"measurement_name\": \"<string>\",\r\n    \"weight_scale_enable\": 1,\r\n    \"created_at\": \"<dateTime>\"\r\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/measurements",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "measurements"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete measurement",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"measurement_id\": \"<uuid>\"\r\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/measurements",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "measurements"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Modifier",
+      "item": [
+        {
+          "name": "get modifiers",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "default"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "default"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"modifier_ids\": \"\",\r\n    \"created_at_min\": \"\",\r\n    \"created_at_max\": \"\",\r\n    \"limit\": \"\",\r\n    \"cursor\": \"\"\r\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/modifiers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "modifiers"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "delete modifier",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"modifier_group_id\": \"<uuid>>\"\r\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/modifiers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "modifiers"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Tax",
+      "item": [
+        {
+          "name": "get taxes",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"tax_ids\": \"\",\r\n    \"created_at_min\": \"\",\r\n    \"created_at_max\": \"\",\r\n    \"limit\": \"\",\r\n    \"cursor\": \"\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/taxes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "taxes"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "create tax",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"tax_type\": \"TAX\",\r\n    \"calculation_method\":\"ADDED\",\r\n    \"tax_name\": \"<string>\",\r\n    \"rate\": 10,\r\n    \"apply_tax_after_other_taxes\":0,\r\n    \"is_tax_price_change\":0,\r\n    \"shops\": [\r\n                \"<uuid>\",\r\n                \"<uuid>\"\r\n    ],\r\n    \"created_at\": \"<dateTime>\"\r\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/taxes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "taxes"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "delete tax",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"tax_code\": \"<string>\",\r\n    \"shops\": [\r\n            \"<uuid>\",\"<uuid>\"\r\n            ]\r\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/taxes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "taxes"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Customer",
+      "item": [
+        {
+          "name": "customer",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"customer_ids\":\"\",\r\n    \"email\":\"\",\r\n    \"created_at_min\":\"\",\r\n    \"created_at_max\":\"\",\r\n    \"limit\":\"\",\r\n    \"cursor\":\"\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/customers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "customers"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "create customer",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"first_name\": \"<string>\",\r\n    \"last_name\": \"<string>\",\r\n    \"email\": \"<string>\",\r\n    \"phone\": \"<string>\",\r\n    \"address\": \"<string>\",\r\n    \"city\": \"<string>\",\r\n    \"region\": \"<string>\",\r\n    \"postal_code\": \"<string>\",\r\n    \"country_code\": \"<string>\",\r\n    \"date_of_birth\": \"<string>\",\r\n    \"billing_name\": \"<string>\",\r\n    \"business_name\": \"<string>\",\r\n    \"customer_code\": \"<string>\",\r\n    \"description\": \"<string>\",\r\n    \"vat_number\": \"<string>\",\r\n    \"tin_number\": \"<string>\",\r\n    \"id_type\": \"<string>\",\r\n    \"id_number\": \"<string>\",\r\n    \"business_registration_number\": \"<string>\",\r\n    \"credit_limit\": 0\r\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/customers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "customers"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "delete customer",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"customer_id\":\"<uuid>\"\r\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/customers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "customers"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Supplier",
+      "item": [
+        {
+          "name": "supplier",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"supplier_ids\": \"\",\r\n    \"updated_at_min\": \"\",\r\n    \"updated_at_max\": \"\",\r\n    \"limit\": \"\",\r\n    \"cursor\": \"\"\r\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/suppliers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "suppliers"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "create supplier",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"supplier_name\": \"<string>\",\r\n    \"supplier_id\":\"<string>\",\r\n    \"phone_number\": \"<string>\",\r\n    \"email\": \"<string>\",\r\n    \"type\": \"Cash\",\r\n    \"address\": \"<string>\",\r\n    \"description\": \"<string>\",\r\n    \"created_at\": \"<dateTime>\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/suppliers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "suppliers"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete supplier",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"supplier_id\":\"<string>\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/suppliers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "suppliers"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Product",
+      "item": [
+        {
+          "name": "products",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"product_ids\": \"\",\r\n    \"created_at_min\": \"\",\r\n    \"created_at_max\": \"\",\r\n    \"limit\": \"\",\r\n    \"cursor\": \"\"\r\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/products",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "products"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "create product",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"product_code\": \"<string>\",\r\n    \"product_name\": \"<string>\",\r\n    \"barcode\": \"<string>\",\r\n    \"description\": \"<string>\",\r\n    \"category_id\": \"<uuid>\",\r\n    \"sub_category_id\": \"<uuid>\",\r\n    \"measurement_id\": \"<uuid>\",\r\n    \"cost\": 0,\r\n    \"stock_control\": true,\r\n    \"product_price_change\": false,\r\n    \"qty_change_option\": false,\r\n    \"expire_mode\": false,\r\n    \"is_composite\": false,\r\n    \"use_production\": false,\r\n    \"is_variant\": true,\r\n    \"components\": [],\r\n    \"tax_ids\": [\r\n        \"<uuid>\",\r\n        \"<uuid>\"\r\n    ],\r\n    \"modifiers_ids\": [],\r\n    \"option1_name\": \"<string>\",\r\n    \"option2_name\": \"<string>\",\r\n    \"option3_name\": \"<string>\",\r\n    \"created_at\": \"<dateTime>\",\r\n    \"updated_at\": \"<dateTime>\",\r\n    \"variants\": [\r\n        {\r\n            \"product_code\": \"<string>\",\r\n            \"option1_value\": \"<string>\",\r\n            \"option2_value\": \"<string>\",\r\n            \"option3_value\": \"<string>\",\r\n            \"barcode\": \"<string>\",\r\n            \"default_cost\": 0,\r\n            \"shops\": [\r\n                {\r\n                    \"shop_id\": \"<uuid>\",\r\n                    \"price\": 0,\r\n                    \"available_for_sale\": true,\r\n                    \"safety_stock\": 0\r\n                },\r\n                {\r\n                    \"shop_id\": \"<uuid>\",\r\n                    \"price\": 0,\r\n                    \"available_for_sale\": true,\r\n                    \"safety_stock\": 0\r\n                }\r\n            ]\r\n        },\r\n        {\r\n            \"product_code\": \"<string>\",\r\n            \"option1_value\": \"<string>\",\r\n            \"option2_value\": \"<string>\",\r\n            \"option3_value\": \"<string>\",\r\n            \"barcode\": \"<string>\",\r\n            \"default_cost\": 0,\r\n            \"shops\": [\r\n                {\r\n                    \"shop_id\": \"<uuid>\",\r\n                    \"price\": 0,\r\n                    \"available_for_sale\": true,\r\n                    \"safety_stock\": 0\r\n                },\r\n                {\r\n                    \"shop_id\": \"<uuid>\",\r\n                    \"price\": 0,\r\n                    \"available_for_sale\": true,\r\n                    \"safety_stock\": 0\r\n                }\r\n            ]\r\n        }\r\n    ],\r\n    \"shops\": [\r\n        {\r\n            \"shop_id\": \"<uuid>\",\r\n            \"price\": 0,\r\n            \"available_for_sale\": false,\r\n            \"safety_stock\": 0\r\n        },\r\n        {\r\n            \"shop_id\": \"<uuid>\",\r\n            \"price\": 0,\r\n            \"available_for_sale\": false,\r\n            \"safety_stock\": 0\r\n        }\r\n    ]\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/products",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "products"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Receipts",
+      "item": [
+        {
+          "name": "receipts",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"receipt_numbers\": \"\",\r\n    \"shop_id\":\"\",\r\n    \"created_at_min\": \"2026-01-02 00:00:00\",\r\n    \"created_at_max\": \"2026-11-02 23:59:59\",\r\n    \"limit\": \"\",\r\n    \"cursor\": \"\"\r\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/receipts",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "receipts"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "void receipts",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"receipt_numbers\": \"\",\r\n    \"shop_id\":\"\",\r\n    \"created_at_min\": \"2026:01:01 00:00:00\",\r\n    \"created_at_max\": \"2026-08-30 23:59:59\",\r\n    \"limit\": \"\",\r\n    \"cursor\": \"\"\r\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/void_receipts",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "void_receipts"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "credit note and refund",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"receipt_numbers\":\"\",\r\n    \"shop_id\":\"\",\r\n    \"created_at_min\": \"2026-01-01 00:00:00\",\r\n    \"created_at_max\": \"2026-09-30 23:59:59\",\r\n    \"limit\": \"\",\r\n    \"cursor\": \"\"\r\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/credit_note_and_refund",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "credit_note_and_refund"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "create credit note and refund",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"receipt_number\": \"<string>\",\r\n    \"shop_id\": \"<uuid>\",\r\n    \"pos_device_id\": \"<uuid>\",\r\n    \"receipt_type\": \"CASH_REFUND\",\r\n    \"transaction_date\": \"<datetime>\",\r\n    \"line_products\": [\r\n        {\r\n            \"product_id\": \"<uuid>\",\r\n            \"product_line_no\": \"<string>\",\r\n            \"quantity\": 1,\r\n            \"comment\": \"<string>\"\r\n        }\r\n    ]\r\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/credit_note_and_refund",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "credit_note_and_refund"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Shops",
+      "item": [
+        {
+          "name": "shops",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"shop_ids\": \"\",\r\n    \"updated_at_min\": \"\",\r\n    \"updated_at_max\": \"\",\r\n    \"limit\": \"10\",\r\n    \"cursor\": \"\"\r\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/shops",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "shops"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Payment types",
+      "item": [
+        {
+          "name": "payment types",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "default"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "default"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"payment_type_ids\": \"\",\r\n    \"created_at_min\": \"\",\r\n    \"created_at_max\": \"\",\r\n    \"updated_at_min\": \"\",\r\n    \"updated_at_max\": \"\",\r\n    \"limit\": \"10\",\r\n    \"cursor\": \"\"\r\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/payment_types",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payment_types"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "create payment type",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"payment_type_code\": \"<string>\",\r\n    \"payment_type_name\":\"<string>\",\r\n    \"payment_type_category\":\"<string>\",\r\n    \"status\":1\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/payment_types",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payment_types"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "delete payment type",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "default"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "default"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"payment_type_id\": \"<uuid>\"\r\n}\r\n "
+            },
+            "url": {
+              "raw": "{{baseUrl}}/payment_types",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payment_types"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "GRN",
+      "item": [
+        {
+          "name": "create grn",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"supplier_id\":\"<uuid>\",\r\n    \"shop_id\":\"<uuid>\",\r\n    \"grn_date\":\"<date>\",\r\n    \"payment_method_id\":\"<uuid>\",\r\n    \"supplier_invoice_no\":\"<string>\",\r\n    \"addition_information\":\"<string>\",\r\n    \"grn_type\":\"DIRECT\",\r\n    \"grn_total\":0,\r\n    \"items\":[\r\n        {\r\n            \"product_id\":\"<uuid>\",\r\n            \"qty\":1,\r\n            \"unit_cost\":0,\r\n            \"total_unit_cost\":0,\r\n            \"expire_mode\":\"ON\",\r\n            \"expire_date\":\"<date>\"\r\n        },\r\n        {\r\n            \"product_id\":\"<uuid>\",\r\n            \"qty\":1,\r\n            \"unit_cost\":0,\r\n            \"total_unit_cost\":0,\r\n            \"expire_mode\":\"ON\",\r\n            \"expire_date\":\"<date>\"\r\n        }\r\n    ]\r\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/grn",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "grn"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Orders",
+      "item": [
+        {
+          "name": "orders",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"order_numbers\": \"\",\r\n    \"shop_id\":\"\",\r\n    \"created_at_min\": \"2024-05-30 00:00:00\",\r\n    \"created_at_max\": \"2024-10-30 23:59:59\",\r\n    \"limit\": \"10\",\r\n    \"cursor\": \"\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Inventory",
+      "item": [
+        {
+          "name": "get stock",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"product_ids\": \"\",\r\n    \"shop_ids\":\"<uuid>\",\r\n    \"limit\": \"\",\r\n    \"cursor\": \"\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/inventory",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "inventory"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Inventory update",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"inventory_levels\": [\r\n        {\r\n            \"shop_id\": \"<uuid>\",\r\n            \"product_id\": \"<uuid>\",\r\n            \"in_stock\":1\r\n        },\r\n        {\r\n            \"shop_id\": \"<uuid>\",\r\n            \"product_id\": \"<uuid>\",\r\n            \"in_stock\":1\r\n        },\r\n        {\r\n            \"shop_id\": \"<uuid>\",\r\n            \"product_id\": \"<uuid>\",\r\n            \"in_stock\":1\r\n        }\r\n    ]\r\n}\r\n ",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/inventory",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "inventory"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Online Orders",
+      "item": [
+        {
+          "name": "Create online order",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"shop_id\": \"<uuid>\",\r\n    \"order_date\": \"<date>\",\r\n    \"order_reference_number\": \"<string>\",\r\n    \"order_reference_id\": \"<string>\",\r\n    \"order_total\": 0,\r\n    \"channel_order_status_id\": 0,\r\n    \"channel_order_status_name\": \"Pending\",\r\n    \"order_comment\": \"<string>\",\r\n    \"table_code\": \"<string>\",\r\n    \"order_type\": \"<string>\",\r\n    \"target_terminal\": \"<string>\",\r\n    \"customer_first_name\": \"<string>\",\r\n    \"customer_last_name\": \"<string>\",\r\n    \"customer_phone\": \"<string>\",\r\n    \"customer_email\": \"<string>\",\r\n    \"order_date_time\": \"<dateTime>\",\r\n    \"order_items\": [\r\n        {\r\n            \"product_code\": \"<string>\",\r\n            \"product_name\": \"<string>\",\r\n            \"product_qty\": 1,\r\n            \"product_unit_price\": 0,\r\n            \"product_price\": 0,\r\n            \"product_cost\": 0,\r\n            \"product_remark\": \"<string>\",\r\n            \"product_modifiers\": [\r\n                {\r\n                    \"modifier_code\": \"<string>\",\r\n                    \"modifier_name\": \"<string>\",\r\n                    \"modifier_price\": 0,\r\n                    \"modifier_cost\": 0,\r\n                    \"modifier_qty\": 1,\r\n                    \"product_qty\": 1\r\n                },\r\n                {\r\n                    \"modifier_code\": \"<string>\",\r\n                    \"modifier_name\": \"<string>\",\r\n                    \"modifier_price\": 0,\r\n                    \"modifier_cost\": 0,\r\n                    \"modifier_qty\": 1,\r\n                    \"product_qty\": 1\r\n                }\r\n            ],\r\n            \"product_taxes\": [\r\n                {\r\n                    \"tax_code\": \"<string>\",\r\n                    \"tax_name\": \"<string>\",\r\n                    \"tax_value_type\": \"<string>\",\r\n                    \"tax_rate\": 1,\r\n                    \"tax_type\": 1,\r\n                    \"tax_amount\": 0,\r\n                    \"is_charge\": 0,\r\n                    \"apply_tax_after_other_taxes\": 0\r\n                },\r\n                {\r\n                    \"tax_code\": \"<string>\",\r\n                    \"tax_name\": \"<string>\",\r\n                    \"tax_value_type\": \"<string>\",\r\n                    \"tax_rate\": 1,\r\n                    \"tax_type\": 1,\r\n                    \"tax_amount\": 0,\r\n                    \"is_charge\": 0,\r\n                    \"apply_tax_after_other_taxes\": 0\r\n                }\r\n            ],\r\n            \"product_discounts\": [\r\n                {\r\n                    \"plan_id\": \"\",\r\n                    \"plan_name\": \"Custom\",\r\n                    \"discount_type\": \"Percentage\",\r\n                    \"discount_value\": 0,\r\n                    \"discount_ref\": 0\r\n                }\r\n            ]\r\n        }\r\n    ],\r\n    \"fixed_charges\": [\r\n        {\r\n            \"tax_code\": \"<string>\",\r\n            \"tax_name\": \"<string>\",\r\n            \"tax_value_type\": \"Value\",\r\n            \"tax_rate\": 0,\r\n            \"tax_type\": 3,\r\n            \"tax_amount\": 0,\r\n            \"is_charge\": 1,\r\n            \"apply_tax_after_other_taxes\": 0\r\n        }\r\n    ],\r\n    \"order_total_discounts\": [\r\n        {\r\n            \"plan_id\": \"\",\r\n            \"plan_name\": \"Custom\",\r\n            \"discount_type\": \"Percentage\",\r\n            \"discount_value\": 0,\r\n            \"discount_ref\": 0\r\n        }\r\n    ]\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/online_orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "online_orders"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Online Order Status",
+      "item": [
+        {
+          "name": "get online order status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"system_unique_ids\": \"\",\r\n    \"created_at_min\": \"\",\r\n    \"created_at_max\": \"\",\r\n    \"limit\": \"1\",\r\n    \"cursor\": \"\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/online_order_status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "online_order_status"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "cancel online order",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"system_unique_id\": \"<string>\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/cancel_online_order",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "cancel_online_order"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Merchant",
+      "item": [
+        {
+          "name": "merchant",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/merchant",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "merchant"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Order types",
+      "item": [
+        {
+          "name": "order types",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"order_type_ids\":\"\",\r\n    \"created_at_min\":\"\",\r\n    \"created_at_max\":\"\",\r\n    \"limit\":\"10\",\r\n    \"cursor\":\"\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/order_types",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "order_types"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "create order type",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"order_type_name\":\"<string>\",\r\n    \"status\": 1\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/order_types",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "order_types"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "delete order type",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"order_type_id\":\"<uuid>\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/order_types",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "order_types"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Product Image",
+      "item": [
+        {
+          "name": "product image upload",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "image",
+                  "type": "file",
+                  "value": null
+                },
+                {
+                  "key": "product_code",
+                  "value": "",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/product_image",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "product_image"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "product image delete",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"product_code\": \"<string>\"\r\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/product_image",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "product_image"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Employee",
+      "item": [
+        {
+          "name": "Employee",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"employee_ids\":\"\",\r\n    \"created_at_min\":\"\",\r\n    \"created_at_max\":\"\",\r\n    \"limit\":\"\",\r\n    \"cursor\":\"\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/employee",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "employee"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Shifts",
+      "item": [
+        {
+          "name": "shifts",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"shift_ids\":\"\",\r\n    \"pos_device_ids\":\"\",\r\n    \"created_at_min\":\"\",\r\n    \"created_at_max\":\"\",\r\n    \"limit\":\"\",\r\n    \"cursor\":\"\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/shifts",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "shifts"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Pos Devices",
+      "item": [
+        {
+          "name": "pos_devices",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"pos_keys\":\"\",\r\n    \"created_at_min\":\"\",\r\n    \"created_at_max\":\"\",\r\n    \"limit\":\"\",\r\n    \"cursor\":\"\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/pos_devices",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "pos_devices"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Webhooks",
+      "item": [
+        {
+          "name": "get webhooks",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n    \"id\":\"\",\r\n    \"created_at_min\":\"\",\r\n    \"created_at_max\":\"\",\r\n    \"limit\":\"10\",\r\n    \"cursor\":\"\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/webhooks",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "webhooks"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "create webhooks",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n\"url\": \"http://example.com\",\r\n\"type\": \"string\",\r\n\"master_username\": \"string\",\r\n\"status\": \"string\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/webhooks",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "webhooks"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "delete webhooks",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Token",
+                "value": "Bearer {{Token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\r\n\"id\": \"string\"\r\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/webhooks",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "webhooks"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          ""
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          ""
+        ]
+      }
+    }
+  ]
+}

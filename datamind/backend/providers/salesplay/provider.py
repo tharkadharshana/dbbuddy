@@ -13,8 +13,9 @@ from typing import Optional
 from providers.base import BaseProvider, ProviderManifest, ValidationResult, SyncResult
 from providers.salesplay.sync import (
     SalesPlayAPIClient,
-    sync_shops, sync_categories, sync_payment_types,
-    sync_products, sync_customers, sync_receipts,
+    sync_shops, sync_categories, sync_sub_categories,
+    sync_measurements, sync_suppliers, sync_taxes,
+    sync_payment_types, sync_products, sync_customers, sync_receipts,
 )
 from logger import get_logger
 
@@ -88,12 +89,16 @@ class SalesPlayProvider(BaseProvider):
         # Ordered so lookups (shops, categories, payment_types)
         # exist before referencing tables (products, customers, receipts)
         steps = [
-            ("Shops",         sync_shops),
-            ("Categories",    sync_categories),
-            ("Payment Types", sync_payment_types),
-            ("Products",      sync_products),
-            ("Customers",     sync_customers),
-            ("Receipts",      sync_receipts),
+            ("Shops",          sync_shops),
+            ("Categories",     sync_categories),
+            ("Sub-Categories", sync_sub_categories),
+            ("Measurements",   sync_measurements),
+            ("Suppliers",      sync_suppliers),
+            ("Taxes",          sync_taxes),
+            ("Payment Types",  sync_payment_types),
+            ("Customers",      sync_customers),
+            ("Products",       sync_products),
+            ("Receipts",       sync_receipts),
         ]
 
         try:
