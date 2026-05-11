@@ -40,14 +40,51 @@ export function Spinner({ size=18, color='var(--blue)' }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" style={{animation:'spin .8s linear infinite'}}><circle cx="12" cy="12" r="9" stroke={color} strokeWidth="2.5" strokeDasharray="40 20" strokeLinecap="round"/></svg>
 }
 
+// Token usage meter — stored in localStorage keyed by llm
+function getTokenUsage(llm) {
+  try { return JSON.parse(localStorage.getItem(`dm_tokens_${llm}`) || '{"used":0,"limit":1000000}') }
+  catch { return {used:0,limit:1000000} }
+}
+export function addTokenUsage(llm, tokens) {
+  const u = getTokenUsage(llm)
+  u.used = (u.used || 0) + (tokens || 0)
+  localStorage.setItem(`dm_tokens_${llm}`, JSON.stringify(u))
+}
+
 export function LLMToggle({ value, onChange }) {
+  const MODELS = {
+    gemini:   { icon:'✦', color:'#4f8ef7', limit:1_000_000 },
+    deepseek: { icon:'◈', color:'#a78bfa', limit:500_000 },
+  }
   return (
-    <div style={{ display:'flex', background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'var(--r-md)', padding:3, gap:2 }}>
-      {['gemini','deepseek'].map(o => (
-        <button key={o} onClick={() => onChange(o)} style={{ padding:'4px 14px', borderRadius:'var(--r-sm)', fontSize:12, fontWeight:500, background: value===o ? 'var(--blue)' : 'transparent', color: value===o ? '#fff' : 'var(--text3)', border:'none', cursor:'pointer', textTransform:'capitalize' }}>
-          {o==='gemini' ? '✦ Gemini' : '◈ DeepSeek'}
-        </button>
-      ))}
+    <div style={{ display:'flex', gap:6 }}>
+      {Object.entries(MODELS).map(([id, m]) => {
+        const usage = getTokenUsage(id)
+        const pct   = Math.min(100, Math.round((usage.used / m.limit) * 100))
+        const isActive = value === id
+        const barColor = pct > 80 ? 'var(--red)' : pct > 50 ? 'var(--amber)' : m.color
+        return (
+          <button key={id} onClick={() => onChange(id)} style={{
+            display:'flex', flexDirection:'column', gap:4,
+            padding:'7px 12px', borderRadius:'var(--r-md)', border:'1px solid',
+            borderColor: isActive ? m.color : 'var(--border)',
+            background: isActive ? `${m.color}18` : 'var(--bg2)',
+            cursor:'pointer', minWidth:100, transition:'all .15s',
+          }}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:6 }}>
+              <span style={{ fontSize:12, fontWeight:600, color: isActive ? m.color : 'var(--text3)' }}>
+                {m.icon} {id.charAt(0).toUpperCase() + id.slice(1)}
+              </span>
+              <span style={{ fontSize:10, color: pct > 80 ? 'var(--red)' : 'var(--text3)', fontFamily:'var(--mono)' }}>
+                {pct}%
+              </span>
+            </div>
+            <div style={{ height:3, borderRadius:99, background:'var(--bg3)', overflow:'hidden' }}>
+              <div style={{ height:'100%', width:`${pct}%`, borderRadius:99, background:barColor, transition:'width .3s' }} />
+            </div>
+          </button>
+        )
+      })}
     </div>
   )
 }

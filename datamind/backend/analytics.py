@@ -111,25 +111,15 @@ def run_anomaly_detection(rows: List[Tuple], has_date: bool = True) -> Dict:
 # ── RFM Segmentation ──────────────────────────────────────────────────────────
 
 def run_rfm_analysis(conn) -> Dict:
-    from db import discover_dynamic_mapping
-    m = discover_dynamic_mapping(conn)
     cursor = conn.cursor()
-    
-    # Dynamic column mapping
-    is_dm = m["PRIMARY_SALES"].startswith("dm_")
-    date_col = "created_at" if is_dm else "invoiceDate"
-    id_col   = "customer_id" if is_dm else "customerId"
-    num_col  = "id" if is_dm else "invoiceNumber"
-    val_col  = "total_money" if is_dm else "invoiceTotal"
-
-    cursor.execute(f"""
-        SELECT `{id_col}`,
-               DATEDIFF(CURDATE(), MAX(`{date_col}`)) as recency,
-               COUNT(DISTINCT `{num_col}`) as frequency,
-               ROUND(SUM(`{val_col}`), 2) as monetary
-        FROM `{m['PRIMARY_SALES']}`
-        WHERE `{id_col}` IS NOT NULL AND `{date_col}` IS NOT NULL
-        GROUP BY `{id_col}`
+    cursor.execute("""
+        SELECT customerId,
+               DATEDIFF(CURDATE(), MAX(invoiceDate)) as recency,
+               COUNT(DISTINCT invoiceNumber) as frequency,
+               ROUND(SUM(invoiceTotal), 2) as monetary
+        FROM invoices
+        WHERE customerId IS NOT NULL AND invoiceDate IS NOT NULL
+        GROUP BY customerId
     """)
     rows = cursor.fetchall()
     if not rows:
@@ -183,19 +173,12 @@ def run_rfm_analysis(conn) -> Dict:
 # ── Cohort Analysis ───────────────────────────────────────────────────────────
 
 def run_cohort_analysis(conn) -> Dict:
-    from db import discover_dynamic_mapping
-    m = discover_dynamic_mapping(conn)
     cursor = conn.cursor()
-    
-    is_dm = m["PRIMARY_SALES"].startswith("dm_")
-    date_col = "created_at" if is_dm else "invoiceDate"
-    id_col   = "customer_id" if is_dm else "customerId"
-
-    cursor.execute(f"""
-        SELECT `{id_col}`, DATE_FORMAT(`{date_col}`,'%Y-%m') as order_month
-        FROM `{m['PRIMARY_SALES']}`
-        WHERE `{id_col}` IS NOT NULL AND `{date_col}` IS NOT NULL
-        ORDER BY `{id_col}`, `{date_col}`
+    cursor.execute("""
+        SELECT customerId, DATE_FORMAT(invoiceDate,'%Y-%m') as order_month
+        FROM invoices
+        WHERE customerId IS NOT NULL AND invoiceDate IS NOT NULL
+        ORDER BY customerId, invoiceDate
     """)
     rows = cursor.fetchall()
     if not rows:
@@ -269,21 +252,14 @@ def run_basket_analysis(conn) -> Dict:
 # ── Growth Metrics ────────────────────────────────────────────────────────────
 
 def run_growth_metrics(conn) -> Dict:
-    from db import discover_dynamic_mapping
-    m = discover_dynamic_mapping(conn)
     cursor = conn.cursor()
-    is_dm = m["SALES"].startswith("dm_")
-    date_col = "created_at" if is_dm else "invoiceDate"
-    val_col  = "total_money" if is_dm else "invoiceTotal"
-    id_col   = "customer_id" if is_dm else "customerId"
-
-    cursor.execute(f"""
-        SELECT DATE_FORMAT(`{date_col}`,'%Y-%m') as month,
-               ROUND(SUM(`{val_col}`),2) as revenue,
+    cursor.execute("""
+        SELECT DATE_FORMAT(invoiceDate,'%Y-%m') as month,
+               ROUND(SUM(invoiceTotal),2) as revenue,
                COUNT(*) as orders,
-               ROUND(AVG(`{val_col}`),2) as aov,
-               COUNT(DISTINCT `{id_col}`) as customers
-        FROM `{m['SALES']}` WHERE `{date_col}` IS NOT NULL
+               ROUND(AVG(invoiceTotal),2) as aov,
+               COUNT(DISTINCT customerId) as customers
+        FROM invoices WHERE invoiceDate IS NOT NULL
         GROUP BY month ORDER BY month
     """)
     rows = cursor.fetchall()
@@ -388,23 +364,16 @@ def run_product_velocity(conn) -> Dict:
 # ── Payment Breakdown ─────────────────────────────────────────────────────────
 
 def run_payment_breakdown(conn) -> Dict:
-    from db import discover_dynamic_mapping
-    m = discover_dynamic_mapping(conn)
     cursor = conn.cursor()
-    
-    is_dm = m["SALES"].startswith("dm_")
-    pay_col = "receipt_type" if is_dm else "payMethod" # simplified
-    val_col = "total_money" if is_dm else "invoiceTotal"
-
-    cursor.execute(f"""
-        SELECT `{pay_col}` as payment_method,
+    cursor.execute("""
+        SELECT payMethod,
                COUNT(*) as transactions,
-               ROUND(SUM(`{val_col}`),2) as revenue,
-               ROUND(AVG(`{val_col}`),2) as avg_ticket,
-               ROUND(SUM(`{val_col}`)/SUM(SUM(`{val_col}`)) OVER()*100,1) as revenue_pct
-        FROM `{m['SALES']}`
-        WHERE `{pay_col}` IS NOT NULL
-        GROUP BY `{pay_col}` ORDER BY revenue DESC
+               ROUND(SUM(invoiceTotal),2) as revenue,
+               ROUND(AVG(invoiceTotal),2) as avg_ticket,
+               ROUND(SUM(invoiceTotal)/SUM(SUM(invoiceTotal)) OVER()*100,1) as revenue_pct
+        FROM invoices
+        WHERE payMethod IS NOT NULL
+        GROUP BY payMethod ORDER BY revenue DESC
     """)
     rows = cursor.fetchall()
     cols = ["payment_method","transactions","revenue","avg_ticket","revenue_pct"]

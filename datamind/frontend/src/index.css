@@ -37,3 +37,30 @@ button{font-family:var(--font);cursor:pointer;border:none;transition:all .15s}
 .data-table td.neg{color:var(--red);font-family:var(--mono)}
 
 @keyframes pulseGlow{0%,100%{opacity:1}50%{opacity:.35}}
+
+/* ── Light mode ─────────────────────────────────────────────────────────── */
+[data-theme="light"] {
+  --bg:#f4f5fb;--bg1:#ffffff;--bg2:#eef0f8;--bg3:#e4e6f2;--bg4:#d8daf0;
+  --border:rgba(0,0,0,0.08);--border2:rgba(0,0,0,0.13);--border3:rgba(0,0,0,0.20);
+  --text:#1a1c2e;--text2:#4a4f6b;--text3:#8a90b0;
+  --blue:#3a7ef5;--blue-dim:rgba(58,126,245,0.10);--blue-glow:rgba(58,126,245,0.20);
+  --green:#18a85a;--green-dim:rgba(24,168,90,0.10);
+  --amber:#d4880a;--amber-dim:rgba(212,136,10,0.12);
+  --red:#d93535;--red-dim:rgba(217,53,53,0.10);
+  --purple:#7c5af5;--purple-dim:rgba(124,90,245,0.10);
+  --teal:#0d9b87;--teal-dim:rgba(13,155,135,0.10);
+  --pink:#d0408a;--pink-dim:rgba(208,64,138,0.10);
+}
+[data-theme="light"] input,
+[data-theme="light"] textarea,
+[data-theme="light"] select {
+  background: var(--bg1);
+  color: var(--text);
+  border-color: var(--border2);
+}
+[data-theme="light"] .data-table th { background: var(--bg2); }
+[data-theme="light"] .data-table tr:hover td { background: var(--bg3); }
+[data-theme="light"] .skeleton {
+  background: linear-gradient(90deg, var(--bg2) 25%, var(--bg3) 50%, var(--bg2) 75%);
+  background-size: 200% 100%;
+}

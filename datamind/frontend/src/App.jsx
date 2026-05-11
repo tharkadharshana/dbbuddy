@@ -20,7 +20,14 @@ export default function App() {
   const [cacheStatus, setCacheStatus] = useState(null)
   const [connection, setConnection]   = useState(null) // active connection summary
   const [showOnboarding, setShowOnboarding] = useState(false)
+  const [theme, setTheme]       = useState(() => localStorage.getItem('dm_theme') || 'dark')
   const pollRef = useRef(null)
+
+  // Apply theme to document root
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+    localStorage.setItem('dm_theme', theme)
+  }, [theme])
 
   useEffect(() => {
     if (!user) return
@@ -102,6 +109,8 @@ export default function App() {
         setActive={setPage}
         connection={connection}
         cacheStatus={cacheStatus}
+        theme={theme}
+        setTheme={setTheme}
       />
       <main style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', minWidth:0 }}>
         <div style={{ flex:1, overflow: noScroll ? 'hidden' : 'auto' }}>

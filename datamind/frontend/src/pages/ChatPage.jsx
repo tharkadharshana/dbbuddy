@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { runNLQuery } from '../utils/api'
-import { Spinner } from '../components/UI'
+import { Spinner, LLMToggle } from '../components/UI'
 
 const TT = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)', borderRadius:8, fontSize:12, color:'#f0f1fa' }
 
@@ -193,15 +193,9 @@ export default function ChatPage({ llm, setLlm, connection }) {
   return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%', overflow:'hidden' }}>
 
-      {/* LLM selector — minimal, top right */}
+      {/* LLM selector with token meter */}
       <div style={{ display:'flex', justifyContent:'flex-end', padding:'10px 20px 0', flexShrink:0 }}>
-        <div style={{ display:'flex', background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:'var(--r-md)', padding:3, gap:2 }}>
-          {['gemini','deepseek'].map(m => (
-            <button key={m} onClick={() => setLlm(m)} style={{ padding:'3px 12px', borderRadius:'var(--r-sm)', fontSize:11, fontWeight:500, background: llm===m ? 'var(--blue)' : 'transparent', color: llm===m ? '#fff' : 'var(--text3)', border:'none', cursor:'pointer' }}>
-              {m === 'gemini' ? '✦ Gemini' : '◈ DeepSeek'}
-            </button>
-          ))}
-        </div>
+        <LLMToggle value={llm} onChange={setLlm} />
       </div>
 
       {/* Messages area */}
