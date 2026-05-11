@@ -212,8 +212,8 @@ def connect_integration(
     }
 
 
-def trigger_sync(user_email: str, provider_id: str,
-                 sync_type: str = "delta", progress_callback=None):
+def _trigger_sync(user_email: str, provider_id: str,
+                  sync_type: str = "delta", progress_callback=None):
     """Manually trigger a sync (full or delta)."""
     row = get_integration(user_email, provider_id)
     if not row:
@@ -495,7 +495,7 @@ def get_connection_status(user_email: str, connection_id: str) -> Dict:
     try:
         integration_id = _get_integration_id(cursor, user_email, connection_id)
         cursor.execute("""
-            SELECT sync_status, last_sync_at, last_sync_rows, table_prefix,
+            SELECT status, last_sync_at, last_sync_rows, table_prefix,
                    last_error
             FROM user_integrations
             WHERE id = %s
@@ -518,7 +518,7 @@ def get_connection_status(user_email: str, connection_id: str) -> Dict:
                 pass
 
         return {
-            "status": row.get("sync_status", "unknown"),
+            "status": row.get("status", "unknown"),
             "last_sync_at": str(row["last_sync_at"]) if row.get("last_sync_at") else None,
             "last_sync_rows": row.get("last_sync_rows", 0),
             "total_rows": total_rows,
@@ -549,8 +549,10 @@ def trigger_sync(user_email: str, connection_id: str, full: bool = False):
     cursor = conn.cursor(dictionary=True)
     try:
         integration_id = _get_integration_id(cursor, user_email, connection_id)
-        since = None if full else None  # always full for now, delta supported via last_sync_at
-        _start_sync_thread(integration_id, user_email, connection_id, since=since)
+        if not integration_id:
+            raise ValueError("Integration not found.")
+        sync_type = "full" if full else "delta"
+        _trigger_sync(user_email, connection_id, sync_type=sync_type)
     except Exception as e:
         log.error("trigger_sync failed", user=user_email, connection_id=connection_id, error=str(e))
     finally:

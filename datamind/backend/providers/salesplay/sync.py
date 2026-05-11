@@ -36,6 +36,8 @@ ACTUAL RESPONSE FIELD NAMES (from live API sample responses in docs):
 
 import requests
 import time
+import os
+import urllib3
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 
@@ -43,7 +45,14 @@ from logger import get_logger
 
 log = get_logger(__name__)
 
-BASE_URL     = "https://api.salesplaypos.com/v1.0"
+# Suppress SSL warnings for spdeveloperapi.nvision.lk cert issues
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# Support both production and dev API endpoints
+BASE_URL     = os.getenv(
+    "SALESPLAY_BASE_URL",
+    "https://spdeveloperapi.nvision.lk/v1.0"
+)
 PAGE_SIZE    = 250
 RATE_SLEEP   = 1.1
 DEFAULT_DAYS = 90
@@ -64,14 +73,23 @@ class SalesPlayAPIClient:
             "Token":        f"Bearer {api_token}",
             "Content-Type": "application/json",
         })
+        # Disable SSL verification for spdeveloperapi.nvision.lk cert issues
+        self.session.verify = False
 
     def _get(self, endpoint: str, body: dict = None) -> dict:
         url = f"{BASE_URL}/{endpoint.lstrip('/')}"
-        log.info("SalesPlay API Request", url=url, params=body)
+        request_body = body or {}
+        
+        log.info("SalesPlay API Request", url=url, params=request_body)
+        log.debug("API Request Details", 
+                 url=url, 
+                 body=request_body,
+                 headers={k: v for k, v in self.session.headers.items() 
+                         if k.lower() != 'token'})
 
         for attempt in range(3):
             try:
-                resp = self.session.request("GET", url, json=body or {}, timeout=30)
+                resp = self.session.get(url, json=request_body, timeout=30, verify=False)
             except requests.exceptions.ConnectionError as exc:
                 log.error("Connection error", error=str(exc), attempt=attempt)
                 time.sleep(3 * (attempt + 1))
@@ -80,6 +98,11 @@ class SalesPlayAPIClient:
                 log.error("Timeout", url=url, attempt=attempt)
                 time.sleep(3)
                 continue
+
+            log.debug("API Response", 
+                     status_code=resp.status_code,
+                     headers=dict(resp.headers),
+                     body_preview=resp.text[:500] if resp.text else "(empty)")
 
             if resp.status_code == 429:
                 wait = int(resp.headers.get("Retry-After", 15))
@@ -98,7 +121,11 @@ class SalesPlayAPIClient:
                 raise Exception(f"SalesPlay API HTTP {resp.status_code}: {preview}")
 
             try:
-                return resp.json()
+                response_data = resp.json()
+                log.debug("API Response JSON", 
+                         endpoint=endpoint,
+                         data=response_data)
+                return response_data
             except ValueError:
                 raise Exception(f"SalesPlay returned non-JSON: {resp.text[:200]}")
 
@@ -108,20 +135,47 @@ class SalesPlayAPIClient:
         """
         Caller provides full body dict with date filters.
         Injects limit + cursor and loops until exhausted.
+        
+        CRITICAL: Detects duplicate records to prevent infinite loops
+        (SalesPlay API bug returns same data with different cursors)
         """
         results: List[Dict] = []
+        seen_ids: set = set()
         b           = dict(body)
         b["limit"]  = PAGE_SIZE
         prev_cursor = None
         page        = 0
+        duplicate_pages = 0
 
         while True:
             page += 1
             data  = self._get(endpoint, b)
             items = data.get(key, [])
-            results.extend(items)
+            
+            # Track duplicates by ID
+            new_items = []
+            for item in items:
+                item_id = item.get("id") or item.get("receipt_number")
+                if item_id and item_id not in seen_ids:
+                    seen_ids.add(item_id)
+                    new_items.append(item)
+            
+            results.extend(new_items)
+            
             log.info(f"Page {page}", endpoint=endpoint,
-                     items=len(items), total=len(results))
+                     items=len(items), new_items=len(new_items), 
+                     total=len(results), cursor=data.get("cursor"))
+            
+            # Stop if no new items (all duplicates)
+            if len(new_items) == 0 and len(items) > 0:
+                duplicate_pages += 1
+                log.warning("Duplicate page detected", 
+                           endpoint=endpoint, page=page,
+                           duplicate_count=duplicate_pages)
+                if duplicate_pages >= 3:
+                    log.warning("Stopping pagination - API returning duplicates",
+                               endpoint=endpoint, total_unique=len(results))
+                    break
 
             new_cursor = data.get("cursor")
             if not new_cursor or not items or new_cursor == prev_cursor:
