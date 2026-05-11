@@ -45,15 +45,20 @@ function ConnectedRow({ conn, onDisconnect, onSync }) {
   }, [conn.connection_id])
 
   async function handleSync() {
+    if (syncing || conn.last_sync_status === 'syncing') return
     setSyncing(true)
     try {
       await syncProvider(conn.connection_id)
-      setTimeout(() => fetchProviderStatus(conn.connection_id).then(setStatus).catch(() => {}), 2000)
-    } finally { setSyncing(false) }
+      // We don't wait for completion here since it's backgrounded,
+      // but the parent 'load' call or our local 'status' polling will catch it.
+    } finally {
+      setTimeout(() => setSyncing(false), 1000)
+    }
   }
 
   const lastSync = conn.last_sync_at ? new Date(conn.last_sync_at).toLocaleString() : 'Never'
-  const isOk = conn.last_sync_status === 'ok'
+  const isSyncing = conn.last_sync_status === 'syncing' || syncing
+  const isOk = conn.last_sync_status === 'ok' || conn.last_sync_status === 'active' || conn.last_sync_status === 'success'
 
   return (
     <Card style={{ padding:'16px 18px' }}>
@@ -62,22 +67,22 @@ function ConnectedRow({ conn, onDisconnect, onSync }) {
         <div style={{ flex:1, minWidth:0 }}>
           <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:3 }}>
             <div style={{ fontWeight:600, fontSize:14 }}>{conn.display_name}</div>
-            <Badge color={isOk ? 'green' : conn.last_sync_status === 'syncing' ? 'amber' : 'gray'}>
-              {conn.last_sync_status === 'syncing' ? 'Syncing…' : isOk ? 'Connected' : 'Pending'}
+            <Badge color={isOk ? 'green' : isSyncing ? 'amber' : 'gray'}>
+              {isSyncing ? 'Syncing…' : isOk ? 'Connected' : 'Pending'}
             </Badge>
           </div>
           <div style={{ fontSize:11, color:'var(--text3)' }}>
             {status ? `${status.total_rows?.toLocaleString() || 0} records` : '—'} &nbsp;·&nbsp; Last sync: {lastSync}
           </div>
-          {conn.last_sync_status === 'syncing' && (
+          {isSyncing && (
             <div style={{ fontSize:11, color:'var(--amber)', marginTop:4 }}>
               {status?.progress?.slice(-1)?.[0] || 'Syncing in background…'}
             </div>
           )}
         </div>
         <div style={{ display:'flex', gap:6, flexShrink:0 }}>
-          <Btn size="sm" variant="ghost" onClick={handleSync} disabled={syncing}>
-            {syncing ? <><Spinner size={11} /> Syncing…</> : '↺ Sync'}
+          <Btn size="sm" variant="ghost" onClick={handleSync} disabled={isSyncing}>
+            {isSyncing ? <><Spinner size={11} /> Syncing…</> : '↺ Sync'}
           </Btn>
           <Btn size="sm" variant="danger" onClick={() => onDisconnect(conn.connection_id)}>Disconnect</Btn>
         </div>
