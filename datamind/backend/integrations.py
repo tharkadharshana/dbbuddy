@@ -77,6 +77,15 @@ def bootstrap_integration_tables():
     """
     conn = _get_internal_conn()
     cursor = conn.cursor()
+
+    # Cleanup: Reset any integrations stuck in 'syncing' from a previous crash/restart
+    try:
+        cursor.execute("UPDATE user_integrations SET status='active' WHERE status='syncing'")
+        conn.commit()
+        log.info("Cleaned up stuck sync processes")
+    except Exception as e:
+        log.warning("Startup sync cleanup failed", error=str(e))
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS user_integrations (
             id              INT AUTO_INCREMENT PRIMARY KEY,
@@ -213,8 +222,10 @@ def connect_integration(
 
 
 def trigger_sync(user_email: str, provider_id: str,
-                 sync_type: str = "delta", progress_callback=None):
+                 sync_type: str = "delta", full: bool = False, progress_callback=None):
     """Manually trigger a sync (full or delta)."""
+    if full:
+        sync_type = "full"
     row = get_integration(user_email, provider_id)
     if not row:
         raise ValueError("Integration not found.")
@@ -285,7 +296,10 @@ def _get_integration_id(cursor, user_email, provider_id) -> int:
         (user_email, provider_id)
     )
     row = cursor.fetchone()
-    return row[0] if row else 0
+    if not row:
+        return 0
+    # Handle both dictionary and tuple cursors
+    return row['id'] if isinstance(row, dict) else row[0]
 
 
 def _split_sql(sql: str) -> List[str]:
@@ -299,55 +313,61 @@ def _run_sync(integration_id: int, user_email: str, provider_id: str,
     conn = _get_internal_conn()
     cursor = conn.cursor(dictionary=True)
 
-    # Mark as syncing
-    cursor.execute(
-        "UPDATE user_integrations SET status='syncing' WHERE id=%s",
-        (integration_id,)
-    )
-    # Create sync log entry
-    cursor.execute(
-        "INSERT INTO sync_logs (integration_id, sync_type, started_at, status) "
-        "VALUES (%s,%s,NOW(),'running')",
-        (integration_id, sync_type)
-    )
-    conn.commit()
-    log_id = cursor.lastrowid
+    log_id = None
+    try:
+        # Mark as syncing
+        cursor.execute(
+            "UPDATE user_integrations SET status='syncing' WHERE id=%s",
+            (integration_id,)
+        )
+        # Create sync log entry
+        cursor.execute(
+            "INSERT INTO sync_logs (integration_id, sync_type, started_at, status) "
+            "VALUES (%s,%s,NOW(),'running')",
+            (integration_id, sync_type)
+        )
+        conn.commit()
+        log_id = cursor.lastrowid
 
-    # Get credentials + table prefix
-    cursor.execute(
-        "SELECT credentials_enc, table_prefix, last_sync_at FROM user_integrations WHERE id=%s",
-        (integration_id,)
-    )
-    row = cursor.fetchone()
-    creds = _decrypt(row["credentials_enc"])
-    table_prefix = row["table_prefix"]
-    since = row["last_sync_at"] if sync_type == "delta" and row["last_sync_at"] else None
-    conn.close()
+        # Get credentials + table prefix
+        cursor.execute(
+            "SELECT credentials_enc, table_prefix, last_sync_at FROM user_integrations WHERE id=%s",
+            (integration_id,)
+        )
+        row = cursor.fetchone()
+        creds = _decrypt(row["credentials_enc"])
+        table_prefix = row["table_prefix"]
+        since = row["last_sync_at"] if sync_type == "delta" and row["last_sync_at"] else None
+        conn.close()
 
-    provider = get_provider(provider_id)
-    log.info("Sync worker starting", user=user_email, provider=provider_id,
-             sync_type=sync_type, since=str(since))
+        provider = get_provider(provider_id)
+        log.info("Sync worker starting", user=user_email, provider=provider_id,
+                 sync_type=sync_type, since=str(since))
 
-    result: SyncResult = provider.sync(
-        creds=creds,
-        conn=_get_internal_conn(),  # fresh connection for the sync itself
-        table_prefix=table_prefix,
-        since=since,
-        progress_callback=progress_callback,
-    )
+        result: SyncResult = provider.sync(
+            creds=creds,
+            conn=_get_internal_conn(),  # fresh connection for the sync itself
+            table_prefix=table_prefix,
+            since=since,
+            progress_callback=progress_callback,
+        )
+    except Exception as e:
+        log.error("Sync worker crashed", error=str(e), exc_info=True)
+        result = SyncResult(ok=False, error=f"Internal Error: {str(e)}")
 
     # Update status
     status = "success" if result.ok else "error"
     conn2 = _get_internal_conn()
     c2 = conn2.cursor()
-    c2.execute("""
-        UPDATE sync_logs SET
-          finished_at=NOW(), status=%s,
-          rows_fetched=%s, rows_inserted=%s, rows_updated=%s,
-          error_message=%s
-        WHERE id=%s
-    """, (status, result.rows_fetched, result.rows_inserted,
-          result.rows_updated, result.error or None, log_id))
+    if log_id:
+        c2.execute("""
+            UPDATE sync_logs SET
+              finished_at=NOW(), status=%s,
+              rows_fetched=%s, rows_inserted=%s, rows_updated=%s,
+              error_message=%s
+            WHERE id=%s
+        """, (status, result.rows_fetched, result.rows_inserted,
+              result.rows_updated, result.error or None, log_id))
     c2.execute("""
         UPDATE user_integrations SET
           status=%s, last_sync_at=IF(%s='success', NOW(), last_sync_at),
@@ -495,7 +515,7 @@ def get_connection_status(user_email: str, connection_id: str) -> Dict:
     try:
         integration_id = _get_integration_id(cursor, user_email, connection_id)
         cursor.execute("""
-            SELECT sync_status, last_sync_at, last_sync_rows, table_prefix,
+            SELECT status, last_sync_at, last_sync_rows, table_prefix,
                    last_error
             FROM user_integrations
             WHERE id = %s
@@ -507,18 +527,19 @@ def get_connection_status(user_email: str, connection_id: str) -> Dict:
         table_prefix = row.get("table_prefix", "")
         if table_prefix:
             try:
-                cursor.execute("""
-                    SELECT SUM(TABLE_ROWS) as total
-                    FROM information_schema.TABLES
-                    WHERE TABLE_NAME LIKE %s
-                """, (f"{table_prefix}%",))
-                tr = cursor.fetchone()
-                total_rows = int(tr.get("total") or 0) if tr else 0
-            except Exception:
-                pass
+                cursor.execute("SHOW TABLES LIKE %s", (f"{table_prefix}%",))
+                tables = cursor.fetchall()
+                for t_row in tables:
+                    t_name = t_row[0] if isinstance(t_row, tuple) else list(t_row.values())[0]
+                    cursor.execute(f"SELECT COUNT(*) as cnt FROM `{t_name}`")
+                    c_row = cursor.fetchone()
+                    count = c_row['cnt'] if isinstance(c_row, dict) else c_row[0]
+                    total_rows += int(count or 0)
+            except Exception as e:
+                log.warning("Table count failed", error=str(e))
 
         return {
-            "status": row.get("sync_status", "unknown"),
+            "status": row.get("status", "unknown"),
             "last_sync_at": str(row["last_sync_at"]) if row.get("last_sync_at") else None,
             "last_sync_rows": row.get("last_sync_rows", 0),
             "total_rows": total_rows,
@@ -543,15 +564,3 @@ def get_sync_history(user_email: str, connection_id: str) -> List[Dict]:
     ]
 
 
-def trigger_sync(user_email: str, connection_id: str, full: bool = False):
-    """Trigger a sync for a connection. full=True forces a full re-sync."""
-    conn = _get_internal_conn()
-    cursor = conn.cursor(dictionary=True)
-    try:
-        integration_id = _get_integration_id(cursor, user_email, connection_id)
-        since = None if full else None  # always full for now, delta supported via last_sync_at
-        _start_sync_thread(integration_id, user_email, connection_id, since=since)
-    except Exception as e:
-        log.error("trigger_sync failed", user=user_email, connection_id=connection_id, error=str(e))
-    finally:
-        conn.close()

@@ -1,0 +1,21 @@
+{
+  "provider_id": "salesplay",
+  "display_name": "SalesPlay POS",
+  "description": "Sync receipts, products, customers, shops and payment types from your SalesPlay point-of-sale system.",
+  "logo_emoji": "🏪",
+  "category": "POS",
+  "website": "https://salesplay.com",
+  "docs_url": "https://developer.salesplaypos.com",
+  "sync_interval_minutes": 60,
+  "supports_delta_sync": true,
+  "credential_fields": [
+    {
+      "key": "api_token",
+      "label": "API Access Token",
+      "type": "password",
+      "hint": "Log in to SalesPlay Backoffice → Integrations → Access Token → Generate Token",
+      "required": true,
+      "placeholder": "eyJh..."
+    }
+  ]
+}

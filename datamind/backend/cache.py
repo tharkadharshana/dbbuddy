@@ -67,7 +67,7 @@ def get_cache(email: str, db_config: dict) -> Optional[Dict]:
     if not p.exists():
         return None
     try:
-        with open(p) as f:
+        with open(p, encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return None
@@ -78,7 +78,7 @@ def save_cache(email: str, db_config: dict, data: Dict):
     p = _cache_path(email, db_config)
     data["db_fingerprint"] = _db_fingerprint(db_config)
     data["built_at"] = datetime.utcnow().isoformat()
-    with open(p, "w") as f:
+    with open(p, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
 
