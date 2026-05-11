@@ -101,9 +101,10 @@ class SalesPlayProvider(BaseProvider):
                 progress(f"  Syncing {label}…")
                 count = fn(client, cursor, table_prefix, since=since)
                 total_rows += count
-                progress(f"  ✓ {label}: {count} rows")
 
-            conn.commit()
+                # Commit after each step so we don't lose data if a later step fails
+                conn.commit()
+                progress(f"  ✓ {label}: {count} rows")
             progress(f"✅ SalesPlay sync complete — {total_rows} rows synced")
             log.info("SalesPlay sync complete",
                      prefix=table_prefix, total=total_rows)
