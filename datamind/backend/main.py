@@ -39,6 +39,9 @@ from integrations import (
 )
 from providers import list_providers, get_provider
 
+load_dotenv()
+log = get_logger(__name__)
+
 # Bootstrap integration tables (create if not exist)
 try:
     bootstrap_integration_tables()
@@ -50,8 +53,6 @@ from auth import (
     get_user_settings, update_user_settings, current_user,
 )
 
-load_dotenv()
-log = get_logger(__name__)
 
 app = FastAPI(title="DataMind AI", version="3.0.0")
 app.add_middleware(
