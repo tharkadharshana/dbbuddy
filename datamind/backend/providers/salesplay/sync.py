@@ -67,7 +67,7 @@ class SalesPlayAPIClient:
         Retries up to 3 times on network errors or 429.
         """
         url = f"{BASE_URL}/{endpoint.lstrip('/')}"
-        log.info("SalesPlay API GET", url=url)
+        log.info(f"🔵 API GET request", endpoint=endpoint, url=url, body_keys=list((body or {}).keys()))
 
         for attempt in range(3):
             try:
@@ -76,24 +76,24 @@ class SalesPlayAPIClient:
                     json=body or {},
                     timeout=30,
                 )
+                log.info(f"📡 Response received", status=resp.status_code, size=len(resp.text))
             except requests.exceptions.ConnectionError as exc:
-                log.warning("SalesPlay connection error", error=str(exc), attempt=attempt)
+                log.error(f"❌ Connection error", error=str(exc), attempt=attempt)
                 time.sleep(3 * (attempt + 1))
                 continue
             except requests.exceptions.Timeout:
-                log.warning("SalesPlay timeout", url=url, attempt=attempt)
+                log.error(f"❌ Timeout", url=url, attempt=attempt)
                 time.sleep(3)
                 continue
 
-            log.debug("SalesPlay response", status=resp.status_code, url=url)
-
             if resp.status_code == 429:
                 wait = int(resp.headers.get("Retry-After", 15))
-                log.warning("SalesPlay rate limited", wait_seconds=wait)
+                log.warning(f"⏸️ Rate limited", wait_seconds=wait)
                 time.sleep(wait)
                 continue
 
             if resp.status_code == 401:
+                log.error(f"❌ Auth failed - token invalid or expired")
                 raise Exception(
                     "SalesPlay API token is invalid or expired. "
                     "Go to SalesPlay Backoffice → Integrations → Access Token → Generate Token. "
@@ -101,15 +101,20 @@ class SalesPlayAPIClient:
                 )
 
             if resp.status_code == 403:
+                log.error(f"❌ Access forbidden")
                 raise Exception("SalesPlay API: access forbidden. Check account permissions.")
 
             if not resp.ok:
                 body_preview = resp.text[:300] if resp.text else "(empty)"
+                log.error(f"❌ HTTP error", status=resp.status_code, response_preview=body_preview)
                 raise Exception(f"SalesPlay API HTTP {resp.status_code}: {body_preview}")
 
             try:
-                return resp.json()
-            except ValueError:
+                data = resp.json()
+                log.info(f"✅ Parsed response", keys=list(data.keys()) if isinstance(data, dict) else "array", items=len(data.get('shops', [])) if isinstance(data, dict) and 'shops' in data else len(data.get('categories', [])) if isinstance(data, dict) and 'categories' in data else "?")
+                return data
+            except ValueError as e:
+                log.error(f"❌ Failed to parse JSON", error=str(e), response_preview=resp.text[:200])
                 raise Exception(f"SalesPlay returned non-JSON: {resp.text[:200]}")
 
         raise Exception("SalesPlay API: failed after 3 retries.")
@@ -134,22 +139,30 @@ class SalesPlayAPIClient:
         cursor     = None
         prev_cursor = None
         page       = 0
+        log.info(f"📖 Starting pagination", endpoint=endpoint, key=key, since=since, until=until)
 
         while True:
             page += 1
             if cursor:
                 b["cursor"] = cursor
+                log.info(f"📄 Fetching page {page}", endpoint=endpoint, cursor=cursor[:30])
+            else:
+                log.info(f"📄 Fetching page {page}", endpoint=endpoint)
 
             data  = self._get(endpoint, b)
             items = data.get(key, [])
             results.extend(items)
-
-            log.debug("SalesPlay page done", endpoint=endpoint, page=page,
-                      got=len(items), total_so_far=len(results))
+            log.info(f"✅ Page {page} complete", items=len(items), total_so_far=len(results), endpoint=endpoint)
 
             new_cursor = data.get("cursor")
             # Stop when: no cursor, no items, or cursor repeats (infinite-loop guard)
             if not new_cursor or not items or new_cursor == prev_cursor:
+                if not new_cursor:
+                    log.info(f"🏁 Pagination complete (no cursor)", endpoint=endpoint, pages=page, total=len(results))
+                elif not items:
+                    log.info(f"🏁 Pagination complete (no items)", endpoint=endpoint, pages=page, total=len(results))
+                else:
+                    log.info(f"🏁 Pagination complete (cursor repeat)", endpoint=endpoint, pages=page, total=len(results))
                 break
 
             prev_cursor, cursor = cursor, new_cursor
