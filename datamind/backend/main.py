@@ -32,11 +32,18 @@ from analytics import (
     run_payment_breakdown, run_location_comparison,
 )
 from integrations import (
-    bootstrap_integration_tables, start_scheduler,
-    connect_integration, trigger_sync, disconnect_integration,
-    get_integration, list_integrations, get_sync_logs,
+    bootstrap_integration_tables,
+    connect_provider, disconnect_provider,
+    get_user_connections, get_connection_status,
+    trigger_sync, get_sync_history,
 )
 from providers import list_providers, get_provider
+
+# Bootstrap integration tables (create if not exist)
+try:
+    bootstrap_integration_tables()
+except Exception as _be:
+    log.warning("Integration bootstrap skipped (configure DATAMIND_DB_* in .env)", error=str(_be))
 
 from auth import (
     create_user, authenticate_user, create_token,
@@ -929,19 +936,7 @@ def _get_kpis(conn, cache) -> Dict:
 # EXTERNAL PROVIDER ROUTES
 # ══════════════════════════════════════════════════════════════════════════════
 
-from integrations import (
-    bootstrap_integration_tables,
-    connect_provider, disconnect_provider,
-    get_user_connections, get_connection_status,
-    trigger_sync, get_sync_history,
-)
-from providers import list_providers
-
-# Bootstrap on import
-try:
-    bootstrap_integration_tables()
-except Exception as _be:
-    log.warning("Integration table bootstrap failed (DB may not be configured yet)", error=str(_be))
+# (providers already imported at top of file)
 
 
 class ProviderConnectRequest(BaseModel):
@@ -952,18 +947,26 @@ class ProviderConnectRequest(BaseModel):
 @app.get("/providers")
 def get_providers():
     """List all available external API providers with their manifests."""
-    return {"providers": list_providers()}
+    try:
+        providers = list_providers()
+        log.info("Listed providers", count=len(providers))
+        return {"providers": providers}
+    except Exception as e:
+        log.error("Failed to list providers", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/providers/connected")
 def get_connected_providers(user: dict = Depends(current_user)):
-    """List all providers this user has connected."""
+    """List all providers this user has connected. Returns empty list if DB not configured."""
     try:
         connections = get_user_connections(user["email"])
+        log.debug("Got connected providers", user=user["email"], count=len(connections))
         return {"connections": connections}
     except Exception as e:
-        log.error("Failed to get connections", user=user["email"], error=str(e))
-        return {"connections": []}
+        log.warning("Could not load connections (integration DB may not be configured)",
+                    user=user["email"], error=str(e))
+        return {"connections": []}  # safe fallback — never break the UI
 
 
 @app.post("/providers/validate")

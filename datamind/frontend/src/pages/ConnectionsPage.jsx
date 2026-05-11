@@ -234,12 +234,11 @@ export default function ConnectionsPage({ onConnectionChange }) {
 
   const load = async () => {
     setLoading(true)
-    try {
-      const [p, c] = await Promise.all([fetchProviders(), fetchConnectedProviders()])
-      setProviders(p.providers || [])
-      setConnected(c.connections || [])
-    } catch(e) {}
-    finally { setLoading(false) }
+    // Fetch independently so one failure doesn't blank out the other
+    const [p, c] = await Promise.allSettled([fetchProviders(), fetchConnectedProviders()])
+    if (p.status === 'fulfilled') setProviders(p.value.providers || [])
+    if (c.status === 'fulfilled') setConnected(c.value.connections || [])
+    setLoading(false)
   }
 
   useEffect(() => { load() }, [])
@@ -303,8 +302,14 @@ export default function ConnectionsPage({ onConnectionChange }) {
           </div>
 
           <div style={{ fontSize:11, color:'var(--text3)', fontWeight:600, textTransform:'uppercase', letterSpacing:'.08em', marginBottom:12 }}>External Integrations</div>
-          {availableProviders.length === 0 ? (
-            <div style={{ fontSize:13, color:'var(--text3)', padding:'20px 0' }}>All available integrations are already connected.</div>
+          {providers.length === 0 ? (
+            <div style={{ padding:'24px 0', color:'var(--text3)', fontSize:13 }}>
+              No integrations available. Check your backend connection.
+            </div>
+          ) : availableProviders.length === 0 ? (
+            <div style={{ fontSize:13, color:'var(--text3)', padding:'20px 0' }}>
+              All available integrations are already connected.
+            </div>
           ) : (
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
               {availableProviders.map(p => (
