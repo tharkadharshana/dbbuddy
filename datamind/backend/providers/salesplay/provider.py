@@ -28,7 +28,7 @@ class SalesPlayProvider(BaseProvider):
 
     @property
     def manifest(self) -> ProviderManifest:
-        with open(_MANIFEST_PATH) as f:
+        with open(_MANIFEST_PATH, encoding="utf-8") as f:
             data = json.load(f)
         return ProviderManifest(**data)
 
