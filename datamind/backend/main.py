@@ -556,14 +556,21 @@ def list_tables(user: dict = Depends(current_user)):
     db_config = _resolve_db(user)
     log.info("List tables", user=user["email"])
     try:
+        from integrations import list_integrations
         conn = get_connection(db_config)
         cursor = conn.cursor()
         cursor.execute("SHOW TABLES")
-        tables = [row[0] for row in cursor.fetchall()]
+        all_tables = [row[0] for row in cursor.fetchall()]
+
+        # Filter to only active integration tables
+        active_integrations = list_integrations(user["email"])
+        active_prefixes = {i["table_prefix"] for i in active_integrations}
+        tables = [t for t in all_tables if any(t.startswith(p) for p in active_prefixes)]
+
         schemas = get_table_schemas(conn, tables)
         fkeys = get_foreign_keys(conn)
         conn.close()
-        log.info("Tables loaded", user=user["email"], count=len(tables))
+        log.info("Tables loaded", user=user["email"], count=len(tables), active=len(active_integrations))
         return {"tables": tables, "schemas": schemas, "foreign_keys": fkeys}
     except Exception as e:
         log.error("Failed to list tables", user=user["email"], error=str(e))

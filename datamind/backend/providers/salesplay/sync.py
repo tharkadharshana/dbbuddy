@@ -54,9 +54,7 @@ class SalesPlayAPIClient:
             try:
                 # SalesPlay Developer API often expects GET filters in the JSON body
                 # We send them both as params and as json to be safe
-                resp = self.session.request("GET", url, params=params if endpoint == "/shops" else None, 
-                                            json=params if endpoint != "/shops" else None, 
-                                            timeout=30)
+                resp = self.session.request("GET", url, json=params, timeout=30)
             except Exception as e:
                 log.error("SalesPlay Network Error", error=str(e), attempt=attempt)
                 time.sleep(2)
@@ -82,7 +80,12 @@ class SalesPlayAPIClient:
         p = dict(params or {})
         p["limit"] = PAGE_SIZE
         if since:
-            p["created_at_min"] = since.strftime("%Y-%m-%d %H:%M:%S")
+            date_str = since.strftime("%Y-%m-%d %H:%M:%S")
+            # /shops and /suppliers use updated_at for delta sync (catches new AND modified)
+            if endpoint in ("/shops", "/suppliers", "/payment_types"):
+                p["updated_at_min"] = date_str
+            else:
+                p["created_at_min"] = date_str
         cursor = None
 
         prev_cursor = None
