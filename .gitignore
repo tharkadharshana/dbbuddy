@@ -28,3 +28,4 @@ sql_analytics_ai_dashboard.html
 datamind/backend/scratch/
 datamind/backend/data/users.json
 datamind/backend/data/cache/*
+datamind/backend/logs/datamind.log
