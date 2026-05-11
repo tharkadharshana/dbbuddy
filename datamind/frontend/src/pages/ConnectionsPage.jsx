@@ -45,20 +45,15 @@ function ConnectedRow({ conn, onDisconnect, onSync }) {
   }, [conn.connection_id])
 
   async function handleSync() {
-    if (syncing || conn.last_sync_status === 'syncing') return
     setSyncing(true)
     try {
       await syncProvider(conn.connection_id)
-      // We don't wait for completion here since it's backgrounded,
-      // but the parent 'load' call or our local 'status' polling will catch it.
-    } finally {
-      setTimeout(() => setSyncing(false), 1000)
-    }
+      setTimeout(() => fetchProviderStatus(conn.connection_id).then(setStatus).catch(() => {}), 2000)
+    } finally { setSyncing(false) }
   }
 
   const lastSync = conn.last_sync_at ? new Date(conn.last_sync_at).toLocaleString() : 'Never'
-  const isSyncing = conn.last_sync_status === 'syncing' || syncing
-  const isOk = conn.last_sync_status === 'ok' || conn.last_sync_status === 'active' || conn.last_sync_status === 'success'
+  const isOk = conn.last_sync_status === 'ok'
 
   return (
     <Card style={{ padding:'16px 18px' }}>
@@ -67,22 +62,22 @@ function ConnectedRow({ conn, onDisconnect, onSync }) {
         <div style={{ flex:1, minWidth:0 }}>
           <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:3 }}>
             <div style={{ fontWeight:600, fontSize:14 }}>{conn.display_name}</div>
-            <Badge color={isOk ? 'green' : isSyncing ? 'amber' : 'gray'}>
-              {isSyncing ? 'Syncing…' : isOk ? 'Connected' : 'Pending'}
+            <Badge color={isOk ? 'green' : conn.last_sync_status === 'syncing' ? 'amber' : 'gray'}>
+              {conn.last_sync_status === 'syncing' ? 'Syncing…' : isOk ? 'Connected' : 'Pending'}
             </Badge>
           </div>
           <div style={{ fontSize:11, color:'var(--text3)' }}>
             {status ? `${status.total_rows?.toLocaleString() || 0} records` : '—'} &nbsp;·&nbsp; Last sync: {lastSync}
           </div>
-          {isSyncing && (
+          {conn.last_sync_status === 'syncing' && (
             <div style={{ fontSize:11, color:'var(--amber)', marginTop:4 }}>
               {status?.progress?.slice(-1)?.[0] || 'Syncing in background…'}
             </div>
           )}
         </div>
         <div style={{ display:'flex', gap:6, flexShrink:0 }}>
-          <Btn size="sm" variant="ghost" onClick={handleSync} disabled={isSyncing}>
-            {isSyncing ? <><Spinner size={11} /> Syncing…</> : '↺ Sync'}
+          <Btn size="sm" variant="ghost" onClick={handleSync} disabled={syncing}>
+            {syncing ? <><Spinner size={11} /> Syncing…</> : '↺ Sync'}
           </Btn>
           <Btn size="sm" variant="danger" onClick={() => onDisconnect(conn.connection_id)}>Disconnect</Btn>
         </div>
@@ -96,7 +91,6 @@ function ConnectModal({ provider, onClose, onConnected }) {
   const [creds, setCreds]         = useState({})
   const [testing, setTesting]     = useState(false)
   const [testResult, setTestResult] = useState(null)
-  const [syncRange, setSyncRange] = useState(30) // Default 30 days
   const [connecting, setConnecting] = useState(false)
   const [error, setError]         = useState('')
 
@@ -112,7 +106,7 @@ function ConnectModal({ provider, onClose, onConnected }) {
   async function handleConnect() {
     setConnecting(true); setError('')
     try {
-      await connectProvider(provider.provider_id, creds, syncRange)
+      await connectProvider(provider.provider_id, creds)
       onConnected()
       onClose()
     } catch(e) { setError(e.response?.data?.detail || e.message) }
@@ -143,23 +137,6 @@ function ConnectModal({ provider, onClose, onConnected }) {
             {field.hint && <div style={{ fontSize:11, color:'var(--text3)', marginTop:4 }}>{field.hint}</div>}
           </div>
         ))}
-
-        {/* Sync Range Selector */}
-        <div style={{ marginBottom:14 }}>
-          <label style={{ fontSize:12, color:'var(--text2)', display:'block', marginBottom:5, fontWeight:500 }}>Initial Sync Range</label>
-          <select 
-            value={syncRange} 
-            onChange={e => setSyncRange(Number(e.target.value))}
-            style={{ width:'100%', padding:'9px 12px', fontSize:13, borderRadius:'var(--r-md)', background:'var(--bg2)', border:'1px solid var(--border)', color:'var(--text)' }}
-          >
-            <option value={7}>Last 7 Days</option>
-            <option value={30}>Last 30 Days</option>
-            <option value={90}>Last 90 Days</option>
-            <option value={365}>Last 1 Year</option>
-            <option value={0}>All Time (May be slow)</option>
-          </select>
-          <div style={{ fontSize:11, color:'var(--text3)', marginTop:4 }}>Choose how much historical data to fetch on the first sync.</div>
-        </div>
 
         {error && <div style={{ marginBottom:12 }}><ErrorBox message={error} /></div>}
 

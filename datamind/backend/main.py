@@ -39,9 +39,6 @@ from integrations import (
 )
 from providers import list_providers, get_provider
 
-load_dotenv()
-log = get_logger(__name__)
-
 # Bootstrap integration tables (create if not exist)
 try:
     bootstrap_integration_tables()
@@ -53,6 +50,8 @@ from auth import (
     get_user_settings, update_user_settings, current_user,
 )
 
+load_dotenv()
+log = get_logger(__name__)
 
 app = FastAPI(title="DataMind AI", version="3.0.0")
 app.add_middleware(
@@ -556,21 +555,14 @@ def list_tables(user: dict = Depends(current_user)):
     db_config = _resolve_db(user)
     log.info("List tables", user=user["email"])
     try:
-        from integrations import list_integrations
         conn = get_connection(db_config)
         cursor = conn.cursor()
         cursor.execute("SHOW TABLES")
-        all_tables = [row[0] for row in cursor.fetchall()]
-
-        # Filter to only active integration tables
-        active_integrations = list_integrations(user["email"])
-        active_prefixes = {i["table_prefix"] for i in active_integrations}
-        tables = [t for t in all_tables if any(t.startswith(p) for p in active_prefixes)]
-
+        tables = [row[0] for row in cursor.fetchall()]
         schemas = get_table_schemas(conn, tables)
         fkeys = get_foreign_keys(conn)
         conn.close()
-        log.info("Tables loaded", user=user["email"], count=len(tables), active=len(active_integrations))
+        log.info("Tables loaded", user=user["email"], count=len(tables))
         return {"tables": tables, "schemas": schemas, "foreign_keys": fkeys}
     except Exception as e:
         log.error("Failed to list tables", user=user["email"], error=str(e))
@@ -713,22 +705,15 @@ def _try_python(tid: str, conn) -> Optional[Dict]:
 
 
 def _hardcoded(tid: str, conn) -> Optional[Dict]:
-    from db import discover_dynamic_mapping
-    m = discover_dynamic_mapping(conn)
-    is_dm = m["PRIMARY_SALES"].startswith("dm_")
-
-    # Column Mapping
-    d_col = "created_at" if is_dm else "invoiceDate"
-    v_col = "total_money" if is_dm else "invoiceTotal"
-    p_name_col = "product_name" if is_dm else "name"
-    p_cat_col  = "category_id" if is_dm else "category"
-
     QUERIES = {
-        "revenue_trend":       (f"SELECT DATE_FORMAT(`{d_col}`,'%Y-%m') as month, ROUND(SUM(`{v_col}`),2) as revenue, COUNT(*) as transactions, ROUND(AVG(`{v_col}`),2) as avg_ticket FROM `{m['PRIMARY_SALES']}` WHERE `{d_col}` IS NOT NULL GROUP BY month ORDER BY month DESC LIMIT 24", "Monthly Revenue Trend"),
-        "revenue_by_category": (f"SELECT p.`{p_cat_col}` as category, ROUND(SUM(ii.quantity*ii.price),2) as revenue FROM `{m['ITEM_TABLES'][0]}` ii JOIN `{m['PRODUCT_TABLES'][0]}` p ON ii.product_id=p.id GROUP BY 1 ORDER BY revenue DESC" if is_dm else "SELECT p.category, ROUND(SUM(ii.qty*ii.itemPrice),2) as revenue FROM invoice_items ii JOIN products p ON ii.itemCode=p.itemCode GROUP BY p.category ORDER BY revenue DESC", "Revenue by Category"),
-        "hourly_pattern":      (f"SELECT HOUR(`{d_col}`) as hour, ROUND(SUM(`{v_col}`),2) as total_revenue, COUNT(*) as transactions FROM `{m['PRIMARY_SALES']}` WHERE `{d_col}` IS NOT NULL GROUP BY hour ORDER BY hour", "Hourly Pattern"),
-        "top_products":        (f"SELECT p.`{p_name_col}` as name, p.`{p_cat_col}` as category, ROUND(SUM(ii.total_money),2) as revenue, SUM(ii.quantity) as units FROM `{m['ITEM_TABLES'][0]}` ii JOIN `{m['PRODUCT_TABLES'][0]}` p ON ii.product_id=p.id GROUP BY 1,2 ORDER BY revenue DESC LIMIT 20" if is_dm else "SELECT p.name, p.category, ROUND(SUM(ii.qty*ii.itemPrice),2) as revenue, SUM(ii.qty) as units FROM invoice_items ii JOIN products p ON ii.itemCode=p.itemCode GROUP BY 1,2 ORDER BY revenue DESC LIMIT 20", "Top Products"),
-        "payment_methods":     (f"SELECT receipt_type as payment_method, COUNT(*) as transactions, ROUND(SUM(`{v_col}`),2) as revenue FROM `{m['PRIMARY_SALES']}` GROUP BY 1 ORDER BY revenue DESC" if is_dm else "SELECT payMethod as payment_method, COUNT(*) as transactions, ROUND(SUM(invoiceTotal),2) as revenue FROM invoices WHERE payMethod IS NOT NULL GROUP BY payMethod ORDER BY revenue DESC", "Payment Methods"),
+        "revenue_trend":       ("SELECT DATE_FORMAT(invoiceDate,'%Y-%m') as month, ROUND(SUM(invoiceTotal),2) as revenue, COUNT(*) as transactions, ROUND(AVG(invoiceTotal),2) as avg_ticket FROM invoices WHERE invoiceDate IS NOT NULL GROUP BY month ORDER BY month DESC LIMIT 24", "Monthly Revenue Trend"),
+        "revenue_by_category": ("SELECT p.category, ROUND(SUM(ii.qty*ii.itemPrice),2) as revenue, ROUND(SUM(ii.qty*(ii.itemPrice-ii.itemCost)),2) as gross_profit, ROUND(AVG((ii.itemPrice-ii.itemCost)/NULLIF(ii.itemPrice,0)*100),1) as margin_pct FROM invoice_items ii JOIN products p ON ii.itemCode=p.itemCode GROUP BY p.category ORDER BY revenue DESC", "Revenue by Category"),
+        "revenue_by_location": ("SELECT l.location_name, ROUND(SUM(i.invoiceTotal),2) as revenue, COUNT(*) as transactions, ROUND(AVG(i.invoiceTotal),2) as avg_ticket FROM invoices i JOIN locations l ON i.location_id=l.location_id GROUP BY l.location_id,l.location_name ORDER BY revenue DESC", "Revenue by Location"),
+        "hourly_pattern":      ("SELECT HOUR(invoiceTime) as hour, ROUND(SUM(invoiceTotal),2) as total_revenue, COUNT(*) as transactions FROM invoices WHERE invoiceTime IS NOT NULL GROUP BY hour ORDER BY hour", "Hourly Pattern"),
+        "daily_trend_7":       ("SELECT invoiceDate as date, ROUND(SUM(invoiceTotal),2) as revenue, COUNT(*) as orders FROM invoices WHERE invoiceDate >= CURDATE()-INTERVAL 7 DAY GROUP BY invoiceDate ORDER BY invoiceDate", "Last 7 Days"),
+        "top_products":        ("SELECT p.name, p.category, ROUND(SUM(ii.qty*ii.itemPrice),2) as revenue, SUM(ii.qty) as units FROM invoice_items ii JOIN products p ON ii.itemCode=p.itemCode GROUP BY p.itemCode,p.name,p.category ORDER BY revenue DESC LIMIT 20", "Top Products"),
+        "top_customers":       ("SELECT c.name, COUNT(DISTINCT i.invoiceNumber) as orders, ROUND(SUM(i.invoiceTotal),2) as lifetime_value FROM customers c JOIN invoices i ON c.customerId=i.customerId GROUP BY c.customerId,c.name ORDER BY lifetime_value DESC LIMIT 25", "Top Customers"),
+        "payment_methods":     ("SELECT payMethod as payment_method, COUNT(*) as transactions, ROUND(SUM(invoiceTotal),2) as revenue FROM invoices WHERE payMethod IS NOT NULL GROUP BY payMethod ORDER BY revenue DESC", "Payment Methods"),
     }
     if tid not in QUERIES:
         return None
@@ -957,7 +942,6 @@ def _get_kpis(conn, cache) -> Dict:
 class ProviderConnectRequest(BaseModel):
     provider_id: str
     credentials: Dict[str, str]
-    sync_range: Optional[int] = None  # Days to sync for first full sync
 
 
 @app.get("/providers")
@@ -1007,12 +991,10 @@ def connect_provider_route(req: ProviderConnectRequest,
     Connect a provider: validate, create tables, trigger full sync.
     Sync runs in background.
     """
-    log.info("Connecting provider", user=user["email"], provider=req.provider_id, sync_range=req.sync_range)
+    log.info("Connecting provider", user=user["email"], provider=req.provider_id)
     try:
-        connection_id = connect_provider(
-            user["email"], req.provider_id, req.credentials,
-            sync_range=req.sync_range
-        )
+        connection_id = connect_provider(user["email"], req.provider_id, req.credentials)
+        background_tasks.add_task(trigger_sync, user["email"], connection_id, full=True)
         return {"ok": True, "connection_id": connection_id}
     except Exception as e:
         log.error("Provider connect failed", provider=req.provider_id, error=str(e))

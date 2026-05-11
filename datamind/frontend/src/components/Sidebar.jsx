@@ -75,7 +75,7 @@ function NavItem({ id, label, icon, active, setActive, badge }) {
   )
 }
 
-export default function Sidebar({ active, setActive, connection, cacheStatus }) {
+export default function Sidebar({ active, setActive, connection, cacheStatus, theme, setTheme }) {
   const cacheOk      = cacheStatus?.cached
   const cacheBuilding= cacheStatus?.build?.status === 'building'
 
@@ -144,8 +144,16 @@ export default function Sidebar({ active, setActive, connection, cacheStatus }) 
         <NavItem id="settings"    label="Settings"      icon={IC.settings} active={active} setActive={setActive} />
       </nav>
 
-      {/* User pill */}
+      {/* Theme + user bottom row */}
       <div style={{ padding:'10px 14px', borderTop:'1px solid var(--border)' }}>
+        {/* Theme toggle */}
+        <button onClick={() => setTheme && setTheme(t => t === 'dark' ? 'light' : 'dark')}
+          title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+          style={{ width:'100%', display:'flex', alignItems:'center', gap:8, padding:'6px 8px', marginBottom:8, borderRadius:'var(--r-sm)', background:'var(--bg3)', border:'1px solid var(--border)', cursor:'pointer', color:'var(--text2)', fontSize:12, fontWeight:500 }}>
+          <span style={{ fontSize:15 }}>{theme === 'dark' ? '☀️' : '🌙'}</span>
+          <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
+        </button>
+        {/* User */}
         <div onClick={() => setActive('settings')} style={{ display:'flex', alignItems:'center', gap:9, cursor:'pointer' }}>
           <div style={{ width:28, height:28, borderRadius:'50%', background:'linear-gradient(135deg,#4f8ef7,#a78bfa)', display:'flex', alignItems:'center', justifyContent:'center', fontWeight:700, fontSize:12, color:'#fff', flexShrink:0 }}>
             {typeof window !== 'undefined' ? (JSON.parse(localStorage.getItem('dm_user')||'{}')?.name?.[0]?.toUpperCase()||'?') : '?'}
