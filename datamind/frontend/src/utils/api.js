@@ -62,7 +62,7 @@ export const fetchLLMModels        = ()              => api.get('/llm/models').t
 export const fetchProviders          = ()                    => api.get('/providers').then(r => r.data)
 export const fetchConnectedProviders = ()                    => api.get('/providers/connected').then(r => r.data)
 export const validateProviderCreds   = (provider_id, credentials) => api.post('/providers/validate', { provider_id, credentials }).then(r => r.data)
-export const connectProvider         = (provider_id, credentials, sync_range=null) => api.post('/providers/connect', { provider_id, credentials, sync_range }).then(r => r.data)
+export const connectProvider         = (provider_id, credentials) => api.post('/providers/connect', { provider_id, credentials }).then(r => r.data)
 export const disconnectProvider      = (connection_id)       => api.delete(`/providers/${connection_id}`).then(r => r.data)
 export const syncProvider            = (connection_id)       => api.post(`/providers/${connection_id}/sync`).then(r => r.data)
 export const fetchProviderStatus     = (connection_id)       => api.get(`/providers/${connection_id}/status`).then(r => r.data)

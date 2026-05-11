@@ -141,7 +141,7 @@ def _setup_root():
         log_path = Path(LOG_FILE)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         root.addHandler(_build_handler(filepath=str(log_path)))
-        root.info(f"File logging enabled: {log_path}")
+        root.info(f"File logging enabled", path=str(log_path))
 
     # Quieten noisy third-party loggers
     for noisy in ("uvicorn.access", "httpx", "prophet", "cmdstanpy"):
