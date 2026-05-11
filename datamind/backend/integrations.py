@@ -163,6 +163,7 @@ def connect_integration(
     provider_id: str,
     creds: dict,
     display_label: str = "",
+    sync_range: Optional[int] = None,
     progress_callback=None,
 ) -> Dict:
     """
@@ -210,7 +211,7 @@ def connect_integration(
 
     # Trigger full sync in background
     _start_sync_thread(integration_id, user_email, provider_id, sync_type="full",
-                       progress_callback=progress_callback)
+                       sync_range=sync_range, progress_callback=progress_callback)
 
     return {
         "ok": True,
@@ -222,7 +223,8 @@ def connect_integration(
 
 
 def trigger_sync(user_email: str, provider_id: str,
-                 sync_type: str = "delta", full: bool = False, progress_callback=None):
+                 sync_type: str = "delta", full: bool = False, 
+                 sync_range: Optional[int] = None, progress_callback=None):
     """Manually trigger a sync (full or delta)."""
     if full:
         sync_type = "full"
@@ -231,7 +233,7 @@ def trigger_sync(user_email: str, provider_id: str,
         raise ValueError("Integration not found.")
     _start_sync_thread(
         row["id"], user_email, provider_id,
-        sync_type=sync_type, progress_callback=progress_callback
+        sync_type=sync_type, sync_range=sync_range, progress_callback=progress_callback
     )
 
 
@@ -308,7 +310,7 @@ def _split_sql(sql: str) -> List[str]:
 
 
 def _run_sync(integration_id: int, user_email: str, provider_id: str,
-              sync_type: str, progress_callback=None):
+              sync_type: str, sync_range: Optional[int] = None, progress_callback=None):
     """The actual sync worker — runs in a thread."""
     conn = _get_internal_conn()
     cursor = conn.cursor(dictionary=True)
@@ -338,6 +340,13 @@ def _run_sync(integration_id: int, user_email: str, provider_id: str,
         creds = _decrypt(row["credentials_enc"])
         table_prefix = row["table_prefix"]
         since = row["last_sync_at"] if sync_type == "delta" and row["last_sync_at"] else None
+
+        # Apply sync_range for full sync if specified
+        if sync_type == "full" and sync_range:
+            from datetime import timedelta
+            since = datetime.now() - timedelta(days=sync_range)
+            log.info("Applying sync range", days=sync_range, since=str(since))
+
         conn.close()
 
         provider = get_provider(provider_id)
@@ -387,10 +396,11 @@ def _run_sync(integration_id: int, user_email: str, provider_id: str,
 
 
 def _start_sync_thread(integration_id: int, user_email: str, provider_id: str,
-                       sync_type: str = "delta", progress_callback=None):
+                       sync_type: str = "delta", sync_range: Optional[int] = None, 
+                       progress_callback=None):
     t = threading.Thread(
         target=_run_sync,
-        args=(integration_id, user_email, provider_id, sync_type, progress_callback),
+        args=(integration_id, user_email, provider_id, sync_type, sync_range, progress_callback),
         daemon=True,
     )
     t.start()
@@ -463,12 +473,13 @@ def _scheduler_tick():
 
 # ── Compatibility wrappers for main.py API routes ─────────────────────────────
 
-def connect_provider(user_email: str, provider_id: str, credentials: dict) -> str:
+def connect_provider(user_email: str, provider_id: str, credentials: dict, 
+                     sync_range: Optional[int] = None) -> str:
     """
     Connect a provider and return a connection_id string.
     Wraps connect_integration.
     """
-    connect_integration(user_email, provider_id, credentials)
+    connect_integration(user_email, provider_id, credentials, sync_range=sync_range)
     # Return a stable connection_id = "provider_id" for simplicity
     # (one connection per provider per user in current design)
     return provider_id
