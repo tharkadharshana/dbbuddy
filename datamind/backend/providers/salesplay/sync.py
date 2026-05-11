@@ -26,7 +26,8 @@ from logger import get_logger
 
 log = get_logger(__name__)
 
-BASE_URL   = "https://api.salesplaypos.com/v1.0"
+# BASE_URL   = "https://api.salesplaypos.com/v1.0"
+BASE_URL = "https://spdeveloperapi.nvision.lk/v1.0"
 PAGE_SIZE  = 250        # SalesPlay max per page
 RATE_SLEEP = 1.0        # seconds between paginated requests (300 req/300s limit)
 
