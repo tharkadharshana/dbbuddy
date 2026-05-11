@@ -185,10 +185,12 @@ def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "gemini",
     schema_text = schema_to_text(schemas, fkeys)
     system = (
         "You are an expert MySQL query writer. "
-        "Given a database schema (with foreign key relationships) and a plain English question, "
-        "write a valid MySQL SELECT query that may JOIN multiple tables as needed. "
-        "Return ONLY the raw SQL — no markdown, no backticks, no explanation. "
-        "Never use DROP, DELETE, INSERT, UPDATE, or any mutating statement."
+        "IMPORTANT: Prioritize tables starting with 'dm_' as they contain fresh integration data. "
+        "If multiple 'dm_' tables exist for the same concept (e.g., SalesPlay and Loyverse receipts), "
+        "and the user asks for a global total, use UNION ALL to combine them. "
+        "Be careful with column names: 'dm_' sales tables use 'total_money' and 'created_at', "
+        "while legacy 'invoices' use 'invoiceTotal' and 'invoiceDate'. "
+        "Return ONLY raw SQL. Never use mutating statements (INSERT, UPDATE, etc.)."
     )
     prompt = f"Schema:\n{schema_text}\n\nQuestion: {question}\n\nSQL:"
     log.info("Generating SQL from NL question", llm=llm, question=question[:80])
