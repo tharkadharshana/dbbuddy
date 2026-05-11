@@ -10,7 +10,7 @@ Rate limit: 300 requests / 300 seconds — we sleep 1s between pages to stay saf
 
 Endpoints used:
   GET /shops               → {prefix}shops
-  GET /categories          → {prefix}categories
+  GET /category            → {prefix}categories
   GET /payment_types       → {prefix}payment_types
   GET /products            → {prefix}products
   GET /customers           → {prefix}customers
@@ -46,9 +46,15 @@ class SalesPlayAPIClient:
 
     def get(self, endpoint: str, params: dict = None) -> dict:
         url = f"{BASE_URL}/{endpoint.lstrip('/')}"
-        log.debug("SalesPlay API GET", url=url, params=str(params or {}))
+        log.info("SalesPlay API Request", url=url, params=params)
         for attempt in range(3):
-            resp = self.session.get(url, params=params or {}, timeout=30)
+            try:
+                resp = self.session.get(url, params=params or {}, timeout=30)
+            except Exception as e:
+                log.error("SalesPlay Network Error", error=str(e), attempt=attempt)
+                time.sleep(2)
+                continue
+
             if resp.status_code == 429:
                 retry_after = int(resp.headers.get("Retry-After", 10))
                 log.warning("SalesPlay rate limited", seconds=retry_after, attempt=attempt)
@@ -72,15 +78,21 @@ class SalesPlayAPIClient:
             p["updated_at_min"] = since.strftime("%Y-%m-%dT%H:%M:%SZ")
         cursor = None
 
+        prev_cursor = None
         while True:
             if cursor:
                 p["cursor"] = cursor
             data = self.get(endpoint, p)
             items = data.get(key, [])
             results.extend(items)
-            cursor = data.get("cursor")
-            if not cursor or not items:
+
+            new_cursor = data.get("cursor")
+            # Stop if no cursor, no items, or cursor is repeating (infinite loop protection)
+            if not new_cursor or not items or new_cursor == prev_cursor:
                 break
+
+            prev_cursor = new_cursor
+            cursor = new_cursor
             time.sleep(RATE_SLEEP)
 
         log.debug("SalesPlay paginate done", endpoint=endpoint, total=len(results))
@@ -173,7 +185,7 @@ def sync_shops(client: SalesPlayAPIClient, cursor, prefix: str,
 def sync_categories(client: SalesPlayAPIClient, cursor, prefix: str,
                     since: Optional[datetime] = None) -> int:
     """Sync categories → {prefix}categories."""
-    items = client.paginate("/categories", "categories", since=since)
+    items = client.paginate("/category", "categories", since=since)
     count = 0
     for c in items:
         cursor.execute(f"""
@@ -312,12 +324,29 @@ def sync_receipts(client: SalesPlayAPIClient, cursor, prefix: str,
     Returns total rows inserted across both tables.
     """
     total = 0
+    # Try /receipts first, fallback to /pos/receipts if we get a 401/404
+    endpoint = "/receipts"
+    try:
+        # Test if the endpoint is accessible
+        client.get(endpoint, {"limit": 1})
+    except Exception as e:
+        if "401" in str(e) or "404" in str(e):
+            log.warning("Receipts endpoint failed, trying fallback /pos/receipts", error=str(e))
+            endpoint = "/pos/receipts"
+        else:
+            log.error("Receipts sync aborted", error=str(e))
+            return 0
+
     for receipt_type in ["SALE", "REFUND"]:
-        items = client.paginate(
-            "/receipts", "receipts",
-            params={"types": receipt_type},
-            since=since,
-        )
+        try:
+            items = client.paginate(
+                endpoint, "receipts",
+                params={"type": receipt_type},
+                since=since,
+            )
+        except Exception as e:
+            log.warning(f"Failed to fetch {receipt_type} receipts", error=str(e))
+            continue
         for r in items:
             # First payment method for simplicity
             payments = r.get("payments") or []
