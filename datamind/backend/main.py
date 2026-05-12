@@ -38,7 +38,7 @@ from integrations import (
     connect_provider, disconnect_provider,
     get_user_connections, get_connection_status,
     trigger_sync, get_sync_history, start_scheduler,
-    get_user_total_rows,
+    get_user_total_rows, _get_internal_conn,
 )
 from credits import get_user_credits, get_usage_history, bootstrap_credit_tables
 from providers import list_providers, get_provider
@@ -797,12 +797,38 @@ def forecast(req: ForecastRequest, user: dict = Depends(current_user)):
 
 @app.get("/forecast/auto")
 def auto_forecast(periods: int = 90, user: dict = Depends(current_user)):
-    if not user.get("settings", {}).get("db_configs"):
-        raise HTTPException(
-            status_code=422,
-            detail="Forecasting requires a direct MySQL database connection. "
-                   "For SalesPlay/integration data, use the Analytics Hub revenue trend templates."
-        )
+    s = user.get("settings", {})
+
+    # Provider-only user: run forecast on their synced receipts table
+    if not s.get("db_configs"):
+        conns = get_user_connections(user["email"])
+        if not conns:
+            raise HTTPException(status_code=422, detail="No data source connected.")
+        prefix = conns[0].get("table_prefix", "")
+        if not prefix:
+            raise HTTPException(status_code=422, detail="Integration tables not ready.")
+        receipts_tbl = f"{prefix}receipts"
+        log.info("Provider auto forecast", user=user["email"], table=receipts_tbl)
+        try:
+            iconn = _get_internal_conn()
+            cursor = iconn.cursor()
+            cursor.execute(
+                f"SELECT DATE(created_at) AS ds, SUM(total_money) AS y "
+                f"FROM `{receipts_tbl}` "
+                f"WHERE created_at IS NOT NULL AND total_money > 0 "
+                f"GROUP BY DATE(created_at) ORDER BY DATE(created_at)"
+            )
+            rows = cursor.fetchall()
+            iconn.close()
+        except Exception as e:
+            log.error("Provider forecast query failed", error=str(e))
+            raise HTTPException(status_code=500, detail=str(e))
+        result = run_forecast(rows, periods)
+        result.update(used_table=receipts_tbl, used_date_col="created_at",
+                      used_value_col="total_money", from_cache=False)
+        return result
+
+    # Own-DB user
     db_config = _resolve_db(user)
     cache = get_cache(user["email"], db_config)
     auto = cache.get("auto_columns", {}) if cache else {}
@@ -866,12 +892,38 @@ def anomalies(req: AnomalyRequest, user: dict = Depends(current_user)):
 
 @app.get("/anomalies/auto")
 def auto_anomalies(user: dict = Depends(current_user)):
-    if not user.get("settings", {}).get("db_configs"):
-        raise HTTPException(
-            status_code=422,
-            detail="Anomaly Detection requires a direct MySQL database connection. "
-                   "For SalesPlay/integration data, use the Analytics Hub templates."
-        )
+    s = user.get("settings", {})
+
+    # Provider-only user: run anomaly detection on their synced receipts table
+    if not s.get("db_configs"):
+        conns = get_user_connections(user["email"])
+        if not conns:
+            raise HTTPException(status_code=422, detail="No data source connected.")
+        prefix = conns[0].get("table_prefix", "")
+        if not prefix:
+            raise HTTPException(status_code=422, detail="Integration tables not ready.")
+        receipts_tbl = f"{prefix}receipts"
+        log.info("Provider auto anomaly", user=user["email"], table=receipts_tbl)
+        try:
+            iconn = _get_internal_conn()
+            cursor = iconn.cursor()
+            cursor.execute(
+                f"SELECT DATE(created_at), SUM(total_money) "
+                f"FROM `{receipts_tbl}` "
+                f"WHERE created_at IS NOT NULL AND total_money > 0 "
+                f"GROUP BY DATE(created_at) ORDER BY DATE(created_at)"
+            )
+            rows = cursor.fetchall()
+            iconn.close()
+        except Exception as e:
+            log.error("Provider anomaly query failed", error=str(e))
+            raise HTTPException(status_code=500, detail=str(e))
+        result = run_anomaly_detection(rows, has_date=True)
+        result.update(used_table=receipts_tbl, used_date_col="created_at",
+                      used_value_col="total_money", from_cache=False)
+        return result
+
+    # Own-DB user
     db_config = _resolve_db(user)
     cache = get_cache(user["email"], db_config)
     auto = cache.get("auto_columns", {}) if cache else {}
