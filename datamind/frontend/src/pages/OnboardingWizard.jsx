@@ -37,7 +37,7 @@ function StatusBox({ ok, message }) {
   )
 }
 
-const TOTAL_STEPS = 4
+const TOTAL_STEPS = 3
 
 export default function OnboardingWizard({ onComplete }) {
   const [step, setStep]           = useState(0)
@@ -161,65 +161,26 @@ export default function OnboardingWizard({ onComplete }) {
       <div style={{ zIndex:1, width:'100%', maxWidth:480 }}>
         <StepDots total={TOTAL_STEPS} current={step} />
 
-        {/* ── STEP 0: Choose & validate LLM key ─────────────────────────── */}
+        {/* ── STEP 0: Auto-setup (hidden from user) ─────────────────────────── */}
         {step === 0 && (
           <Card>
-            <div style={{ fontSize:11, color:'rgba(255,255,255,0.3)', textTransform:'uppercase', letterSpacing:'.1em', marginBottom:6 }}>Step 1 of 3</div>
-            <div style={{ fontSize:19, fontWeight:700, color:'#f0f1fa', marginBottom:4 }}>Choose your AI model</div>
-            <div style={{ fontSize:13, color:'rgba(255,255,255,0.4)', marginBottom:22, lineHeight:1.6 }}>
-              DataMind uses an LLM to understand your database and generate analytics. Add your API key below — it's stored securely in your account.
-            </div>
-
-            {/* LLM toggle */}
-            <Label>AI Provider</Label>
-            <div style={{ display:'flex', background:'rgba(255,255,255,0.04)', borderRadius:10, padding:4, marginBottom:18, gap:3 }}>
-              {[['gemini','✦ Gemini','Free tier · fast · recommended'],['deepseek','◈ DeepSeek','Low cost · very capable']].map(([id,label,hint]) => (
-                <button key={id} onClick={() => { setLlm(id); setKeyResult(null); setApiKey('') }} style={{
-                  flex:1, padding:'9px 6px', borderRadius:7, border:'none', cursor:'pointer', transition:'all .15s',
-                  background: llm===id ? 'rgba(79,142,247,0.2)' : 'transparent',
-                  color: llm===id ? 'var(--blue)' : 'rgba(255,255,255,0.35)',
-                }}>
-                  <div style={{ fontSize:13, fontWeight:600 }}>{label}</div>
-                  <div style={{ fontSize:10, opacity:.7, marginTop:2 }}>{hint}</div>
-                </button>
-              ))}
-            </div>
-
-            <Label>
-              {llm === 'gemini' ? 'Gemini API Key' : 'DeepSeek API Key'}
-              {' — '}
-              <a href={llm==='gemini' ? 'https://aistudio.google.com/app/apikey' : 'https://platform.deepseek.com/api_keys'}
-                target="_blank" rel="noreferrer" style={{ color:'var(--blue)', textDecoration:'none' }}>
-                Get yours free ↗
-              </a>
-            </Label>
-            <input
-              type="password" value={apiKey}
-              onChange={e => { setApiKey(e.target.value); setKeyResult(null) }}
-              onKeyDown={e => e.key === 'Enter' && handleValidateKey()}
-              placeholder={llm==='gemini' ? 'AIza…' : 'sk-…'}
-              style={{ ...inp({fontFamily:'var(--mono)', letterSpacing:'.04em'}), marginBottom:12 }}
-            />
-
-            {error && <StatusBox ok={false} message={error} />}
-            {keyResult && <StatusBox ok={keyResult.ok} message={keyResult.ok ? `Key verified! Model responded: "${keyResult.response?.slice(0,40)}"` : keyResult.error} />}
-
-            <button onClick={handleValidateKey} disabled={keyTesting || !apiKey.trim()} style={{
-              width:'100%', padding:'11px', borderRadius:10, fontSize:13, fontWeight:600,
-              background: 'rgba(79,142,247,0.15)', color:'var(--blue)',
-              border:'1px solid rgba(79,142,247,0.25)', cursor: keyTesting || !apiKey.trim() ? 'not-allowed' : 'pointer',
-              display:'flex', alignItems:'center', justifyContent:'center', gap:8, marginBottom:10,
-              opacity: keyTesting || !apiKey.trim() ? 0.6 : 1
-            }}>
-              {keyTesting ? <><Spinner size={13} color="var(--blue)" /> Validating…</> : '⚡ Validate Key'}
-            </button>
-
-            <NextBtn onClick={() => { setStep(1); setError('') }} disabled={!keyResult?.ok}>
-              Continue → Add Database
-            </NextBtn>
-
-            <div style={{ textAlign:'center', marginTop:14, fontSize:11, color:'rgba(255,255,255,0.2)' }}>
-              Your key is sent only to {llm==='gemini'?'Google':'DeepSeek'}'s API. We never store it in plain text.
+            {(() => {
+              // Auto-set default LLM and skip to next step
+              setTimeout(async () => {
+                try {
+                  await patchSettings({ default_llm: 'gemini' })
+                  const p = await fetchProviders()
+                  setProviders(p.providers || [])
+                  setStep(1)
+                } catch(e) {
+                  setError(e.message)
+                }
+              }, 500)
+              return null
+            })()}
+            <div style={{ textAlign:'center', padding:'60px 20px', color:'rgba(255,255,255,0.3)' }}>
+              <Spinner size={32} />
+              <div style={{ marginTop:16, fontSize:14 }}>Setting up DataMind AI...</div>
             </div>
           </Card>
         )}
@@ -408,13 +369,12 @@ export default function OnboardingWizard({ onComplete }) {
             <div style={{ fontSize:11, color:'rgba(255,255,255,0.3)', textTransform:'uppercase', letterSpacing:'.1em', marginBottom:6 }}>Step 3 of 3</div>
             <div style={{ fontSize:19, fontWeight:700, color:'#f0f1fa', marginBottom:4 }}>Build your analytics cache</div>
             <div style={{ fontSize:13, color:'rgba(255,255,255,0.4)', marginBottom:22, lineHeight:1.6 }}>
-              DataMind will now read your schema and ask {llm === 'gemini' ? 'Gemini' : 'DeepSeek'} to generate custom SQL for every analytics template. This runs <strong style={{color:'rgba(255,255,255,.6)'}}>once</strong> and is cached forever.
+              DataMind will now read your schema and generate custom SQL for every analytics template using AI. This runs <strong style={{color:'rgba(255,255,255,.6)'}}>once</strong> and is cached forever.
             </div>
 
             {/* Summary */}
             <div style={{ background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.06)', borderRadius:10, padding:'14px 16px', marginBottom:18 }}>
               {[
-                ['AI Model', llm === 'gemini' ? '✦ Gemini' : '◈ DeepSeek'],
                 ['Database', `${dbForm.database} @ ${dbForm.host}:${dbForm.port}`],
                 ['Tables found', dbResult?.table_count || '?'],
               ].map(([k,v]) => (
@@ -429,7 +389,7 @@ export default function OnboardingWizard({ onComplete }) {
             <div style={{ marginBottom:18 }}>
               {[
                 { icon:'🔍', text:'Read your full schema and foreign keys' },
-                { icon:'🧠', text:`Ask ${llm==='gemini'?'Gemini':'DeepSeek'} to generate SQL for 21 analytics templates` },
+                { icon:'🧠', text:'Generate SQL for 21 analytics templates using AI' },
                 { icon:'✅', text:'Validate each query with EXPLAIN' },
                 { icon:'⚡', text:'Cache everything — future loads are instant, zero AI tokens' },
               ].map(({icon,text},i) => (
