@@ -288,7 +288,10 @@ def _get_integration_id(cursor, user_email, provider_id) -> int:
         (user_email, provider_id)
     )
     row = cursor.fetchone()
-    return row[0] if row else 0
+    if not row:
+        return 0
+    # cursor may be a dict cursor (fetchone returns dict) or a tuple cursor
+    return row["id"] if isinstance(row, dict) else row[0]
 
 
 def _split_sql(sql: str) -> List[str]:

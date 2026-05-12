@@ -36,7 +36,7 @@ export default function App() {
     pollCacheStatus()
   }, [user])
 
-  async function checkSetup() {
+  async function checkSetup({ suppressOnboarding = false } = {}) {
     try {
       const [s, providers, stats] = await Promise.all([
         fetchSettings(),
@@ -47,7 +47,7 @@ export default function App() {
       const hasKey = !!(s.gemini_api_key || s.deepseek_api_key)
       const hasProvider = providers.connections?.length > 0
 
-      if (!hasKey) { setShowOnboarding(true); return }
+      if (!hasKey) { if (!suppressOnboarding) setShowOnboarding(true); return }
 
       setTotalRows(stats.total_rows || 0)
 
@@ -58,7 +58,7 @@ export default function App() {
       } else if (hasDB) {
         const cfg = s.db_configs[s.active_db_index || 0]
         setConnection({ display_name: cfg?.name || cfg?.database, type:'db', logo:'🗄' })
-      } else if (hasKey) {
+      } else if (!suppressOnboarding) {
         setShowOnboarding(true)
       }
 
@@ -90,11 +90,15 @@ export default function App() {
 
   if (!user) return <AuthPage onAuth={handleAuth} />
   if (showOnboarding) return (
-    <OnboardingWizard onComplete={() => {
-      setShowOnboarding(false)
-      checkSetup()
-      pollCacheStatus()
-    }} />
+    <OnboardingWizard
+      onComplete={() => {
+        setShowOnboarding(false)
+        checkSetup({ suppressOnboarding: true })
+        pollCacheStatus()
+      }}
+      theme={theme}
+      setTheme={setTheme}
+    />
   )
 
   const noScroll = ['chat', 'discover', 'reports'].includes(page)

@@ -1,5 +1,5 @@
-import React, { useState } from 'react'
-import { onboardingValidateKey, onboardingTestDB, onboardingConnectDB, patchSettings, fetchProviders, validateProviderCreds, connectProvider } from '../utils/api'
+import React, { useState, useEffect } from 'react'
+import { onboardingValidateKey, onboardingTestDB, onboardingConnectDB, patchSettings, fetchProviders, validateProviderCreds, connectProvider, fetchProviderStatus, fetchConnectedProviders } from '../utils/api'
 import { Spinner } from '../components/UI'
 
 // ── Step indicator ────────────────────────────────────────────────────────────
@@ -39,7 +39,7 @@ function StatusBox({ ok, message }) {
 
 const TOTAL_STEPS = 3
 
-export default function OnboardingWizard({ onComplete }) {
+export default function OnboardingWizard({ onComplete, theme, setTheme }) {
   const [step, setStep]           = useState(0)
 
   // Step 0 — LLM choice
@@ -66,7 +66,45 @@ export default function OnboardingWizard({ onComplete }) {
   const [connectDone, setConnectDone] = useState(false)
   const [connectErr, setConnectErr]   = useState('')
 
+  // Provider sync progress
+  const [syncConnId, setSyncConnId]     = useState(null)
+  const [syncProgress, setSyncProgress] = useState(null)
+
   const [error, setError]         = useState('')
+
+  // Poll sync status after provider connect
+  useEffect(() => {
+    if (!syncConnId) return
+    let active = true
+    let tid
+    let errCount = 0
+
+    async function poll() {
+      if (!active) return
+      try {
+        const s = await fetchProviderStatus(syncConnId)
+        if (!active) return
+        errCount = 0
+        setSyncProgress(s)
+        if (s.status === 'syncing' || s.status === 'pending') {
+          tid = setTimeout(poll, 2000)
+        } else {
+          // connected / error / any terminal state → advance
+          tid = setTimeout(() => setStep(3), 800)
+        }
+      } catch {
+        errCount++
+        // After 5 consecutive failures (~15s) assume sync finished on the backend
+        if (errCount >= 5) {
+          if (active) tid = setTimeout(() => setStep(3), 800)
+        } else {
+          tid = setTimeout(poll, 3000)
+        }
+      }
+    }
+    poll()
+    return () => { active = false; clearTimeout(tid) }
+  }, [syncConnId])
 
   // ── Step 0: Validate LLM key ────────────────────────────────────────────────
   async function handleValidateKey() {
@@ -144,6 +182,25 @@ export default function OnboardingWizard({ onComplete }) {
     <div style={{ minHeight:'100vh', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', background:'#09090f', padding:'24px 16px', fontFamily:'var(--font)', position:'relative', overflow:'hidden' }}>
       <Bg />
 
+      {/* Theme toggle */}
+      {setTheme && (
+        <button
+          onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}
+          title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+          style={{
+            position:'fixed', top:16, right:16, zIndex:100,
+            width:36, height:36, borderRadius:'50%',
+            background:'rgba(255,255,255,0.07)', border:'1px solid rgba(255,255,255,0.12)',
+            cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center',
+            fontSize:16, transition:'background .15s',
+          }}
+          onMouseEnter={e => e.currentTarget.style.background='rgba(255,255,255,0.14)'}
+          onMouseLeave={e => e.currentTarget.style.background='rgba(255,255,255,0.07)'}
+        >
+          {theme === 'dark' ? '☀️' : '🌙'}
+        </button>
+      )}
+
       {/* Logo */}
       <div style={{ textAlign:'center', marginBottom:28, zIndex:1 }}>
         <div style={{ display:'inline-flex', alignItems:'center', justifyContent:'center', width:48, height:48, borderRadius:13, background:'linear-gradient(135deg,#4f8ef7,#a78bfa)', marginBottom:12, boxShadow:'0 8px 24px rgba(79,142,247,0.3)' }}>
@@ -186,7 +243,7 @@ export default function OnboardingWizard({ onComplete }) {
         )}
 
         {/* ── STEP 0.5: Choose data source type ─────────────────────────── */}
-        {step === 1 && sourceType === '' && (
+        {step === 1 && sourceType === '' && !syncConnId && (
           <Card>
             <div style={{ fontSize:11, color:'rgba(255,255,255,0.3)', textTransform:'uppercase', letterSpacing:'.1em', marginBottom:6 }}>Step 2 of 3</div>
             <div style={{ fontSize:19, fontWeight:700, color:'#f0f1fa', marginBottom:4 }}>How do you want to connect your data?</div>
@@ -232,7 +289,7 @@ export default function OnboardingWizard({ onComplete }) {
         )}
 
         {/* ── STEP 1b: Choose provider ──────────────────────────────────── */}
-        {step === 1 && sourceType === 'provider' && !selProvider && (
+        {step === 1 && sourceType === 'provider' && !selProvider && !syncConnId && (
           <Card>
             <div style={{ fontSize:11, color:'rgba(255,255,255,0.3)', textTransform:'uppercase', letterSpacing:'.1em', marginBottom:6 }}>Step 2 of 3</div>
             <div style={{ fontSize:19, fontWeight:700, color:'#f0f1fa', marginBottom:16 }}>Choose your integration</div>
@@ -256,7 +313,7 @@ export default function OnboardingWizard({ onComplete }) {
         )}
 
         {/* ── STEP 1c: Provider credentials ────────────────────────────── */}
-        {step === 1 && sourceType === 'provider' && selProvider && (
+        {step === 1 && sourceType === 'provider' && selProvider && !syncConnId && (
           <Card>
             <div style={{ fontSize:11, color:'rgba(255,255,255,0.3)', textTransform:'uppercase', letterSpacing:'.1em', marginBottom:6 }}>Step 2 of 3</div>
             <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:16 }}>
@@ -299,9 +356,16 @@ export default function OnboardingWizard({ onComplete }) {
             <NextBtn onClick={async () => {
               setConnecting(true)
               try {
-                await connectProvider(selProvider.provider_id, providerCreds)
-                setConnectDone(true)
-                setTimeout(() => setStep(3), 600)
+                const result = await connectProvider(selProvider.provider_id, providerCreds)
+                const connId = result?.connection_id
+                if (connId) {
+                  setSyncConnId(connId)
+                } else {
+                  const connected = await fetchConnectedProviders().catch(() => ({connections:[]}))
+                  const latest = connected.connections?.[0]
+                  if (latest?.connection_id) setSyncConnId(latest.connection_id)
+                  else setTimeout(() => setStep(3), 600)
+                }
               } catch(e) { setConnectErr(e.message) }
               finally { setConnecting(false) }
             }} disabled={!provResult?.ok || connecting}>
@@ -311,8 +375,7 @@ export default function OnboardingWizard({ onComplete }) {
         )}
 
         {/* ── STEP 1 (DB): Add database ─────────────────────────────────── */}
-        {/* ── STEP 1 (DB original): ─────────────────────────────────────── */}
-        {step === 1 && sourceType === 'db' && (
+        {step === 1 && sourceType === 'db' && !syncConnId && (
           <Card>
             <div style={{ fontSize:11, color:'rgba(255,255,255,0.3)', textTransform:'uppercase', letterSpacing:'.1em', marginBottom:6 }}>Step 2 of 3</div>
             <div style={{ fontSize:19, fontWeight:700, color:'#f0f1fa', marginBottom:4 }}>Connect your MySQL database</div>
@@ -364,7 +427,7 @@ export default function OnboardingWizard({ onComplete }) {
         )}
 
         {/* ── STEP 2: Confirm + build cache ─────────────────────────────── */}
-        {step === 2 && (
+        {step === 2 && !syncConnId && (
           <Card>
             <div style={{ fontSize:11, color:'rgba(255,255,255,0.3)', textTransform:'uppercase', letterSpacing:'.1em', marginBottom:6 }}>Step 3 of 3</div>
             <div style={{ fontSize:19, fontWeight:700, color:'#f0f1fa', marginBottom:4 }}>Build your analytics cache</div>
@@ -420,6 +483,63 @@ export default function OnboardingWizard({ onComplete }) {
             </div>
           </Card>
         )}
+
+        {/* ── SYNC LOADING: Provider data syncing ───────────────────────── */}
+        {syncConnId && step !== 3 && (() => {
+          const prog    = syncProgress?.progress
+          const pct     = prog?.percent ?? 0
+          const rows    = prog?.rows_synced ?? 0
+          const elapsed = prog?.elapsed_s ?? 0
+          const eta     = pct > 8 ? Math.round((elapsed / pct) * (100 - pct)) : null
+          const etaStr  = eta == null ? '' : eta < 60 ? `~${eta}s left` : `~${Math.round(eta/60)}m left`
+          const msg     = prog?.message || 'Fetching your data…'
+          return (
+            <Card>
+              <style>{`@keyframes obSlide{0%{transform:translateX(-100%)}100%{transform:translateX(400%)}}`}</style>
+              <div style={{ textAlign:'center', paddingBottom:8 }}>
+                <div style={{ fontSize:48, marginBottom:10 }}>{selProvider?.logo_emoji || '🔌'}</div>
+                <div style={{ fontSize:18, fontWeight:700, color:'#f0f1fa', marginBottom:4 }}>
+                  Syncing {selProvider?.display_name}…
+                </div>
+                <div style={{ fontSize:13, color:'rgba(255,255,255,0.4)', marginBottom:20, minHeight:18 }}>{msg}</div>
+
+                {/* Progress bar */}
+                <div style={{ height:4, background:'rgba(255,255,255,0.08)', borderRadius:2, overflow:'hidden', marginBottom:8 }}>
+                  {pct > 0
+                    ? <div style={{ height:'100%', width:`${pct}%`, background:'#f59e0b', borderRadius:2, transition:'width .6s ease' }} />
+                    : <div style={{ height:'100%', width:'30%', background:'#f59e0b', borderRadius:2, animation:'obSlide 1.4s linear infinite' }} />
+                  }
+                </div>
+
+                {/* Stats */}
+                <div style={{ display:'flex', justifyContent:'center', gap:16, fontSize:12, color:'rgba(255,255,255,0.35)', marginBottom:20 }}>
+                  {rows > 0 && <span>{rows.toLocaleString()} rows synced</span>}
+                  {etaStr  && <span>{etaStr}</span>}
+                  {pct > 0 && <span>{pct}%</span>}
+                </div>
+
+                {/* What's happening list */}
+                <div style={{ textAlign:'left', background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.06)', borderRadius:10, padding:'12px 14px', marginBottom:16 }}>
+                  {[
+                    { icon:'🔗', text:'Authenticating with your account' },
+                    { icon:'📥', text:'Downloading and indexing your records' },
+                    { icon:'🧠', text:'Building AI analytics cache' },
+                    { icon:'⚡', text:'Future queries will be instant' },
+                  ].map(({ icon, text }, i) => (
+                    <div key={i} style={{ display:'flex', gap:10, alignItems:'center', padding:'5px 0', borderBottom: i < 3 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
+                      <span style={{ fontSize:15, flexShrink:0 }}>{icon}</span>
+                      <span style={{ fontSize:12, color:'rgba(255,255,255,0.4)' }}>{text}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ fontSize:12, color:'rgba(255,255,255,0.25)' }}>
+                  You'll be taken to Analytics Hub automatically when ready.
+                </div>
+              </div>
+            </Card>
+          )
+        })()}
 
         {/* ── STEP 3: Done ──────────────────────────────────────────────── */}
         {step === 3 && (
