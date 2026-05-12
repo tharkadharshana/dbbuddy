@@ -75,7 +75,7 @@ function NavItem({ id, label, icon, active, setActive, badge }) {
   )
 }
 
-export default function Sidebar({ active, setActive, connection, cacheStatus, theme, setTheme }) {
+export default function Sidebar({ active, setActive, connection, cacheStatus, totalRows, theme, setTheme }) {
   const cacheOk      = cacheStatus?.cached
   const cacheBuilding= cacheStatus?.build?.status === 'building'
 
@@ -115,7 +115,13 @@ export default function Sidebar({ active, setActive, connection, cacheStatus, th
             <div style={{ flex:1, minWidth:0 }}>
               <div style={{ fontSize:12, fontWeight:600, color:'var(--text)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{connection.display_name || connection.name}</div>
               <div style={{ fontSize:10, color:'var(--text3)', marginTop:1 }}>
-                {cacheBuilding ? '⚡ Building cache…' : cacheOk ? `⚡ ${cacheStatus.template_count} analytics ready` : 'Connected'}
+                {cacheBuilding
+                  ? '⚡ Building cache…'
+                  : cacheOk
+                    ? `⚡ ${cacheStatus.template_count} analytics ready`
+                    : totalRows > 0
+                      ? `${totalRows.toLocaleString()} rows synced`
+                      : 'Connected'}
               </div>
             </div>
             <span style={{ fontSize:10, color:'var(--text3)' }}>›</span>

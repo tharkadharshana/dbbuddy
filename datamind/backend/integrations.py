@@ -29,6 +29,9 @@ from providers.base import SyncResult
 
 log = get_logger(__name__)
 
+# In-memory sync progress store  keyed by integration_id; cleared when sync finishes
+_sync_progress: Dict[int, Dict] = {}
+
 
 # ── DataMind's own internal DB connection ─────────────────────────────────────
 
@@ -328,12 +331,47 @@ def _run_sync(integration_id: int, user_email: str, provider_id: str,
     log.info("Sync worker starting", user=user_email, provider=provider_id,
              sync_type=sync_type, since=str(since))
 
+    # Set up in-memory progress tracking
+    sync_start   = time.time()
+    steps_done   = [0]
+    rows_so_far  = [0]
+    total_steps  = 6   # Salesplay has 6 entity types; providers can vary but 6 is a safe default
+
+    def _progress(msg: str):
+        clean = msg.strip()
+        # A line starting with "✓" means one step just finished
+        if clean.startswith("✓") or clean.startswith("✅"):
+            if clean.startswith("✓"):
+                steps_done[0] += 1
+            # Extract row count from "✓ Shops: 314 rows" or "  ✓ Shops: 314 rows"
+            try:
+                count_str = clean.split(":", 1)[1].split("rows")[0].strip()
+                rows_so_far[0] += int(count_str)
+            except Exception:
+                pass
+        elapsed = int(time.time() - sync_start)
+        pct     = min(int((steps_done[0] / total_steps) * 100), 99)
+        _sync_progress[integration_id] = {
+            "message":    clean,
+            "percent":    pct,
+            "rows_synced": rows_so_far[0],
+            "elapsed_s":  elapsed,
+        }
+        if progress_callback:
+            progress_callback(msg)
+
+    # Seed initial progress so UI shows something immediately
+    _sync_progress[integration_id] = {
+        "message": "Starting sync…", "percent": 0,
+        "rows_synced": 0, "elapsed_s": 0,
+    }
+
     result: SyncResult = provider.sync(
         creds=creds,
         conn=_get_internal_conn(),  # fresh connection for the sync itself
         table_prefix=table_prefix,
         since=since,
-        progress_callback=progress_callback,
+        progress_callback=_progress,
     )
 
     # Update status
@@ -361,6 +399,9 @@ def _run_sync(integration_id: int, user_email: str, provider_id: str,
     ))
     conn2.commit()
     conn2.close()
+
+    # Clear in-memory progress now that sync is done
+    _sync_progress.pop(integration_id, None)
 
     log.info("Sync worker finished", user=user_email, provider=provider_id,
              status=status, rows=result.rows_fetched)
@@ -520,20 +561,22 @@ def get_connection_status(user_email: str, connection_id: str) -> Dict:
         """, (integration_id,))
         row = cursor.fetchone() or {}
 
-        # Count total rows across provider tables
+        # Count total rows using actual COUNT(*) — information_schema is approximate for InnoDB
         total_rows = 0
         table_prefix = row.get("table_prefix", "")
         if table_prefix:
             try:
                 cursor.execute("""
-                    SELECT SUM(TABLE_ROWS) as total
-                    FROM information_schema.TABLES
-                    WHERE TABLE_NAME LIKE %s
+                    SELECT TABLE_NAME FROM information_schema.TABLES
+                    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME LIKE %s
                 """, (f"{table_prefix}%",))
-                tr = cursor.fetchone()
-                total_rows = int(tr.get("total") or 0) if tr else 0
-            except Exception:
-                pass
+                tables = [r["TABLE_NAME"] for r in cursor.fetchall()]
+                for tbl in tables:
+                    cursor.execute(f"SELECT COUNT(*) AS cnt FROM `{tbl}`")
+                    r = cursor.fetchone()
+                    total_rows += int((r or {}).get("cnt") or 0)
+            except Exception as e:
+                log.warning("Row count failed", prefix=table_prefix, error=str(e))
 
         # Map backend status to frontend
         backend_status = row.get("status", "unknown")
@@ -548,13 +591,45 @@ def get_connection_status(user_email: str, connection_id: str) -> Dict:
         else:
             frontend_status = "pending"
 
+        progress = _sync_progress.get(integration_id) if backend_status == "syncing" else None
+
         return {
-            "status": frontend_status,  # ← FIXED: Return frontend-expected status
+            "status": frontend_status,
             "last_sync_at": str(row["last_sync_at"]) if row.get("last_sync_at") else None,
             "last_sync_rows": row.get("last_sync_rows", 0),
             "total_rows": total_rows,
             "last_error": row.get("last_error"),
+            "progress": progress,
         }
+    finally:
+        conn.close()
+
+
+def get_user_total_rows(user_email: str) -> int:
+    """Sum COUNT(*) across all synced tables for every integration the user has."""
+    conn = _get_internal_conn()
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute(
+            "SELECT table_prefix FROM user_integrations WHERE user_email=%s",
+            (user_email,)
+        )
+        prefixes = [r["table_prefix"] for r in cursor.fetchall()]
+        total = 0
+        for prefix in prefixes:
+            cursor.execute("""
+                SELECT TABLE_NAME FROM information_schema.TABLES
+                WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME LIKE %s
+            """, (f"{prefix}%",))
+            tables = [r["TABLE_NAME"] for r in cursor.fetchall()]
+            for tbl in tables:
+                cursor.execute(f"SELECT COUNT(*) AS cnt FROM `{tbl}`")
+                r = cursor.fetchone()
+                total += int((r or {}).get("cnt") or 0)
+        return total
+    except Exception as e:
+        log.warning("get_user_total_rows failed", user=user_email, error=str(e))
+        return 0
     finally:
         conn.close()
 

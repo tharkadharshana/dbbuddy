@@ -34,26 +34,90 @@ function ProviderCard({ provider, onConnect }) {
   )
 }
 
+// ── Sync progress bar ─────────────────────────────────────────────────────────
+const syncBarStyle = `
+  @keyframes syncSlide {
+    0%   { transform: translateX(-100%); }
+    100% { transform: translateX(400%); }
+  }
+`
+
+function SyncProgress({ progress }) {
+  const pct     = progress?.percent ?? 0
+  const msg     = progress?.message || 'Syncing…'
+  const rows    = progress?.rows_synced ?? 0
+  const elapsed = progress?.elapsed_s ?? 0
+  const eta     = pct > 8 ? Math.round((elapsed / pct) * (100 - pct)) : null
+  const etaStr  = eta == null ? '' : eta < 60 ? `~${eta}s left` : `~${Math.round(eta/60)}m left`
+
+  return (
+    <div style={{ marginTop:6 }}>
+      <style>{syncBarStyle}</style>
+      <div style={{ height:3, background:'var(--bg3)', borderRadius:2, overflow:'hidden', marginBottom:5 }}>
+        {pct > 0
+          ? <div style={{ height:'100%', width:`${pct}%`, background:'var(--amber)', borderRadius:2, transition:'width .6s ease' }} />
+          : <div style={{ height:'100%', width:'30%', background:'var(--amber)', borderRadius:2, animation:'syncSlide 1.4s linear infinite' }} />
+        }
+      </div>
+      <div style={{ display:'flex', justifyContent:'space-between', fontSize:11, color:'var(--amber)' }}>
+        <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'65%' }}>{msg}</span>
+        <span style={{ flexShrink:0 }}>
+          {rows > 0 && `${rows.toLocaleString()} rows`}{etaStr && ` · ${etaStr}`}
+        </span>
+      </div>
+    </div>
+  )
+}
+
 // ── Connected row ─────────────────────────────────────────────────────────────
 function ConnectedRow({ conn, onDisconnect, onSync }) {
-  const [status, setStatus] = useState(null)
-  const [syncing, setSyncing] = useState(false)
+  const [status, setStatus]   = useState(null)
+  const [syncingBtn, setSyncingBtn] = useState(false)
+  const [pollKey, setPollKey] = useState(0)   // increment to restart poll loop
+  const statusRef = React.useRef(null)
 
+  // Self-scheduling poll: polls every 2s while syncing, single fetch otherwise
   useEffect(() => {
-    fetchProviderStatus(conn.connection_id)
-      .then(setStatus).catch(() => {})
-  }, [conn.connection_id])
+    let active = true
+    let tid
+
+    async function poll() {
+      try {
+        const s = await fetchProviderStatus(conn.connection_id)
+        if (!active) return
+        const wasSyncing = statusRef.current?.status === 'syncing'
+        statusRef.current = s
+        setStatus(s)
+        if (s.status === 'syncing') {
+          tid = setTimeout(poll, 2000)
+        } else if (wasSyncing) {
+          onSync?.()   // sync just finished — refresh parent list + row counts
+        }
+      } catch {}
+    }
+
+    poll()
+    return () => { active = false; clearTimeout(tid) }
+  }, [conn.connection_id, pollKey])
 
   async function handleSync() {
-    setSyncing(true)
+    setSyncingBtn(true)
     try {
       await syncProvider(conn.connection_id)
-      setTimeout(() => fetchProviderStatus(conn.connection_id).then(setStatus).catch(() => {}), 2000)
-    } finally { setSyncing(false) }
+      // Optimistically show syncing, then restart the poll loop
+      statusRef.current = null
+      setStatus(s => s ? { ...s, status: 'syncing', progress: null } : s)
+      setPollKey(k => k + 1)
+    } finally { setSyncingBtn(false) }
   }
 
-  const lastSync = conn.last_sync_at ? new Date(conn.last_sync_at).toLocaleString() : 'Never'
-  const isOk = conn.last_sync_status === 'ok'
+  const liveStatus = status?.status || conn.last_sync_status
+  const isConnected  = liveStatus === 'connected'
+  const isSyncing    = liveStatus === 'syncing'
+
+  const rawTs   = status?.last_sync_at || conn.last_sync_at
+  const lastSync = rawTs ? new Date(rawTs).toLocaleString() : 'Never'
+  const records  = status?.total_rows ?? 0
 
   return (
     <Card style={{ padding:'16px 18px' }}>
@@ -62,22 +126,18 @@ function ConnectedRow({ conn, onDisconnect, onSync }) {
         <div style={{ flex:1, minWidth:0 }}>
           <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:3 }}>
             <div style={{ fontWeight:600, fontSize:14 }}>{conn.display_name}</div>
-            <Badge color={isOk ? 'green' : conn.last_sync_status === 'syncing' ? 'amber' : 'gray'}>
-              {conn.last_sync_status === 'syncing' ? 'Syncing…' : isOk ? 'Connected' : 'Pending'}
+            <Badge color={isConnected ? 'green' : isSyncing ? 'amber' : 'gray'}>
+              {isSyncing ? 'Syncing…' : isConnected ? 'Connected' : 'Pending'}
             </Badge>
           </div>
           <div style={{ fontSize:11, color:'var(--text3)' }}>
-            {status ? `${status.total_rows?.toLocaleString() || 0} records` : '—'} &nbsp;·&nbsp; Last sync: {lastSync}
+            {records.toLocaleString()} records &nbsp;·&nbsp; Last sync: {lastSync}
           </div>
-          {conn.last_sync_status === 'syncing' && (
-            <div style={{ fontSize:11, color:'var(--amber)', marginTop:4 }}>
-              {status?.progress?.slice(-1)?.[0] || 'Syncing in background…'}
-            </div>
-          )}
+          {isSyncing && <SyncProgress progress={status?.progress} />}
         </div>
         <div style={{ display:'flex', gap:6, flexShrink:0 }}>
-          <Btn size="sm" variant="ghost" onClick={handleSync} disabled={syncing}>
-            {syncing ? <><Spinner size={11} /> Syncing…</> : '↺ Sync'}
+          <Btn size="sm" variant="ghost" onClick={handleSync} disabled={syncingBtn || isSyncing}>
+            {syncingBtn ? <><Spinner size={11} /> Starting…</> : '↺ Sync'}
           </Btn>
           <Btn size="sm" variant="danger" onClick={() => onDisconnect(conn.connection_id)}>Disconnect</Btn>
         </div>
@@ -279,7 +339,8 @@ export default function ConnectionsPage({ onConnectionChange }) {
           ) : (
             <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
               {connected.map(c => (
-                <ConnectedRow key={c.connection_id} conn={c} onDisconnect={handleDisconnect} onSync={() => {}} />
+                <ConnectedRow key={c.connection_id} conn={c} onDisconnect={handleDisconnect}
+                  onSync={() => { load(); onConnectionChange?.() }} />
               ))}
             </div>
           )}

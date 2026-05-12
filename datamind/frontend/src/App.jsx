@@ -9,7 +9,7 @@ import ReportsPage       from './pages/ReportsPage'
 import SettingsPage      from './pages/SettingsPage'
 import ConnectionsPage   from './pages/ConnectionsPage'
 import Sidebar           from './components/Sidebar'
-import { fetchTables, fetchCacheStatus, fetchSettings, fetchConnectedProviders } from './utils/api'
+import { fetchTables, fetchCacheStatus, fetchSettings, fetchConnectedProviders, fetchProviderStats } from './utils/api'
 
 export default function App() {
   const [user, setUser]       = useState(() => {
@@ -21,6 +21,7 @@ export default function App() {
   const [connection, setConnection]   = useState(null) // active connection summary
   const [showOnboarding, setShowOnboarding] = useState(false)
   const [theme, setTheme]       = useState(() => localStorage.getItem('dm_theme') || 'dark')
+  const [totalRows, setTotalRows] = useState(0)
   const pollRef = useRef(null)
 
   // Apply theme to document root
@@ -37,12 +38,18 @@ export default function App() {
 
   async function checkSetup() {
     try {
-      const [s, providers] = await Promise.all([fetchSettings(), fetchConnectedProviders().catch(() => ({connections:[]}))])
+      const [s, providers, stats] = await Promise.all([
+        fetchSettings(),
+        fetchConnectedProviders().catch(() => ({connections:[]})),
+        fetchProviderStats().catch(() => ({total_rows:0})),
+      ])
       const hasDB  = s.db_configs?.length > 0
       const hasKey = !!(s.gemini_api_key || s.deepseek_api_key)
       const hasProvider = providers.connections?.length > 0
 
       if (!hasKey) { setShowOnboarding(true); return }
+
+      setTotalRows(stats.total_rows || 0)
 
       // Set active connection label
       if (hasProvider) {
@@ -109,6 +116,7 @@ export default function App() {
         setActive={setPage}
         connection={connection}
         cacheStatus={cacheStatus}
+        totalRows={totalRows}
         theme={theme}
         setTheme={setTheme}
       />

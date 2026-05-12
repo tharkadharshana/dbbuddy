@@ -38,6 +38,7 @@ from integrations import (
     connect_provider, disconnect_provider,
     get_user_connections, get_connection_status,
     trigger_sync, get_sync_history, start_scheduler,
+    get_user_total_rows,
 )
 from credits import get_user_credits, get_usage_history, bootstrap_credit_tables
 from providers import list_providers, get_provider
@@ -1014,6 +1015,15 @@ def connect_provider_route(req: ProviderConnectRequest,
         return {"ok": True, "connection_id": connection_id}
     except Exception as e:
         log.error("Provider connect failed", provider=req.provider_id, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/providers/stats")
+def provider_stats(user: dict = Depends(current_user)):
+    """Return aggregate stats across all user integrations (total rows across all providers)."""
+    try:
+        return {"total_rows": get_user_total_rows(user["email"])}
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
