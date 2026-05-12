@@ -53,28 +53,26 @@ export function addTokenUsage(llm, tokens) {
 
 export function UsageMeter() {
   const [credits, setCredits] = React.useState(null)
-  const [loading, setLoading] = React.useState(true)
+  const [totalRows, setTotalRows] = React.useState(0)
 
   React.useEffect(() => {
-    fetch('/api/credits', {
-      headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
-    })
+    const auth = { 'Authorization': `Bearer ${localStorage.getItem('dm_token')}` }
+    fetch('/api/credits', { headers: auth })
       .then(r => r.ok ? r.json() : null)
-      .then(data => {
-        setCredits(data)
-        setLoading(false)
-      })
-      .catch(() => setLoading(false))
+      .then(data => setCredits(data))
+      .catch(() => {})
+    fetch('/api/providers/stats', { headers: auth })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data?.total_rows) setTotalRows(data.total_rows) })
+      .catch(() => {})
   }, [])
-
-  if (loading) return null
 
   const tokensUsed = credits?.total_tokens_used || 0
   const tokensLimit = 1_000_000
   const tokensPct = Math.min(100, Math.round((tokensUsed / tokensLimit) * 100))
 
-  const rowsUsed = credits?.total_db_rows || 0
-  const rowsLimit = 1000
+  const rowsUsed = totalRows || credits?.total_db_rows || 0
+  const rowsLimit = 100_000
   const rowsPct = Math.min(100, Math.round((rowsUsed / rowsLimit) * 100))
 
   const getColor = (pct) => pct > 80 ? 'var(--red)' : pct > 50 ? 'var(--amber)' : 'var(--blue)'

@@ -149,8 +149,24 @@ def _resolve_api_key(user: dict, llm: str) -> str:
 
 
 def _get_llm(user: dict) -> str:
-    """Return user's preferred LLM from settings."""
-    return user.get("settings", {}).get("default_llm", "gemini") or "gemini"
+    """Return user's preferred LLM, falling back to whichever one actually has a key."""
+    s = user.get("settings", {})
+    preferred = (s.get("default_llm") or "gemini").lower()
+
+    def _has_key(name: str) -> bool:
+        if name == "gemini":
+            return bool(s.get("gemini_api_key", "").strip() or os.getenv("GEMINI_API_KEY", "").strip())
+        if name == "deepseek":
+            return bool(s.get("deepseek_api_key", "").strip() or os.getenv("DEEPSEEK_API_KEY", "").strip())
+        return False
+
+    if _has_key(preferred):
+        return preferred
+    for fallback in ("gemini", "deepseek"):
+        if fallback != preferred and _has_key(fallback):
+            log.info("LLM key fallback", preferred=preferred, using=fallback, user=user.get("email"))
+            return fallback
+    return preferred  # let _resolve_api_key raise the informative error
 
 
 def _status_key(email: str, db_config: dict) -> str:
@@ -553,6 +569,13 @@ def cache_progress(user: dict = Depends(current_user)):
 @app.post("/cache/rebuild")
 def rebuild_cache(background_tasks: BackgroundTasks,
                   user: dict = Depends(current_user)):
+    if not user.get("settings", {}).get("db_configs"):
+        raise HTTPException(
+            status_code=422,
+            detail="Analytics rebuild requires a direct MySQL database connection. "
+                   "Integration analytics templates (SalesPlay, Loyverse, etc.) are "
+                   "pre-built and don't need an AI rebuild — use the Analytics Hub."
+        )
     db_config = _resolve_db(user)
     invalidate_cache(user["email"], db_config)
     llm = _get_llm(user)
@@ -774,6 +797,12 @@ def forecast(req: ForecastRequest, user: dict = Depends(current_user)):
 
 @app.get("/forecast/auto")
 def auto_forecast(periods: int = 90, user: dict = Depends(current_user)):
+    if not user.get("settings", {}).get("db_configs"):
+        raise HTTPException(
+            status_code=422,
+            detail="Forecasting requires a direct MySQL database connection. "
+                   "For SalesPlay/integration data, use the Analytics Hub revenue trend templates."
+        )
     db_config = _resolve_db(user)
     cache = get_cache(user["email"], db_config)
     auto = cache.get("auto_columns", {}) if cache else {}
@@ -837,6 +866,12 @@ def anomalies(req: AnomalyRequest, user: dict = Depends(current_user)):
 
 @app.get("/anomalies/auto")
 def auto_anomalies(user: dict = Depends(current_user)):
+    if not user.get("settings", {}).get("db_configs"):
+        raise HTTPException(
+            status_code=422,
+            detail="Anomaly Detection requires a direct MySQL database connection. "
+                   "For SalesPlay/integration data, use the Analytics Hub templates."
+        )
     db_config = _resolve_db(user)
     cache = get_cache(user["email"], db_config)
     auto = cache.get("auto_columns", {}) if cache else {}

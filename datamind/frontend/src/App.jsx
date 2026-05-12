@@ -43,26 +43,28 @@ export default function App() {
         fetchConnectedProviders().catch(() => ({connections:[]})),
         fetchProviderStats().catch(() => ({total_rows:0})),
       ])
-      const hasDB  = s.db_configs?.length > 0
-      const hasKey = !!(s.gemini_api_key || s.deepseek_api_key)
+      const hasDB       = s.db_configs?.length > 0
+      const hasKey      = !!(s.gemini_api_key || s.deepseek_api_key)
       const hasProvider = providers.connections?.length > 0
 
-      if (!hasKey) { if (!suppressOnboarding) setShowOnboarding(true); return }
-
       setTotalRows(stats.total_rows || 0)
+      if (s.default_llm) setLlm(s.default_llm)
 
-      // Set active connection label
+      // Always update connection state — independent of whether a key is configured
       if (hasProvider) {
         const c = providers.connections[0]
         setConnection({ display_name: c.display_name, type:'provider', logo: c.logo_emoji })
       } else if (hasDB) {
         const cfg = s.db_configs[s.active_db_index || 0]
         setConnection({ display_name: cfg?.name || cfg?.database, type:'db', logo:'🗄' })
-      } else if (!suppressOnboarding) {
-        setShowOnboarding(true)
+      } else {
+        setConnection(null)
       }
 
-      if (s.default_llm) setLlm(s.default_llm)
+      if (!suppressOnboarding) {
+        if (!hasKey) { setShowOnboarding(true); return }
+        if (!hasDB && !hasProvider) setShowOnboarding(true)
+      }
     } catch(e) {}
   }
 
