@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { fetchDiscover, runAnalytics, fetchCacheProgress, rebuildCache } from '../utils/api'
 import { Card, Badge, Spinner, Spinner2, ErrorBox, KPICard, ChartCard, DataTable,
-         BarChartSimple, LineChartSimple, PieChartSimple, LLMToggle, COLORS, Btn } from '../components/UI'
+         BarChartSimple, LineChartSimple, PieChartSimple, UsageMeter, COLORS, Btn } from '../components/UI'
 import { ComposedChart, Bar, Line, Area, XAxis, YAxis, CartesianGrid, Tooltip,
          ResponsiveContainer } from 'recharts'
 
@@ -300,7 +300,7 @@ export default function DiscoverPage({ llm, setLlm }) {
               <button onClick={handleRebuild} title="Rebuild cache" style={{ padding:'5px 10px', background:'var(--bg3)', border:'1px solid var(--border)', borderRadius:'var(--r-sm)', fontSize:11, color:'var(--text3)', cursor:'pointer' }}>↺ Rebuild</button>
             </div>
           </div>
-          <div style={{ marginBottom:12 }}><LLMToggle value={llm} onChange={setLlm} /></div>
+          <div style={{ marginBottom:12 }}><UsageMeter /></div>
           <div style={{ display:'flex', gap:4, flexWrap:'wrap', marginBottom:10 }}>
             {categories.map(cat => (
               <button key={cat} onClick={() => setFilter(cat)} style={{

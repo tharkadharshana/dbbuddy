@@ -20,6 +20,8 @@ from pydantic import BaseModel
 from typing import Optional, List, Any, Dict
 from dotenv import load_dotenv
 
+load_dotenv()  # must run before any local module reads os.getenv at import time
+
 from logger import get_logger
 from db import get_connection, get_table_schemas, get_foreign_keys, get_sample_data
 from llm import query_to_sql, generate_report_summary, call_llm, validate_llm_key, list_gemini_models
@@ -40,7 +42,6 @@ from integrations import (
 from credits import get_user_credits, get_usage_history, bootstrap_credit_tables
 from providers import list_providers, get_provider
 
-load_dotenv()
 log = get_logger(__name__)
 
 # Bootstrap integration tables (create if not exist)

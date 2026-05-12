@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { runNLQuery } from '../utils/api'
-import { Spinner, LLMToggle } from '../components/UI'
+import { Spinner, UsageMeter } from '../components/UI'
 
 const TT = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)', borderRadius:8, fontSize:12, color:'#f0f1fa' }
 
@@ -195,7 +195,7 @@ export default function ChatPage({ llm, setLlm, connection }) {
 
       {/* LLM selector with token meter */}
       <div style={{ display:'flex', justifyContent:'flex-end', padding:'10px 20px 0', flexShrink:0 }}>
-        <LLMToggle value={llm} onChange={setLlm} />
+        <UsageMeter />
       </div>
 
       {/* Messages area */}

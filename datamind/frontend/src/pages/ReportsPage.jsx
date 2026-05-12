@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { Card, Btn, LLMToggle, Spinner, ErrorBox, Badge, COLORS } from '../components/UI'
+import { Card, Btn, UsageMeter, Spinner, ErrorBox, Badge, COLORS } from '../components/UI'
 import { generateReport } from '../utils/api'
 
 const TT = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)', borderRadius:8, fontSize:12, color:'#f0f1fa' }
@@ -178,7 +178,7 @@ export default function ReportsPage({ llm, setLlm }) {
           {/* LLM + Format */}
           <div style={{ marginBottom:14 }}>
             <div style={{ fontSize:11, color:'var(--text3)', marginBottom:6, fontWeight:500, textTransform:'uppercase', letterSpacing:'.07em' }}>LLM</div>
-            <LLMToggle value={llm} onChange={setLlm} />
+            <UsageMeter />
           </div>
           <div style={{ marginBottom:16 }}>
             <div style={{ fontSize:11, color:'var(--text3)', marginBottom:6, fontWeight:500, textTransform:'uppercase', letterSpacing:'.07em' }}>Report Style</div>
