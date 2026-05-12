@@ -123,6 +123,7 @@ function Message({ msg, llm }) {
             </div>
             {msg.data && (
               <>
+                {/* TODO: Re-enable "View SQL" toggle when ready
                 {msg.data.sql && (
                   <div style={{ marginTop:10 }}>
                     <button onClick={() => setShowSQL(v => !v)} style={{ fontSize:11, color:'var(--text3)', background:'var(--bg3)', border:'1px solid var(--border)', borderRadius:6, padding:'3px 10px', cursor:'pointer' }}>
@@ -135,6 +136,7 @@ function Message({ msg, llm }) {
                     )}
                   </div>
                 )}
+                */}
                 {msg.data.data?.length > 0 && <>
                   <ResultChart columns={msg.data.columns} data={msg.data.data} />
                   <ResultTable columns={msg.data.columns} data={msg.data.data} rowCount={msg.data.row_count} />
