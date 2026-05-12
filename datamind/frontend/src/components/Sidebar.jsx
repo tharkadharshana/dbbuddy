@@ -153,12 +153,30 @@ export default function Sidebar({ active, setActive, connection, cacheStatus, to
       {/* Theme + user bottom row */}
       <div style={{ padding:'10px 14px', borderTop:'1px solid var(--border)' }}>
         {/* Theme toggle */}
-        <button onClick={() => setTheme && setTheme(t => t === 'dark' ? 'light' : 'dark')}
+        <div onClick={() => setTheme && setTheme(t => t === 'dark' ? 'light' : 'dark')}
           title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-          style={{ width:'100%', display:'flex', alignItems:'center', gap:8, padding:'6px 8px', marginBottom:8, borderRadius:'var(--r-sm)', background:'var(--bg3)', border:'1px solid var(--border)', cursor:'pointer', color:'var(--text2)', fontSize:12, fontWeight:500 }}>
-          <span style={{ fontSize:15 }}>{theme === 'dark' ? '☀️' : '🌙'}</span>
-          <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
-        </button>
+          style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'6px 8px', marginBottom:8, borderRadius:'var(--r-sm)', cursor:'pointer', userSelect:'none' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:7 }}>
+            <span style={{ fontSize:13, lineHeight:1 }}>{theme === 'dark' ? '🌙' : '☀️'}</span>
+            <span style={{ fontSize:12, fontWeight:500, color:'var(--text2)' }}>{theme === 'dark' ? 'Dark' : 'Light'}</span>
+          </div>
+          {/* pill toggle */}
+          <div style={{
+            width:36, height:20, borderRadius:10, position:'relative', flexShrink:0,
+            background: theme === 'dark' ? '#4f8ef7' : 'var(--bg3)',
+            border: '1px solid ' + (theme === 'dark' ? '#4f8ef7' : 'var(--border)'),
+            transition: 'background .2s, border-color .2s',
+          }}>
+            <div style={{
+              position:'absolute', top:2,
+              left: theme === 'dark' ? 17 : 2,
+              width:14, height:14, borderRadius:'50%',
+              background: theme === 'dark' ? '#fff' : 'var(--text3)',
+              transition: 'left .2s',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.25)',
+            }} />
+          </div>
+        </div>
         {/* User */}
         <div onClick={() => setActive('settings')} style={{ display:'flex', alignItems:'center', gap:9, cursor:'pointer' }}>
           <div style={{ width:28, height:28, borderRadius:'50%', background:'linear-gradient(135deg,#4f8ef7,#a78bfa)', display:'flex', alignItems:'center', justifyContent:'center', fontWeight:700, fontSize:12, color:'#fff', flexShrink:0 }}>
