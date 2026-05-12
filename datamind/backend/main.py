@@ -591,20 +591,79 @@ def rebuild_cache(background_tasks: BackgroundTasks,
 
 @app.get("/tables")
 def list_tables(user: dict = Depends(current_user)):
-    db_config = _resolve_db(user)
-    log.info("List tables", user=user["email"])
+    s = user.get("settings", {})
+
+    # Own-DB user: show tables from their configured database
+    if s.get("db_configs"):
+        db_config = _resolve_db(user)
+        log.info("List tables (own DB)", user=user["email"])
+        try:
+            conn = get_connection(db_config)
+            cursor = conn.cursor()
+            cursor.execute("SHOW TABLES")
+            tables = [row[0] for row in cursor.fetchall()]
+            schemas = get_table_schemas(conn, tables)
+            fkeys = get_foreign_keys(conn)
+            conn.close()
+            log.info("Tables loaded", user=user["email"], count=len(tables))
+            return {"tables": tables, "schemas": schemas, "foreign_keys": fkeys}
+        except Exception as e:
+            log.error("Failed to list tables", user=user["email"], error=str(e))
+            raise HTTPException(status_code=500, detail=str(e))
+
+    # Provider-only user: return only their own integration tables
+    conns = get_user_connections(user["email"])
+    if not conns:
+        return {"tables": [], "schemas": {}, "foreign_keys": []}
     try:
-        conn = get_connection(db_config)
-        cursor = conn.cursor()
-        cursor.execute("SHOW TABLES")
-        tables = [row[0] for row in cursor.fetchall()]
-        schemas = get_table_schemas(conn, tables)
-        fkeys = get_foreign_keys(conn)
-        conn.close()
-        log.info("Tables loaded", user=user["email"], count=len(tables))
-        return {"tables": tables, "schemas": schemas, "foreign_keys": fkeys}
+        iconn = _get_internal_conn()
+        cursor = iconn.cursor()
+        tables = []
+        for c in conns:
+            prefix = c.get("table_prefix", "")
+            if not prefix:
+                continue
+            cursor.execute(
+                "SELECT TABLE_NAME FROM information_schema.TABLES "
+                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME LIKE %s "
+                "ORDER BY TABLE_NAME",
+                (f"{prefix}%",)
+            )
+            tables.extend(r[0] for r in cursor.fetchall())
+        iconn.close()
+        log.info("Provider tables listed", user=user["email"], count=len(tables))
+        return {"tables": tables, "schemas": {}, "foreign_keys": []}
     except Exception as e:
-        log.error("Failed to list tables", user=user["email"], error=str(e))
+        log.error("Failed to list provider tables", user=user["email"], error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/tables/{table_name}/columns")
+def get_table_columns(table_name: str, user: dict = Depends(current_user)):
+    """Return column names and types for a table the user owns."""
+    import re
+    if not re.match(r'^[A-Za-z0-9_]+$', table_name):
+        raise HTTPException(status_code=400, detail="Invalid table name.")
+    s = user.get("settings", {})
+    try:
+        if s.get("db_configs"):
+            conn = get_connection(_resolve_db(user))
+        else:
+            # Verify this table belongs to the requesting user
+            conns = get_user_connections(user["email"])
+            prefixes = [c.get("table_prefix", "") for c in conns if c.get("table_prefix")]
+            if not prefixes or not any(table_name.startswith(p) for p in prefixes):
+                raise HTTPException(status_code=403, detail="Access denied.")
+            conn = _get_internal_conn()
+        cursor = conn.cursor()
+        cursor.execute(f"DESCRIBE `{table_name}`")
+        rows = cursor.fetchall()
+        conn.close()
+        return {"columns": [{"name": r[0], "type": r[1]} for r in rows]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("Failed to describe table", table=table_name, error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 

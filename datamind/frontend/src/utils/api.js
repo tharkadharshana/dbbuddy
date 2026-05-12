@@ -38,6 +38,7 @@ export const testDBConnection     = (cfg) => api.post('/settings/db/test', cfg).
 
 // Data
 export const fetchTables          = () => api.get('/tables').then(r => r.data)
+export const fetchTableColumns    = (table) => api.get(`/tables/${encodeURIComponent(table)}/columns`).then(r => r.data)
 export const fetchDiscover        = () => api.get('/discover').then(r => r.data)
 export const runNLQuery           = (question, llm) => api.post('/query', { question, llm }).then(r => r.data)
 export const runAnalytics         = (template_id, llm, params={}) => api.post('/analytics/run', { template_id, llm, params }).then(r => r.data)

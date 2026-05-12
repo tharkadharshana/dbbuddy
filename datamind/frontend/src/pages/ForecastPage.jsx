@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { ComposedChart, Area, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart } from 'recharts'
 import { Card, Btn, Spinner, Spinner2, Empty, ErrorBox, KPICard } from '../components/UI'
-import { runAutoForecast, runForecast, fetchTables } from '../utils/api'
+import { runAutoForecast, runForecast, fetchTables, fetchTableColumns } from '../utils/api'
 
 const TT = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)', borderRadius:8, fontSize:12, color:'#f0f1fa' }
 
@@ -11,12 +11,34 @@ export default function ForecastPage() {
   const [loading, setLoading] = useState(false)
   const [result, setResult]   = useState(null)
   const [error, setError]     = useState(null)
-  const [tables, setTables]   = useState([])
-  const [manForm, setManForm] = useState({ table:'', date_column:'', value_column:'' })
+  const [tables, setTables]         = useState([])
+  const [columns, setColumns]       = useState([])
+  const [colsLoading, setColsLoading] = useState(false)
+  const [manForm, setManForm]       = useState({ table:'', date_column:'', value_column:'' })
 
   useEffect(() => {
     fetchTables().then(d => setTables(d.tables||[])).catch(()=>{})
   }, [])
+
+  useEffect(() => {
+    if (!manForm.table) { setColumns([]); return }
+    setColsLoading(true)
+    fetchTableColumns(manForm.table)
+      .then(d => {
+        const cols = d.columns || []
+        setColumns(cols)
+        // Auto-select sensible defaults
+        const dateCol = cols.find(c => /datetime|date|timestamp/i.test(c.type))
+        const numCol  = cols.find(c => /decimal|float|double|numeric/i.test(c.type))
+        setManForm(f => ({
+          ...f,
+          date_column:  dateCol?.name || f.date_column,
+          value_column: numCol?.name  || f.value_column,
+        }))
+      })
+      .catch(() => setColumns([]))
+      .finally(() => setColsLoading(false))
+  }, [manForm.table])
 
   async function runIt() {
     setLoading(true); setError(null); setResult(null)
@@ -52,18 +74,37 @@ export default function ForecastPage() {
 
         {mode==='manual' && (
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:10, marginBottom:14 }}>
-            {[['table','Table'], ['date_column','Date Column'], ['value_column','Value Column']].map(([k,lbl]) => (
-              <div key={k}>
-                <label style={{ fontSize:11, color:'var(--text3)', display:'block', marginBottom:5 }}>{lbl}</label>
-                {k==='table'
-                  ? <select value={manForm.table} onChange={e=>setManForm(f=>({...f,table:e.target.value}))} style={{ width:'100%', padding:'8px 10px', borderRadius:'var(--r-md)', fontSize:13 }}>
-                      <option value="">Select…</option>
-                      {tables.map(t => <option key={t} value={t}>{t}</option>)}
-                    </select>
-                  : <input value={manForm[k]} onChange={e=>setManForm(f=>({...f,[k]:e.target.value}))} placeholder={k==='date_column'?'e.g. invoiceDate':'e.g. invoiceTotal'} style={{ width:'100%', padding:'8px 10px', borderRadius:'var(--r-md)', fontSize:13 }} />
-                }
-              </div>
-            ))}
+            {/* Table */}
+            <div>
+              <label style={{ fontSize:11, color:'var(--text3)', display:'block', marginBottom:5 }}>Table</label>
+              <select value={manForm.table} onChange={e=>setManForm(f=>({...f,table:e.target.value,date_column:'',value_column:''}))}
+                style={{ width:'100%', padding:'8px 10px', borderRadius:'var(--r-md)', fontSize:13, background:'var(--bg2)', border:'1px solid var(--border)', color:'var(--text)' }}>
+                <option value="">Select table…</option>
+                {tables.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+            {/* Date column */}
+            <div>
+              <label style={{ fontSize:11, color:'var(--text3)', display:'block', marginBottom:5 }}>
+                Date Column {colsLoading && <span style={{opacity:.5}}>loading…</span>}
+              </label>
+              <select value={manForm.date_column} onChange={e=>setManForm(f=>({...f,date_column:e.target.value}))}
+                disabled={!manForm.table || colsLoading}
+                style={{ width:'100%', padding:'8px 10px', borderRadius:'var(--r-md)', fontSize:13, background:'var(--bg2)', border:'1px solid var(--border)', color:'var(--text)', opacity: (!manForm.table||colsLoading)?0.5:1 }}>
+                <option value="">Select column…</option>
+                {columns.map(c => <option key={c.name} value={c.name}>{c.name} ({c.type})</option>)}
+              </select>
+            </div>
+            {/* Value column */}
+            <div>
+              <label style={{ fontSize:11, color:'var(--text3)', display:'block', marginBottom:5 }}>Value Column</label>
+              <select value={manForm.value_column} onChange={e=>setManForm(f=>({...f,value_column:e.target.value}))}
+                disabled={!manForm.table || colsLoading}
+                style={{ width:'100%', padding:'8px 10px', borderRadius:'var(--r-md)', fontSize:13, background:'var(--bg2)', border:'1px solid var(--border)', color:'var(--text)', opacity: (!manForm.table||colsLoading)?0.5:1 }}>
+                <option value="">Select column…</option>
+                {columns.map(c => <option key={c.name} value={c.name}>{c.name} ({c.type})</option>)}
+              </select>
+            </div>
           </div>
         )}
 
