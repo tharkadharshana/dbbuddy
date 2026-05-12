@@ -462,6 +462,7 @@ def disconnect_provider(user_email: str, connection_id: str):
 def get_user_connections(user_email: str) -> List[Dict]:
     """
     Return all active connections for a user, enriched with provider manifest data.
+    Maps backend status to frontend-expected values.
     """
     import dataclasses
     from providers import get_provider
@@ -472,6 +473,20 @@ def get_user_connections(user_email: str) -> List[Dict]:
         try:
             p = get_provider(pid)
             m = p.manifest
+            
+            # Map backend status to frontend expectations
+            backend_status = row.get("status", "pending")
+            if backend_status == "active":
+                frontend_status = "connected"
+            elif backend_status == "syncing":
+                frontend_status = "syncing"
+            elif backend_status == "error":
+                frontend_status = "error"
+            elif backend_status == "paused":
+                frontend_status = "paused"
+            else:
+                frontend_status = "pending"
+            
             result.append({
                 "connection_id":    pid,
                 "provider_id":      pid,
@@ -479,7 +494,7 @@ def get_user_connections(user_email: str) -> List[Dict]:
                 "logo_emoji":       m.logo_emoji,
                 "category":         m.category,
                 "last_sync_at":     row.get("last_sync_at"),
-                "last_sync_status": row.get("status", "pending"),
+                "last_sync_status": frontend_status,  # ← FIXED: Map to frontend values
                 "connected_at":     row.get("created_at"),
                 "table_prefix":     row.get("table_prefix"),
             })
@@ -489,7 +504,10 @@ def get_user_connections(user_email: str) -> List[Dict]:
 
 
 def get_connection_status(user_email: str, connection_id: str) -> Dict:
-    """Return live status for a single connection."""
+    """
+    Return live status for a single connection.
+    Maps backend status to frontend-expected values.
+    """
     conn = _get_internal_conn()
     cursor = conn.cursor(dictionary=True)
     try:
@@ -517,8 +535,21 @@ def get_connection_status(user_email: str, connection_id: str) -> Dict:
             except Exception:
                 pass
 
+        # Map backend status to frontend
+        backend_status = row.get("status", "unknown")
+        if backend_status == "active":
+            frontend_status = "connected"
+        elif backend_status == "syncing":
+            frontend_status = "syncing"
+        elif backend_status == "error":
+            frontend_status = "error"
+        elif backend_status == "paused":
+            frontend_status = "paused"
+        else:
+            frontend_status = "pending"
+
         return {
-            "status": row.get("status", "unknown"),
+            "status": frontend_status,  # ← FIXED: Return frontend-expected status
             "last_sync_at": str(row["last_sync_at"]) if row.get("last_sync_at") else None,
             "last_sync_rows": row.get("last_sync_rows", 0),
             "total_rows": total_rows,

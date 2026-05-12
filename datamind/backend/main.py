@@ -35,8 +35,9 @@ from integrations import (
     bootstrap_integration_tables,
     connect_provider, disconnect_provider,
     get_user_connections, get_connection_status,
-    trigger_sync, get_sync_history,
+    trigger_sync, get_sync_history, start_scheduler,
 )
+from credits import get_user_credits, get_usage_history, bootstrap_credit_tables
 from providers import list_providers, get_provider
 
 load_dotenv()
@@ -61,6 +62,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.on_event("startup")
+def startup_event():
+    try:
+        bootstrap_integration_tables()
+    except Exception as _be:
+        log.warning("Integration bootstrap skipped in startup", error=str(_be))
+    try:
+        bootstrap_credit_tables()
+    except Exception as _be:
+        log.warning("Credit bootstrap skipped (configure DATAMIND_DB_* in .env)", error=str(_be))
+    start_scheduler()
+    log.info("DataMind backend started")
 
 # In-memory build progress tracker
 _build_status: Dict[str, Any] = {}
@@ -207,7 +221,7 @@ def _background_build(email: str, db_config: dict, llm: str, api_key: str):
             log.debug("Cache build progress", user=email, step=msg)
 
         def llm_caller(prompt, system, llm_name, max_tokens):
-            return call_llm(prompt, system, llm_name, max_tokens, api_key=api_key)
+            return call_llm(prompt, system, llm_name, max_tokens, api_key=api_key, user_email=email)
 
         cache_data = build_schema_cache(
             conn=conn, schemas=schemas, fkeys=fkeys, samples=samples,
@@ -612,7 +626,7 @@ def natural_language_query(req: NLQueryRequest, user: dict = Depends(current_use
         conn = get_connection(_resolve_db(user))
         schemas = get_table_schemas(conn, None)
         fkeys = get_foreign_keys(conn)
-        sql = query_to_sql(req.question, schemas, req.llm, fkeys, api_key=api_key)
+        sql = query_to_sql(req.question, schemas, req.llm, fkeys, api_key=api_key, user_email=user["email"])
         cursor = conn.cursor()
         cursor.execute(sql)
         columns = [desc[0] for desc in cursor.description]
@@ -900,7 +914,8 @@ def generate_report(req: ReportRequest, user: dict = Depends(current_user)):
         conn.close()
         narrative = generate_report_summary(
             title=req.title, kpis=kpis, section_data=section_data,
-            llm=req.llm, format=req.format, api_key=api_key
+            llm=req.llm, format=req.format, api_key=api_key,
+            user_email=user["email"]
         )
         log.info("Report generated", user=user["email"], sections=len(section_data))
         return {"title": req.title, "kpis": kpis, "sections": section_data, "narrative": narrative}
@@ -1038,4 +1053,197 @@ def provider_history(connection_id: str, user: dict = Depends(current_user)):
         history = get_sync_history(user["email"], connection_id)
         return {"history": history}
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CREDITS AND USAGE TRACKING
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/credits")
+def get_credits(user: dict = Depends(current_user)):
+    """Get user's credit balance and usage statistics."""
+    try:
+        return get_user_credits(user["email"])
+    except Exception as e:
+        log.error("Get credits failed", user=user["email"], error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/credits/history")
+def get_credit_history(
+    limit: int = 50,
+    user: dict = Depends(current_user)
+):
+    """Get user's credit usage history."""
+    try:
+        return {"history": get_usage_history(user["email"], limit)}
+    except Exception as e:
+        log.error("Get credit history failed", user=user["email"], error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# INTEGRATION-SPECIFIC ANALYTICS
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/integrations/{provider_id}/analytics/templates")
+def list_integration_templates(
+    provider_id: str,
+    user: dict = Depends(current_user)
+):
+    """List available analytics templates for an integration."""
+    try:
+        templates_map = {}
+        
+        # Import provider-specific templates
+        try:
+            from providers.salesplay.analytics import TEMPLATES as SALESPLAY_TEMPLATES
+            templates_map["salesplay"] = SALESPLAY_TEMPLATES
+        except ImportError:
+            pass
+        
+        try:
+            from providers.loyverse.analytics import TEMPLATES as LOYVERSE_TEMPLATES
+            templates_map["loyverse"] = LOYVERSE_TEMPLATES
+        except ImportError:
+            pass
+        
+        if provider_id not in templates_map:
+            return {"templates": []}
+        
+        templates = templates_map[provider_id]
+        return {
+            "templates": [
+                {
+                    "id": tid,
+                    "title": t["title"],
+                    "description": t.get("description", ""),
+                    "type": t.get("type", "table")
+                }
+                for tid, t in templates.items()
+            ]
+        }
+    except Exception as e:
+        log.error("List integration templates failed", 
+                  provider=provider_id, 
+                  error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class IntegrationAnalyticsRequest(BaseModel):
+    template_id: str
+
+
+@app.post("/integrations/{provider_id}/analytics/run")
+def run_integration_analytics(
+    provider_id: str,
+    req: IntegrationAnalyticsRequest,
+    user: dict = Depends(current_user)
+):
+    """Run analytics on integration data."""
+    from integrations import get_integration, _get_internal_conn
+    
+    try:
+        # Get integration record
+        integration = get_integration(user["email"], provider_id)
+        if not integration:
+            raise HTTPException(status_code=404, detail="Integration not connected")
+        
+        table_prefix = integration["table_prefix"]
+        
+        # Connect to DataMind's internal DB
+        conn = _get_internal_conn()
+        
+        try:
+            # Import provider-specific analytics
+            if provider_id == "salesplay":
+                from providers.salesplay.analytics import run_salesplay_analytics
+                result = run_salesplay_analytics(conn, table_prefix, req.template_id)
+            elif provider_id == "loyverse":
+                from providers.loyverse.analytics import run_loyverse_analytics
+                result = run_loyverse_analytics(conn, table_prefix, req.template_id)
+            else:
+                raise HTTPException(
+                    status_code=404, 
+                    detail=f"No analytics available for {provider_id}"
+                )
+            
+            result["source"] = "integration"
+            result["provider"] = provider_id
+            return result
+            
+        finally:
+            conn.close()
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("Integration analytics failed", 
+                  provider=provider_id, 
+                  template=req.template_id, 
+                  user=user["email"],
+                  error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class IntegrationForecastRequest(BaseModel):
+    table: str
+    date_column: str
+    value_column: str
+    periods: int = 90
+
+
+@app.post("/integrations/{provider_id}/forecast")
+def forecast_integration(
+    provider_id: str,
+    req: IntegrationForecastRequest,
+    user: dict = Depends(current_user)
+):
+    """Run forecast on integration data."""
+    from integrations import get_integration, _get_internal_conn
+    
+    try:
+        integration = get_integration(user["email"], provider_id)
+        if not integration:
+            raise HTTPException(status_code=404, detail="Integration not connected")
+        
+        conn = _get_internal_conn()
+        table_prefix = integration["table_prefix"]
+        
+        try:
+            # Build SQL for forecast query
+            sql = f"""
+                SELECT DATE({req.date_column}) as date, 
+                       SUM({req.value_column}) as value
+                FROM {table_prefix}_{req.table}
+                WHERE {req.date_column} IS NOT NULL
+                GROUP BY DATE({req.date_column})
+                ORDER BY date
+            """
+            
+            cursor = conn.cursor()
+            cursor.execute(sql)
+            rows = cursor.fetchall()
+            
+            if len(rows) < 10:
+                raise HTTPException(
+                    status_code=400, 
+                    detail="Need at least 10 data points for forecasting"
+                )
+            
+            result = run_forecast(rows, req.periods)
+            result["source"] = "integration"
+            result["provider"] = provider_id
+            return result
+            
+        finally:
+            conn.close()
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("Integration forecast failed", 
+                  provider=provider_id,
+                  user=user["email"],
+                  error=str(e))
         raise HTTPException(status_code=500, detail=str(e))

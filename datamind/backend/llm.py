@@ -1,10 +1,12 @@
 """
-LLM module — Gemini + DeepSeek.
+LLM module — Gemini + DeepSeek with Token Tracking.
 
 KEY FIX: Every function that calls an LLM now accepts an explicit `api_key`
-parameter.  The key MUST come from the user's saved settings.
+parameter. The key MUST come from the user's saved settings.
 The .env file is only used as a global fallback when NO user key is set.
 This means DeepSeek actually uses DeepSeek, not Gemini.
+
+NEW: Token tracking and credit deduction integrated.
 """
 
 import os
@@ -21,7 +23,10 @@ log = get_logger(__name__)
 # ── Core callers ──────────────────────────────────────────────────────────────
 
 def call_gemini(prompt: str, system: str = "", max_tokens: int = 2000,
-                api_key: str = "") -> str:
+                api_key: str = "", user_email: str = None) -> tuple:
+    """
+    Call Gemini API and return (response_text, tokens_used).
+    """
     key = api_key or os.getenv("GEMINI_API_KEY", "")
     if not key or key in ("your_gemini_api_key_here", ""):
         raise ValueError(
@@ -74,8 +79,30 @@ def call_gemini(prompt: str, system: str = "", max_tokens: int = 2000,
                 raise ValueError(f"Gemini blocked the request: {block_reason}")
 
             result = candidates[0]["content"]["parts"][0]["text"].strip()
-            log.debug("Gemini response OK", model=model, response_len=len(result))
-            return result
+            
+            # Extract token usage
+            usage_metadata = data.get("usageMetadata", {})
+            tokens_used = usage_metadata.get("totalTokenCount", 0)
+            
+            log.debug("Gemini response OK", model=model, response_len=len(result), tokens=tokens_used)
+            
+            # Track usage if user_email provided
+            if user_email and tokens_used > 0:
+                try:
+                    from credits import deduct_credits, calculate_token_cost
+                    cost = calculate_token_cost(tokens_used, model)
+                    deduct_credits(
+                        user_email=user_email,
+                        amount=cost,
+                        usage_type="ai_tokens",
+                        tokens_used=tokens_used,
+                        model=model,
+                        description=f"Gemini API call"
+                    )
+                except Exception as e:
+                    log.error("Failed to deduct credits", error=str(e))
+            
+            return result, tokens_used
 
         except requests.exceptions.Timeout:
             log.warning("Gemini timeout", model=model)
@@ -92,7 +119,10 @@ def call_gemini(prompt: str, system: str = "", max_tokens: int = 2000,
 
 
 def call_deepseek(prompt: str, system: str = "", max_tokens: int = 2000,
-                  api_key: str = "") -> str:
+                  api_key: str = "", user_email: str = None) -> tuple:
+    """
+    Call DeepSeek API and return (response_text, tokens_used).
+    """
     key = api_key or os.getenv("DEEPSEEK_API_KEY", "")
     if not key or key in ("your_deepseek_api_key_here", ""):
         raise ValueError(
@@ -125,9 +155,34 @@ def call_deepseek(prompt: str, system: str = "", max_tokens: int = 2000,
                     raise ValueError(f"DeepSeek API key is invalid or has no credits. "
                                      f"Status {resp.status_code}: {err_body}")
                 resp.raise_for_status()
-            result = resp.json()["choices"][0]["message"]["content"].strip()
-            log.debug("DeepSeek response received", response_len=len(result))
-            return result
+            
+            data = resp.json()
+            result = data["choices"][0]["message"]["content"].strip()
+            
+            # Extract token usage
+            usage = data.get("usage", {})
+            tokens_used = usage.get("total_tokens", 0)
+            
+            log.debug("DeepSeek response received", response_len=len(result), tokens=tokens_used)
+            
+            # Track usage if user_email provided
+            if user_email and tokens_used > 0:
+                try:
+                    from credits import deduct_credits, calculate_token_cost
+                    cost = calculate_token_cost(tokens_used, "deepseek-chat")
+                    deduct_credits(
+                        user_email=user_email,
+                        amount=cost,
+                        usage_type="ai_tokens",
+                        tokens_used=tokens_used,
+                        model="deepseek-chat",
+                        description=f"DeepSeek API call"
+                    )
+                except Exception as e:
+                    log.error("Failed to deduct credits", error=str(e))
+            
+            return result, tokens_used
+            
         except requests.exceptions.Timeout:
             log.warning("DeepSeek API timeout", attempt=attempt)
             if attempt == 1:
@@ -141,17 +196,21 @@ def call_deepseek(prompt: str, system: str = "", max_tokens: int = 2000,
 
 
 def call_llm(prompt: str, system: str = "", llm: str = "gemini",
-             max_tokens: int = 2000, api_key: str = "") -> str:
+             max_tokens: int = 2000, api_key: str = "", user_email: str = None) -> str:
     """
     Main dispatcher. Always use the explicit api_key.
     llm must be 'gemini' or 'deepseek' — this is respected exactly.
+    Returns just the response text (tokens tracked internally).
     """
     llm = (llm or "gemini").lower().strip()
-    log.debug("LLM dispatch", llm=llm, has_key=bool(api_key))
+    log.debug("LLM dispatch", llm=llm, has_key=bool(api_key), user=user_email)
+    
     if llm == "deepseek":
-        return call_deepseek(prompt, system, max_tokens, api_key)
+        result, _ = call_deepseek(prompt, system, max_tokens, api_key, user_email)
+        return result
     elif llm == "gemini":
-        return call_gemini(prompt, system, max_tokens, api_key)
+        result, _ = call_gemini(prompt, system, max_tokens, api_key, user_email)
+        return result
     else:
         raise ValueError(f"Unknown LLM provider: '{llm}'. Use 'gemini' or 'deepseek'.")
 
@@ -166,7 +225,7 @@ def validate_llm_key(llm: str, api_key: str) -> Dict[str, Any]:
     log.info("Validating LLM API key", llm=llm)
     test_prompt = "Reply with exactly the word: WORKING"
     try:
-        result = call_llm(test_prompt, "", llm, max_tokens=20, api_key=api_key)
+        result = call_llm(test_prompt, "", llm, max_tokens=20, api_key=api_key, user_email=None)
         ok = "WORKING" in result.upper() or len(result.strip()) > 0
         log.info("LLM key validation result", llm=llm, ok=ok, response=result[:50])
         return {"ok": ok, "model": llm, "response": result.strip()}
@@ -181,7 +240,7 @@ def validate_llm_key(llm: str, api_key: str) -> Dict[str, Any]:
 # ── Text-to-SQL ───────────────────────────────────────────────────────────────
 
 def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "gemini",
-                 fkeys: list = None, api_key: str = "") -> str:
+                 fkeys: list = None, api_key: str = "", user_email: str = None) -> str:
     schema_text = schema_to_text(schemas, fkeys)
     system = (
         "You are an expert MySQL query writer. "
@@ -192,7 +251,7 @@ def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "gemini",
     )
     prompt = f"Schema:\n{schema_text}\n\nQuestion: {question}\n\nSQL:"
     log.info("Generating SQL from NL question", llm=llm, question=question[:80])
-    raw = call_llm(prompt, system, llm, max_tokens=800, api_key=api_key)
+    raw = call_llm(prompt, system, llm, max_tokens=800, api_key=api_key, user_email=user_email)
     sql = raw.replace("```sql", "").replace("```", "").strip()
     log.debug("SQL generated", sql=sql[:200])
     return sql
@@ -202,7 +261,7 @@ def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "gemini",
 
 def generate_report_summary(title: str, kpis: Dict, section_data: Dict,
                             llm: str, format: str = "full",
-                            api_key: str = "") -> str:
+                            api_key: str = "", user_email: str = None) -> str:
     kpi_text = "\n".join(f"  {k}: {v}" for k, v in kpis.items())
     sections_text = ""
     for sid, data in section_data.items():
@@ -233,7 +292,7 @@ def generate_report_summary(title: str, kpis: Dict, section_data: Dict,
         f"Instructions: {length_instruction}"
     )
     log.info("Generating report", llm=llm, title=title, sections=list(section_data.keys()), format=format)
-    return call_llm(prompt, system, llm, max_tokens=2500, api_key=api_key)
+    return call_llm(prompt, system, llm, max_tokens=2500, api_key=api_key, user_email=user_email)
 
 
 def list_gemini_models(api_key: str) -> list:
