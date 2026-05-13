@@ -43,7 +43,7 @@ from integrations import (
 from credits import get_user_credits, get_usage_history, bootstrap_credit_tables
 from billing import (
     bootstrap_billing_tables, start_trial, subscribe_to_plan,
-    get_user_subscription, get_subscription_plan,
+    get_user_subscription, get_subscription_plans, get_plan_by_id,
     check_ai_limit, purchase_addon, get_llm_usage_history,
     get_addon_pricing, charge_ai_usage,
 )
@@ -60,6 +60,7 @@ except Exception as _be:
 from auth import (
     create_user, authenticate_user, create_token,
     get_user_settings, update_user_settings, current_user,
+    bootstrap_auth_tables,
 )
 
 app = FastAPI(title="DataMind AI", version="3.0.0")
@@ -81,6 +82,10 @@ def startup_event():
         bootstrap_credit_tables()
     except Exception as _be:
         log.warning("Credit bootstrap skipped (configure DATAMIND_DB_* in .env)", error=str(_be))
+    try:
+        bootstrap_auth_tables()
+    except Exception as _be:
+        log.warning("Auth bootstrap skipped (configure DATAMIND_DB_* in .env)", error=str(_be))
     try:
         bootstrap_billing_tables()
     except Exception as _be:
@@ -1273,18 +1278,18 @@ def get_credit_history(
 # BILLING — Subscription & Usage
 # ══════════════════════════════════════════════════════════════════════════════
 
-@app.get("/billing/plan")
-def billing_get_plan(user: dict = Depends(current_user)):
-    """Return the Pro plan details."""
+@app.get("/billing/plans")
+def billing_get_plans(user: dict = Depends(current_user)):
+    """Return all active subscription plans."""
     try:
-        plan = get_subscription_plan()
-        if not plan:
-            raise HTTPException(status_code=503, detail="No active plan found.")
-        return plan
+        plans = get_subscription_plans()
+        if not plans:
+            raise HTTPException(status_code=503, detail="No active plans found.")
+        return {"plans": plans}
     except HTTPException:
         raise
     except Exception as e:
-        log.error("Get billing plan failed", user=user["email"], error=str(e))
+        log.error("Get billing plans failed", user=user["email"], error=str(e))
         raise HTTPException(status_code=503, detail="Billing service unavailable.")
 
 
@@ -1321,8 +1326,10 @@ class SubscribeRequest(BaseModel):
 def billing_subscribe(req: SubscribeRequest, user: dict = Depends(current_user)):
     """Subscribe or upgrade to a plan."""
     try:
+        plan = get_plan_by_id(req.plan_id)
         subscribe_to_plan(user["email"], req.plan_id)
-        return {"ok": True, "message": "Subscribed to DataMind Pro."}
+        name = plan["name"] if plan else "plan"
+        return {"ok": True, "message": f"Subscribed to DataMind {name}."}
     except Exception as e:
         log.error("Subscribe failed", user=user["email"], error=str(e))
         raise HTTPException(status_code=500, detail=str(e))

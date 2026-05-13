@@ -65,7 +65,6 @@ export default function App() {
       }
 
       if (!suppressOnboarding) {
-        if (!hasKey) { setShowOnboarding(true); return }
         if (!hasDB && !hasProvider) setShowOnboarding(true)
       }
     } catch(e) {}

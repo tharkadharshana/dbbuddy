@@ -6,7 +6,8 @@
       "Bash(Get-ChildItem -Path \"d:\\\\Projects\\\\datamind-ai\" -Recurse -File -Name)",
       "Bash(grep -r \"plan\\\\|subscription\\\\|trial\\\\|billing\\\\|tier\" d:\\\\Projects\\\\datamind-ai\\\\datamind\\\\frontend\\\\src --include=\"*.jsx\" --include=\"*.js\" 2>nul | head -50)",
       "Bash(grep -E \"\\\\.py$\")",
-      "Bash(find d:\\\\Projects\\\\datamind-ai\\\\datamind\\\\backend -name \"*.py\" | grep -iE \"plan|billing|subscription|trial|tier\" 2>nul)"
+      "Bash(find d:\\\\Projects\\\\datamind-ai\\\\datamind\\\\backend -name \"*.py\" | grep -iE \"plan|billing|subscription|trial|tier\" 2>nul)",
+      "WebSearch"
     ],
     "additionalDirectories": [
       "d:\\Projects\\datamind-ai"

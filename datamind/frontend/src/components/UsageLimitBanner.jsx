@@ -25,8 +25,10 @@ export default function UsageLimitBanner({ onNavigate }) {
       const pctDb  = sub?.usage_pct_db ?? 0
       const days   = sub?.trial_days_remaining ?? 99
 
-      if (status === 'expired' || status === 'cancelled' || status === 'no_subscription') {
-        setMessage({ text: 'Your DataMind Pro trial has ended. Subscribe to restore access.', level: 'error' })
+      if (status === 'expired' || status === 'cancelled') {
+        setMessage({ text: 'Your subscription has expired. Subscribe to restore access.', level: 'error' })
+      } else if (status === 'no_subscription') {
+        setMessage({ text: 'No active plan found. Choose a plan to get started.', level: 'error' })
       } else if (pctAi >= 100) {
         setMessage({ text: 'You have used all your AI credits for this period.', level: 'error' })
       } else if (pctDb >= 100) {
