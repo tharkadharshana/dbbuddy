@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { runNLQuery } from '../utils/api'
-import { Spinner, LLMToggle } from '../components/UI'
+import { Spinner, UsageMeter } from '../components/UI'
 
 const TT = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)', borderRadius:8, fontSize:12, color:'#f0f1fa' }
 
@@ -123,6 +123,7 @@ function Message({ msg, llm }) {
             </div>
             {msg.data && (
               <>
+                {/* TODO: Re-enable "View SQL" toggle when ready
                 {msg.data.sql && (
                   <div style={{ marginTop:10 }}>
                     <button onClick={() => setShowSQL(v => !v)} style={{ fontSize:11, color:'var(--text3)', background:'var(--bg3)', border:'1px solid var(--border)', borderRadius:6, padding:'3px 10px', cursor:'pointer' }}>
@@ -135,6 +136,7 @@ function Message({ msg, llm }) {
                     )}
                   </div>
                 )}
+                */}
                 {msg.data.data?.length > 0 && <>
                   <ResultChart columns={msg.data.columns} data={msg.data.data} />
                   <ResultTable columns={msg.data.columns} data={msg.data.data} rowCount={msg.data.row_count} />
@@ -195,7 +197,7 @@ export default function ChatPage({ llm, setLlm, connection }) {
 
       {/* LLM selector with token meter */}
       <div style={{ display:'flex', justifyContent:'flex-end', padding:'10px 20px 0', flexShrink:0 }}>
-        <LLMToggle value={llm} onChange={setLlm} />
+        <UsageMeter />
       </div>
 
       {/* Messages area */}

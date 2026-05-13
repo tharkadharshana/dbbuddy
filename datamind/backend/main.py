@@ -20,6 +20,8 @@ from pydantic import BaseModel
 from typing import Optional, List, Any, Dict
 from dotenv import load_dotenv
 
+load_dotenv()  # must run before any local module reads os.getenv at import time
+
 from logger import get_logger
 from db import get_connection, get_table_schemas, get_foreign_keys, get_sample_data
 from llm import query_to_sql, generate_report_summary, call_llm, validate_llm_key, list_gemini_models
@@ -36,11 +38,11 @@ from integrations import (
     connect_provider, disconnect_provider,
     get_user_connections, get_connection_status,
     trigger_sync, get_sync_history, start_scheduler,
+    get_user_total_rows, _get_internal_conn,
 )
 from credits import get_user_credits, get_usage_history, bootstrap_credit_tables
 from providers import list_providers, get_provider
 
-load_dotenv()
 log = get_logger(__name__)
 
 # Bootstrap integration tables (create if not exist)
@@ -146,9 +148,36 @@ def _resolve_api_key(user: dict, llm: str) -> str:
     raise HTTPException(status_code=422, detail=f"Unknown LLM: '{llm}'. Use 'gemini' or 'deepseek'.")
 
 
+def _llm_has_key(user: dict, name: str) -> bool:
+    """Return True if a real (non-placeholder) key exists for this LLM."""
+    from llm import _is_real_key
+    s = user.get("settings", {})
+    if name == "gemini":
+        return _is_real_key(s.get("gemini_api_key", "")) or _is_real_key(os.getenv("GEMINI_API_KEY", ""))
+    if name == "deepseek":
+        return _is_real_key(s.get("deepseek_api_key", "")) or _is_real_key(os.getenv("DEEPSEEK_API_KEY", ""))
+    return False
+
+
 def _get_llm(user: dict) -> str:
-    """Return user's preferred LLM from settings."""
-    return user.get("settings", {}).get("default_llm", "gemini") or "gemini"
+    """Return user's preferred LLM, falling back using LLM_PRIORITY env order."""
+    from llm import get_llm_priority
+    s = user.get("settings", {})
+    preferred = (s.get("default_llm") or "").lower()
+    # Build candidate order: user's preferred first, then env priority order
+    priority = get_llm_priority()
+    order = ([preferred] if preferred else []) + [p for p in priority if p != preferred]
+    for candidate in order:
+        if _llm_has_key(user, candidate):
+            if candidate != preferred and preferred:
+                log.info("LLM key fallback", preferred=preferred, using=candidate, user=user.get("email"))
+            return candidate
+    return order[0] if order else "gemini"  # let _resolve_api_key raise the informative error
+
+
+def _effective_llm(user: dict, requested: str) -> str:
+    """Use requested LLM if a key exists for it, otherwise fall back to _get_llm()."""
+    return requested if _llm_has_key(user, requested) else _get_llm(user)
 
 
 def _status_key(email: str, db_config: dict) -> str:
@@ -551,6 +580,13 @@ def cache_progress(user: dict = Depends(current_user)):
 @app.post("/cache/rebuild")
 def rebuild_cache(background_tasks: BackgroundTasks,
                   user: dict = Depends(current_user)):
+    if not user.get("settings", {}).get("db_configs"):
+        raise HTTPException(
+            status_code=422,
+            detail="Analytics rebuild requires a direct MySQL database connection. "
+                   "Integration analytics templates (SalesPlay, Loyverse, etc.) are "
+                   "pre-built and don't need an AI rebuild — use the Analytics Hub."
+        )
     db_config = _resolve_db(user)
     invalidate_cache(user["email"], db_config)
     llm = _get_llm(user)
@@ -566,20 +602,79 @@ def rebuild_cache(background_tasks: BackgroundTasks,
 
 @app.get("/tables")
 def list_tables(user: dict = Depends(current_user)):
-    db_config = _resolve_db(user)
-    log.info("List tables", user=user["email"])
+    s = user.get("settings", {})
+
+    # Own-DB user: show tables from their configured database
+    if s.get("db_configs"):
+        db_config = _resolve_db(user)
+        log.info("List tables (own DB)", user=user["email"])
+        try:
+            conn = get_connection(db_config)
+            cursor = conn.cursor()
+            cursor.execute("SHOW TABLES")
+            tables = [row[0] for row in cursor.fetchall()]
+            schemas = get_table_schemas(conn, tables)
+            fkeys = get_foreign_keys(conn)
+            conn.close()
+            log.info("Tables loaded", user=user["email"], count=len(tables))
+            return {"tables": tables, "schemas": schemas, "foreign_keys": fkeys}
+        except Exception as e:
+            log.error("Failed to list tables", user=user["email"], error=str(e))
+            raise HTTPException(status_code=500, detail=str(e))
+
+    # Provider-only user: return only their own integration tables
+    conns = get_user_connections(user["email"])
+    if not conns:
+        return {"tables": [], "schemas": {}, "foreign_keys": []}
     try:
-        conn = get_connection(db_config)
-        cursor = conn.cursor()
-        cursor.execute("SHOW TABLES")
-        tables = [row[0] for row in cursor.fetchall()]
-        schemas = get_table_schemas(conn, tables)
-        fkeys = get_foreign_keys(conn)
-        conn.close()
-        log.info("Tables loaded", user=user["email"], count=len(tables))
-        return {"tables": tables, "schemas": schemas, "foreign_keys": fkeys}
+        iconn = _get_internal_conn()
+        cursor = iconn.cursor()
+        tables = []
+        for c in conns:
+            prefix = c.get("table_prefix", "")
+            if not prefix:
+                continue
+            cursor.execute(
+                "SELECT TABLE_NAME FROM information_schema.TABLES "
+                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME LIKE %s "
+                "ORDER BY TABLE_NAME",
+                (f"{prefix}%",)
+            )
+            tables.extend(r[0] for r in cursor.fetchall())
+        iconn.close()
+        log.info("Provider tables listed", user=user["email"], count=len(tables))
+        return {"tables": tables, "schemas": {}, "foreign_keys": []}
     except Exception as e:
-        log.error("Failed to list tables", user=user["email"], error=str(e))
+        log.error("Failed to list provider tables", user=user["email"], error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/tables/{table_name}/columns")
+def get_table_columns(table_name: str, user: dict = Depends(current_user)):
+    """Return column names and types for a table the user owns."""
+    import re
+    if not re.match(r'^[A-Za-z0-9_]+$', table_name):
+        raise HTTPException(status_code=400, detail="Invalid table name.")
+    s = user.get("settings", {})
+    try:
+        if s.get("db_configs"):
+            conn = get_connection(_resolve_db(user))
+        else:
+            # Verify this table belongs to the requesting user
+            conns = get_user_connections(user["email"])
+            prefixes = [c.get("table_prefix", "") for c in conns if c.get("table_prefix")]
+            if not prefixes or not any(table_name.startswith(p) for p in prefixes):
+                raise HTTPException(status_code=403, detail="Access denied.")
+            conn = _get_internal_conn()
+        cursor = conn.cursor()
+        cursor.execute(f"DESCRIBE `{table_name}`")
+        rows = cursor.fetchall()
+        conn.close()
+        return {"columns": [{"name": r[0], "type": r[1]} for r in rows]}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("Failed to describe table", table=table_name, error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -620,13 +715,14 @@ class NLQueryRequest(BaseModel):
 
 @app.post("/query")
 def natural_language_query(req: NLQueryRequest, user: dict = Depends(current_user)):
-    log.info("NL query", user=user["email"], llm=req.llm, question=req.question[:80])
-    api_key = _resolve_api_key(user, req.llm)
+    llm = _effective_llm(user, req.llm)
+    log.info("NL query", user=user["email"], llm=llm, question=req.question[:80])
+    api_key = _resolve_api_key(user, llm)
     try:
         conn = get_connection(_resolve_db(user))
         schemas = get_table_schemas(conn, None)
         fkeys = get_foreign_keys(conn)
-        sql = query_to_sql(req.question, schemas, req.llm, fkeys, api_key=api_key, user_email=user["email"])
+        sql = query_to_sql(req.question, schemas, llm, fkeys, api_key=api_key, user_email=user["email"])
         cursor = conn.cursor()
         cursor.execute(sql)
         columns = [desc[0] for desc in cursor.description]
@@ -772,6 +868,38 @@ def forecast(req: ForecastRequest, user: dict = Depends(current_user)):
 
 @app.get("/forecast/auto")
 def auto_forecast(periods: int = 90, user: dict = Depends(current_user)):
+    s = user.get("settings", {})
+
+    # Provider-only user: run forecast on their synced receipts table
+    if not s.get("db_configs"):
+        conns = get_user_connections(user["email"])
+        if not conns:
+            raise HTTPException(status_code=422, detail="No data source connected.")
+        prefix = conns[0].get("table_prefix", "")
+        if not prefix:
+            raise HTTPException(status_code=422, detail="Integration tables not ready.")
+        receipts_tbl = f"{prefix}receipts"
+        log.info("Provider auto forecast", user=user["email"], table=receipts_tbl)
+        try:
+            iconn = _get_internal_conn()
+            cursor = iconn.cursor()
+            cursor.execute(
+                f"SELECT DATE(created_at) AS ds, SUM(total_money) AS y "
+                f"FROM `{receipts_tbl}` "
+                f"WHERE created_at IS NOT NULL AND total_money > 0 "
+                f"GROUP BY DATE(created_at) ORDER BY DATE(created_at)"
+            )
+            rows = cursor.fetchall()
+            iconn.close()
+        except Exception as e:
+            log.error("Provider forecast query failed", error=str(e))
+            raise HTTPException(status_code=500, detail=str(e))
+        result = run_forecast(rows, periods)
+        result.update(used_table=receipts_tbl, used_date_col="created_at",
+                      used_value_col="total_money", from_cache=False)
+        return result
+
+    # Own-DB user
     db_config = _resolve_db(user)
     cache = get_cache(user["email"], db_config)
     auto = cache.get("auto_columns", {}) if cache else {}
@@ -835,6 +963,38 @@ def anomalies(req: AnomalyRequest, user: dict = Depends(current_user)):
 
 @app.get("/anomalies/auto")
 def auto_anomalies(user: dict = Depends(current_user)):
+    s = user.get("settings", {})
+
+    # Provider-only user: run anomaly detection on their synced receipts table
+    if not s.get("db_configs"):
+        conns = get_user_connections(user["email"])
+        if not conns:
+            raise HTTPException(status_code=422, detail="No data source connected.")
+        prefix = conns[0].get("table_prefix", "")
+        if not prefix:
+            raise HTTPException(status_code=422, detail="Integration tables not ready.")
+        receipts_tbl = f"{prefix}receipts"
+        log.info("Provider auto anomaly", user=user["email"], table=receipts_tbl)
+        try:
+            iconn = _get_internal_conn()
+            cursor = iconn.cursor()
+            cursor.execute(
+                f"SELECT DATE(created_at), SUM(total_money) "
+                f"FROM `{receipts_tbl}` "
+                f"WHERE created_at IS NOT NULL AND total_money > 0 "
+                f"GROUP BY DATE(created_at) ORDER BY DATE(created_at)"
+            )
+            rows = cursor.fetchall()
+            iconn.close()
+        except Exception as e:
+            log.error("Provider anomaly query failed", error=str(e))
+            raise HTTPException(status_code=500, detail=str(e))
+        result = run_anomaly_detection(rows, has_date=True)
+        result.update(used_table=receipts_tbl, used_date_col="created_at",
+                      used_value_col="total_money", from_cache=False)
+        return result
+
+    # Own-DB user
     db_config = _resolve_db(user)
     cache = get_cache(user["email"], db_config)
     auto = cache.get("auto_columns", {}) if cache else {}
@@ -876,9 +1036,10 @@ class ReportRequest(BaseModel):
 
 @app.post("/report")
 def generate_report(req: ReportRequest, user: dict = Depends(current_user)):
-    log.info("Generate report", user=user["email"], llm=req.llm,
+    llm = _effective_llm(user, req.llm)
+    log.info("Generate report", user=user["email"], llm=llm,
              title=req.title, sections=req.sections)
-    api_key = _resolve_api_key(user, req.llm)
+    api_key = _resolve_api_key(user, llm)
     try:
         db_config = _resolve_db(user)
         conn = get_connection(db_config)
@@ -914,7 +1075,7 @@ def generate_report(req: ReportRequest, user: dict = Depends(current_user)):
         conn.close()
         narrative = generate_report_summary(
             title=req.title, kpis=kpis, section_data=section_data,
-            llm=req.llm, format=req.format, api_key=api_key,
+            llm=llm, format=req.format, api_key=api_key,
             user_email=user["email"]
         )
         log.info("Report generated", user=user["email"], sections=len(section_data))
@@ -1013,6 +1174,15 @@ def connect_provider_route(req: ProviderConnectRequest,
         return {"ok": True, "connection_id": connection_id}
     except Exception as e:
         log.error("Provider connect failed", provider=req.provider_id, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/providers/stats")
+def provider_stats(user: dict = Depends(current_user)):
+    """Return aggregate stats across all user integrations (total rows across all providers)."""
+    try:
+        return {"total_rows": get_user_total_rows(user["email"])}
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 

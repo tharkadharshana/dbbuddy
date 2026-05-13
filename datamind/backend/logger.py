@@ -121,7 +121,18 @@ class PrettyFormatter(logging.Formatter):
 # ── Logger factory ────────────────────────────────────────────────────────────
 
 def _build_handler(stream=None, filepath=None) -> logging.Handler:
-    handler = logging.StreamHandler(stream) if stream else logging.FileHandler(filepath)
+    if stream:
+        handler = logging.StreamHandler(stream)
+        # On Windows the default console encoding (e.g. cp1252) can't represent
+        # Unicode symbols like ✓ / ✅ that appear in sync progress messages.
+        # Reconfigure the underlying stream to UTF-8 so those characters log cleanly.
+        try:
+            if hasattr(stream, 'reconfigure'):
+                stream.reconfigure(encoding='utf-8', errors='replace')
+        except Exception:
+            pass
+    else:
+        handler = logging.FileHandler(filepath, encoding='utf-8')
     if LOG_FORMAT == "json":
         handler.setFormatter(JsonFormatter())
     else:
@@ -141,7 +152,7 @@ def _setup_root():
         log_path = Path(LOG_FILE)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         root.addHandler(_build_handler(filepath=str(log_path)))
-        root.info(f"File logging enabled", path=str(log_path))
+        root.info(f"File logging enabled: {log_path}")
 
     # Quieten noisy third-party loggers
     for noisy in ("uvicorn.access", "httpx", "prophet", "cmdstanpy"):

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { ComposedChart, Bar, ReferenceLine, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { Card, Btn, Badge, Spinner, Spinner2, Empty, ErrorBox, KPICard } from '../components/UI'
-import { runAutoAnomalies, runAnomalies, fetchTables } from '../utils/api'
+import { runAutoAnomalies, runAnomalies, fetchTables, fetchTableColumns } from '../utils/api'
 
 const TT = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)', borderRadius:8, fontSize:12, color:'#f0f1fa' }
 const SEV_COLOR = { high:'red', medium:'amber', low:'blue' }
@@ -11,10 +11,31 @@ export default function AnomalyPage() {
   const [loading, setLoading] = useState(false)
   const [result, setResult]   = useState(null)
   const [error, setError]     = useState(null)
-  const [tables, setTables]   = useState([])
-  const [form, setForm]       = useState({ table:'', value_column:'', date_column:'' })
+  const [tables, setTables]           = useState([])
+  const [columns, setColumns]         = useState([])
+  const [colsLoading, setColsLoading] = useState(false)
+  const [form, setForm]               = useState({ table:'', value_column:'', date_column:'' })
 
   useEffect(() => { fetchTables().then(d=>setTables(d.tables||[])).catch(()=>{}) }, [])
+
+  useEffect(() => {
+    if (!form.table) { setColumns([]); return }
+    setColsLoading(true)
+    fetchTableColumns(form.table)
+      .then(d => {
+        const cols = d.columns || []
+        setColumns(cols)
+        const dateCol = cols.find(c => /datetime|date|timestamp/i.test(c.type))
+        const numCol  = cols.find(c => /decimal|float|double|numeric/i.test(c.type))
+        setForm(f => ({
+          ...f,
+          date_column:  dateCol?.name || f.date_column,
+          value_column: numCol?.name  || f.value_column,
+        }))
+      })
+      .catch(() => setColumns([]))
+      .finally(() => setColsLoading(false))
+  }, [form.table])
 
   async function runIt() {
     setLoading(true); setError(null); setResult(null)
@@ -42,18 +63,37 @@ export default function AnomalyPage() {
 
         {mode==='manual' && (
           <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:10, marginBottom:14 }}>
-            {[['table','Table'],['value_column','Value Column'],['date_column','Date Column (opt.)']].map(([k,lbl]) => (
-              <div key={k}>
-                <label style={{ fontSize:11, color:'var(--text3)', display:'block', marginBottom:5 }}>{lbl}</label>
-                {k==='table'
-                  ? <select value={form.table} onChange={e=>setForm(f=>({...f,table:e.target.value}))} style={{ width:'100%', padding:'8px 10px', borderRadius:'var(--r-md)', fontSize:13 }}>
-                      <option value="">Select…</option>
-                      {tables.map(t=><option key={t} value={t}>{t}</option>)}
-                    </select>
-                  : <input value={form[k]} onChange={e=>setForm(f=>({...f,[k]:e.target.value}))} placeholder={k==='date_column'?'optional':'e.g. invoiceTotal'} style={{ width:'100%', padding:'8px 10px', borderRadius:'var(--r-md)', fontSize:13 }} />
-                }
-              </div>
-            ))}
+            {/* Table */}
+            <div>
+              <label style={{ fontSize:11, color:'var(--text3)', display:'block', marginBottom:5 }}>Table</label>
+              <select value={form.table} onChange={e=>setForm(f=>({...f,table:e.target.value,date_column:'',value_column:''}))}
+                style={{ width:'100%', padding:'8px 10px', borderRadius:'var(--r-md)', fontSize:13, background:'var(--bg2)', border:'1px solid var(--border)', color:'var(--text)' }}>
+                <option value="">Select table…</option>
+                {tables.map(t=><option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+            {/* Value column */}
+            <div>
+              <label style={{ fontSize:11, color:'var(--text3)', display:'block', marginBottom:5 }}>Value Column</label>
+              <select value={form.value_column} onChange={e=>setForm(f=>({...f,value_column:e.target.value}))}
+                disabled={!form.table || colsLoading}
+                style={{ width:'100%', padding:'8px 10px', borderRadius:'var(--r-md)', fontSize:13, background:'var(--bg2)', border:'1px solid var(--border)', color:'var(--text)', opacity:(!form.table||colsLoading)?0.5:1 }}>
+                <option value="">Select column…</option>
+                {columns.map(c=><option key={c.name} value={c.name}>{c.name} ({c.type})</option>)}
+              </select>
+            </div>
+            {/* Date column */}
+            <div>
+              <label style={{ fontSize:11, color:'var(--text3)', display:'block', marginBottom:5 }}>
+                Date Column (optional) {colsLoading && <span style={{opacity:.5}}>loading…</span>}
+              </label>
+              <select value={form.date_column} onChange={e=>setForm(f=>({...f,date_column:e.target.value}))}
+                disabled={!form.table || colsLoading}
+                style={{ width:'100%', padding:'8px 10px', borderRadius:'var(--r-md)', fontSize:13, background:'var(--bg2)', border:'1px solid var(--border)', color:'var(--text)', opacity:(!form.table||colsLoading)?0.5:1 }}>
+                <option value="">None</option>
+                {columns.map(c=><option key={c.name} value={c.name}>{c.name} ({c.type})</option>)}
+              </select>
+            </div>
           </div>
         )}
 

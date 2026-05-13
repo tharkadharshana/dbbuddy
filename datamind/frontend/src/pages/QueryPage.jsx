@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { Card, Btn, LLMToggle, Spinner, Empty, ErrorBox, KPICard, DataTable, COLORS } from '../components/UI'
+import { Card, Btn, UsageMeter, Spinner, Empty, ErrorBox, KPICard, DataTable, COLORS } from '../components/UI'
 import { runNLQuery } from '../utils/api'
 
 const SUGGESTIONS = [
@@ -66,7 +66,7 @@ export default function QueryPage({ llm, setLlm }) {
         <Card style={{ padding:18 }}>
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12 }}>
             <span style={{ fontSize:11, fontWeight:600, color:'var(--text3)', textTransform:'uppercase', letterSpacing:'.08em' }}>Ask Your Data Anything</span>
-            <LLMToggle value={llm} onChange={setLlm} />
+            <UsageMeter value={llm} onChange={setLlm} />
           </div>
           <div style={{ display:'flex', gap:10 }}>
             <textarea value={q} onChange={e=>setQ(e.target.value)}

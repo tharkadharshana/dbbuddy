@@ -19,8 +19,8 @@ from providers.salesplay.provider import SalesPlayProvider
 # value = instantiated provider object
 
 REGISTRY: dict = {
-    "loyverse":  LoyverseProvider(),
     "salesplay": SalesPlayProvider(),
+    "loyverse":  LoyverseProvider(),
     # "shopify":  ShopifyProvider(),
     # "square":   SquareProvider(),
     # "woocommerce": WooCommerceProvider(),
