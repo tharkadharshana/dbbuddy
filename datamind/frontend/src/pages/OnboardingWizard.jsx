@@ -19,8 +19,8 @@ function StepDots({ total, current }) {
 // ── Shared input style ─────────────────────────────────────────────────────────
 const inp = (extra={}) => ({
   width:'100%', padding:'10px 14px', borderRadius:10, fontSize:14,
-  background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.1)',
-  color:'#f0f1fa', outline:'none', fontFamily:'var(--font)', ...extra
+  background:'var(--bg3)', border:'1px solid var(--border)',
+  color:'var(--text)', outline:'none', fontFamily:'var(--font)', ...extra
 })
 
 // ── Status box ─────────────────────────────────────────────────────────────────
@@ -150,7 +150,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
 
   // ── Shared card wrapper ─────────────────────────────────────────────────────
   const Card = ({children}) => (
-    <div style={{ background:'#0f1018', border:'1px solid rgba(255,255,255,0.07)', borderRadius:18, padding:'28px 32px', boxShadow:'0 24px 64px rgba(0,0,0,0.5)', width:'100%', maxWidth:480 }}>
+    <div style={{ background:'var(--bg1)', border:'1px solid var(--border)', borderRadius:18, padding:'28px 32px', boxShadow:'0 24px 64px rgba(0,0,0,0.35)', width:'100%', maxWidth:480 }}>
       {children}
     </div>
   )
@@ -166,7 +166,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
   )
 
   const Label = ({children}) => (
-    <div style={{ fontSize:12, color:'rgba(255,255,255,0.4)', marginBottom:6, fontWeight:500 }}>{children}</div>
+    <div style={{ fontSize:12, color:'var(--text2)', marginBottom:6, fontWeight:500 }}>{children}</div>
   )
 
   // ── Background decoration ───────────────────────────────────────────────────
@@ -179,7 +179,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
-    <div style={{ minHeight:'100vh', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', background:'#09090f', padding:'24px 16px', fontFamily:'var(--font)', position:'relative', overflow:'hidden' }}>
+    <div style={{ minHeight:'100vh', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', background:'var(--bg)', padding:'24px 16px', fontFamily:'var(--font)', position:'relative', overflow:'hidden' }}>
       <Bg />
 
       {/* Theme toggle */}
@@ -190,12 +190,12 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
           style={{
             position:'fixed', top:16, right:16, zIndex:100,
             width:36, height:36, borderRadius:'50%',
-            background:'rgba(255,255,255,0.07)', border:'1px solid rgba(255,255,255,0.12)',
+            background:'var(--bg3)', border:'1px solid var(--border)',
             cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center',
             fontSize:16, transition:'background .15s',
           }}
-          onMouseEnter={e => e.currentTarget.style.background='rgba(255,255,255,0.14)'}
-          onMouseLeave={e => e.currentTarget.style.background='rgba(255,255,255,0.07)'}
+          onMouseEnter={e => e.currentTarget.style.background='var(--bg4)'}
+          onMouseLeave={e => e.currentTarget.style.background='var(--bg3)'}
         >
           {theme === 'dark' ? '☀️' : '🌙'}
         </button>
@@ -211,8 +211,8 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
             <rect x="9" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.95)"/>
           </svg>
         </div>
-        <div style={{ fontSize:22, fontWeight:700, color:'#f0f1fa' }}>Welcome to DataMind</div>
-        <div style={{ fontSize:13, color:'rgba(255,255,255,0.35)', marginTop:4 }}>Let's get you set up in 3 quick steps</div>
+        <div style={{ fontSize:22, fontWeight:700, color:'var(--text)' }}>Welcome to DataMind</div>
+        <div style={{ fontSize:13, color:'var(--text2)', marginTop:4 }}>Let's get you set up in 3 quick steps</div>
       </div>
 
       <div style={{ zIndex:1, width:'100%', maxWidth:480 }}>
@@ -235,7 +235,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
               }, 500)
               return null
             })()}
-            <div style={{ textAlign:'center', padding:'60px 20px', color:'rgba(255,255,255,0.3)' }}>
+            <div style={{ textAlign:'center', padding:'60px 20px', color:'var(--text3)' }}>
               <Spinner size={32} />
               <div style={{ marginTop:16, fontSize:14 }}>Setting up DataMind AI...</div>
             </div>
@@ -245,15 +245,15 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
         {/* ── STEP 0.5: Choose data source type ─────────────────────────── */}
         {step === 1 && sourceType === '' && !syncConnId && (
           <Card>
-            <div style={{ fontSize:11, color:'rgba(255,255,255,0.3)', textTransform:'uppercase', letterSpacing:'.1em', marginBottom:6 }}>Step 2 of 3</div>
-            <div style={{ fontSize:19, fontWeight:700, color:'#f0f1fa', marginBottom:4 }}>How do you want to connect your data?</div>
-            <div style={{ fontSize:13, color:'rgba(255,255,255,0.4)', marginBottom:22, lineHeight:1.6 }}>
+            <div style={{ fontSize:11, color:'var(--text3)', textTransform:'uppercase', letterSpacing:'.1em', marginBottom:6 }}>Step 2 of 3</div>
+            <div style={{ fontSize:19, fontWeight:700, color:'var(--text)', marginBottom:4 }}>How do you want to connect your data?</div>
+            <div style={{ fontSize:13, color:'var(--text2)', marginBottom:22, lineHeight:1.6 }}>
               Choose whether you have a MySQL database you control, or you want to sync from a business tool like Loyverse.
             </div>
             <div style={{ display:'flex', flexDirection:'column', gap:10, marginBottom:20 }}>
               <button onClick={() => setSourceType('db')} style={{
-                padding:'16px 18px', borderRadius:12, border:'1px solid rgba(255,255,255,0.1)',
-                background:'rgba(255,255,255,0.03)', color:'#f0f1fa', textAlign:'left', cursor:'pointer',
+                padding:'16px 18px', borderRadius:12, border:'1px solid var(--border)',
+                background:'var(--bg2)', color:'var(--text)', textAlign:'left', cursor:'pointer',
                 display:'flex', alignItems:'center', gap:14, transition:'all .15s',
               }}
                 onMouseEnter={e => e.currentTarget.style.borderColor='rgba(79,142,247,0.4)'}
@@ -262,7 +262,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
                 <span style={{ fontSize:32 }}>🗄</span>
                 <div>
                   <div style={{ fontWeight:600, fontSize:14, marginBottom:3 }}>Bring Your Own Database</div>
-                  <div style={{ fontSize:12, color:'rgba(255,255,255,0.35)' }}>Connect directly to your MySQL database</div>
+                  <div style={{ fontSize:12, color:'var(--text2)' }}>Connect directly to your MySQL database</div>
                 </div>
               </button>
               <button onClick={async () => {
@@ -270,8 +270,8 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
                 const r = await fetchProviders().catch(() => ({providers:[]}))
                 setProviders(r.providers || [])
               }} style={{
-                padding:'16px 18px', borderRadius:12, border:'1px solid rgba(255,255,255,0.1)',
-                background:'rgba(255,255,255,0.03)', color:'#f0f1fa', textAlign:'left', cursor:'pointer',
+                padding:'16px 18px', borderRadius:12, border:'1px solid var(--border)',
+                background:'var(--bg2)', color:'var(--text)', textAlign:'left', cursor:'pointer',
                 display:'flex', alignItems:'center', gap:14, transition:'all .15s',
               }}
                 onMouseEnter={e => e.currentTarget.style.borderColor='rgba(167,139,250,0.4)'}
@@ -280,47 +280,47 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
                 <span style={{ fontSize:32 }}>🔌</span>
                 <div>
                   <div style={{ fontWeight:600, fontSize:14, marginBottom:3 }}>Connect via API Integration</div>
-                  <div style={{ fontSize:12, color:'rgba(255,255,255,0.35)' }}>Loyverse POS, Square, Shopify and more</div>
+                  <div style={{ fontSize:12, color:'var(--text2)' }}>Loyverse POS, Square, Shopify and more</div>
                 </div>
               </button>
             </div>
-            <button onClick={() => setStep(0)} style={{ fontSize:12, color:'rgba(255,255,255,0.3)', background:'none', border:'none', cursor:'pointer' }}>← Back</button>
+            <button onClick={() => setStep(0)} style={{ fontSize:12, color:'var(--text3)', background:'none', border:'none', cursor:'pointer' }}>← Back</button>
           </Card>
         )}
 
         {/* ── STEP 1b: Choose provider ──────────────────────────────────── */}
         {step === 1 && sourceType === 'provider' && !selProvider && !syncConnId && (
           <Card>
-            <div style={{ fontSize:11, color:'rgba(255,255,255,0.3)', textTransform:'uppercase', letterSpacing:'.1em', marginBottom:6 }}>Step 2 of 3</div>
-            <div style={{ fontSize:19, fontWeight:700, color:'#f0f1fa', marginBottom:16 }}>Choose your integration</div>
+            <div style={{ fontSize:11, color:'var(--text3)', textTransform:'uppercase', letterSpacing:'.1em', marginBottom:6 }}>Step 2 of 3</div>
+            <div style={{ fontSize:19, fontWeight:700, color:'var(--text)', marginBottom:16 }}>Choose your integration</div>
             <div style={{ display:'flex', flexDirection:'column', gap:8, marginBottom:16 }}>
               {providers.map(p => (
                 <button key={p.provider_id} onClick={() => setSelProvider(p)} style={{
                   padding:'14px 16px', borderRadius:12, border:'1px solid rgba(255,255,255,0.08)',
-                  background:'rgba(255,255,255,0.03)', color:'#f0f1fa', textAlign:'left', cursor:'pointer',
+                  background:'var(--bg2)', color:'var(--text)', textAlign:'left', cursor:'pointer',
                   display:'flex', alignItems:'center', gap:12,
                 }}>
                   <span style={{ fontSize:28 }}>{p.logo_emoji}</span>
                   <div>
                     <div style={{ fontWeight:600, fontSize:13 }}>{p.display_name}</div>
-                    <div style={{ fontSize:11, color:'rgba(255,255,255,0.3)' }}>{p.description}</div>
+                    <div style={{ fontSize:11, color:'var(--text3)' }}>{p.description}</div>
                   </div>
                 </button>
               ))}
             </div>
-            <button onClick={() => setSourceType('')} style={{ fontSize:12, color:'rgba(255,255,255,0.3)', background:'none', border:'none', cursor:'pointer' }}>← Back</button>
+            <button onClick={() => setSourceType('')} style={{ fontSize:12, color:'var(--text3)', background:'none', border:'none', cursor:'pointer' }}>← Back</button>
           </Card>
         )}
 
         {/* ── STEP 1c: Provider credentials ────────────────────────────── */}
         {step === 1 && sourceType === 'provider' && selProvider && !syncConnId && (
           <Card>
-            <div style={{ fontSize:11, color:'rgba(255,255,255,0.3)', textTransform:'uppercase', letterSpacing:'.1em', marginBottom:6 }}>Step 2 of 3</div>
+            <div style={{ fontSize:11, color:'var(--text3)', textTransform:'uppercase', letterSpacing:'.1em', marginBottom:6 }}>Step 2 of 3</div>
             <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:16 }}>
               <span style={{ fontSize:30 }}>{selProvider.logo_emoji}</span>
               <div>
-                <div style={{ fontSize:17, fontWeight:700, color:'#f0f1fa' }}>Connect {selProvider.display_name}</div>
-                <div style={{ fontSize:12, color:'rgba(255,255,255,0.35)' }}>{selProvider.description}</div>
+                <div style={{ fontSize:17, fontWeight:700, color:'var(--text)' }}>Connect {selProvider.display_name}</div>
+                <div style={{ fontSize:12, color:'var(--text2)' }}>{selProvider.description}</div>
               </div>
             </div>
             {selProvider.credential_fields?.map(f => (
@@ -332,7 +332,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
                   placeholder={f.placeholder || ''}
                   style={{ ...inp({fontFamily:'var(--mono)'}), marginBottom:4 }}
                 />
-                {f.hint && <div style={{ fontSize:11, color:'rgba(255,255,255,0.3)' }}>{f.hint}</div>}
+                {f.hint && <div style={{ fontSize:11, color:'var(--text3)' }}>{f.hint}</div>}
               </div>
             ))}
             {provResult && (
@@ -341,7 +341,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
                 : provResult.error} />
             )}
             <div style={{ display:'flex', gap:8 }}>
-              <button onClick={() => setSelProvider(null)} style={{ padding:'9px 14px', borderRadius:10, fontSize:13, background:'transparent', border:'1px solid rgba(255,255,255,0.1)', color:'rgba(255,255,255,0.4)', cursor:'pointer' }}>← Back</button>
+              <button onClick={() => setSelProvider(null)} style={{ padding:'9px 14px', borderRadius:10, fontSize:13, background:'transparent', border:'1px solid var(--border)', color:'var(--text2)', cursor:'pointer' }}>← Back</button>
               <button onClick={async () => {
                 setProvTesting(true); setProvResult(null)
                 try {
@@ -377,9 +377,9 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
         {/* ── STEP 1 (DB): Add database ─────────────────────────────────── */}
         {step === 1 && sourceType === 'db' && !syncConnId && (
           <Card>
-            <div style={{ fontSize:11, color:'rgba(255,255,255,0.3)', textTransform:'uppercase', letterSpacing:'.1em', marginBottom:6 }}>Step 2 of 3</div>
-            <div style={{ fontSize:19, fontWeight:700, color:'#f0f1fa', marginBottom:4 }}>Connect your MySQL database</div>
-            <div style={{ fontSize:13, color:'rgba(255,255,255,0.4)', marginBottom:22, lineHeight:1.6 }}>
+            <div style={{ fontSize:11, color:'var(--text3)', textTransform:'uppercase', letterSpacing:'.1em', marginBottom:6 }}>Step 2 of 3</div>
+            <div style={{ fontSize:19, fontWeight:700, color:'var(--text)', marginBottom:4 }}>Connect your MySQL database</div>
+            <div style={{ fontSize:13, color:'var(--text2)', marginBottom:22, lineHeight:1.6 }}>
               Enter your database credentials. We'll test the connection before saving.
             </div>
 
@@ -408,7 +408,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
             {dbResult && <div style={{ marginTop:10 }}><StatusBox ok={dbResult.ok} message={dbResult.ok ? `Connected! Found ${dbResult.table_count} tables: ${dbResult.tables?.slice(0,4).join(', ')}${dbResult.table_count > 4 ? '…' : ''}` : dbResult.error} /></div>}
 
             <div style={{ display:'flex', gap:8, marginTop:14 }}>
-              <button onClick={() => setStep(0)} style={{ padding:'10px 18px', borderRadius:10, fontSize:13, background:'transparent', border:'1px solid rgba(255,255,255,0.1)', color:'rgba(255,255,255,0.4)', cursor:'pointer' }}>← Back</button>
+              <button onClick={() => setStep(0)} style={{ padding:'10px 18px', borderRadius:10, fontSize:13, background:'transparent', border:'1px solid var(--border)', color:'var(--text2)', cursor:'pointer' }}>← Back</button>
               <button onClick={handleTestDB} disabled={dbTesting} style={{
                 flex:1, padding:'10px', borderRadius:10, fontSize:13, fontWeight:600,
                 background:'rgba(79,142,247,0.12)', color:'var(--blue)',
@@ -429,21 +429,21 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
         {/* ── STEP 2: Confirm + build cache ─────────────────────────────── */}
         {step === 2 && !syncConnId && (
           <Card>
-            <div style={{ fontSize:11, color:'rgba(255,255,255,0.3)', textTransform:'uppercase', letterSpacing:'.1em', marginBottom:6 }}>Step 3 of 3</div>
-            <div style={{ fontSize:19, fontWeight:700, color:'#f0f1fa', marginBottom:4 }}>Build your analytics cache</div>
-            <div style={{ fontSize:13, color:'rgba(255,255,255,0.4)', marginBottom:22, lineHeight:1.6 }}>
+            <div style={{ fontSize:11, color:'var(--text3)', textTransform:'uppercase', letterSpacing:'.1em', marginBottom:6 }}>Step 3 of 3</div>
+            <div style={{ fontSize:19, fontWeight:700, color:'var(--text)', marginBottom:4 }}>Build your analytics cache</div>
+            <div style={{ fontSize:13, color:'var(--text2)', marginBottom:22, lineHeight:1.6 }}>
               DataMind will now read your schema and generate custom SQL for every analytics template using AI. This runs <strong style={{color:'rgba(255,255,255,.6)'}}>once</strong> and is cached forever.
             </div>
 
             {/* Summary */}
-            <div style={{ background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.06)', borderRadius:10, padding:'14px 16px', marginBottom:18 }}>
+            <div style={{ background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:10, padding:'14px 16px', marginBottom:18 }}>
               {[
                 ['Database', `${dbForm.database} @ ${dbForm.host}:${dbForm.port}`],
                 ['Tables found', dbResult?.table_count || '?'],
               ].map(([k,v]) => (
-                <div key={k} style={{ display:'flex', justifyContent:'space-between', padding:'5px 0', borderBottom:'1px solid rgba(255,255,255,0.05)', fontSize:13 }}>
-                  <span style={{ color:'rgba(255,255,255,0.35)' }}>{k}</span>
-                  <span style={{ color:'#f0f1fa', fontWeight:500 }}>{v}</span>
+                <div key={k} style={{ display:'flex', justifyContent:'space-between', padding:'5px 0', borderBottom:'1px solid var(--border)', fontSize:13 }}>
+                  <span style={{ color:'var(--text2)' }}>{k}</span>
+                  <span style={{ color:'var(--text)', fontWeight:500 }}>{v}</span>
                 </div>
               ))}
             </div>
@@ -458,7 +458,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
               ].map(({icon,text},i) => (
                 <div key={i} style={{ display:'flex', gap:10, alignItems:'flex-start', marginBottom:10 }}>
                   <span style={{ fontSize:16, flexShrink:0 }}>{icon}</span>
-                  <span style={{ fontSize:13, color:'rgba(255,255,255,0.45)', lineHeight:1.5 }}>{text}</span>
+                  <span style={{ fontSize:13, color:'var(--text2)', lineHeight:1.5 }}>{text}</span>
                 </div>
               ))}
             </div>
@@ -467,7 +467,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
             {connectDone && <StatusBox ok={true} message="Database connected! Building cache in background…" />}
 
             <div style={{ display:'flex', gap:8 }}>
-              <button onClick={() => setStep(1)} style={{ padding:'10px 18px', borderRadius:10, fontSize:13, background:'transparent', border:'1px solid rgba(255,255,255,0.1)', color:'rgba(255,255,255,0.4)', cursor:'pointer' }}>← Back</button>
+              <button onClick={() => setStep(1)} style={{ padding:'10px 18px', borderRadius:10, fontSize:13, background:'transparent', border:'1px solid var(--border)', color:'var(--text2)', cursor:'pointer' }}>← Back</button>
               <button onClick={handleConnect} disabled={connecting || connectDone} style={{
                 flex:1, padding:'12px', borderRadius:10, fontSize:14, fontWeight:600,
                 background: connectDone ? 'var(--green-dim)' : 'linear-gradient(135deg,#4f8ef7,#7c6af7)',
@@ -498,13 +498,13 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
               <style>{`@keyframes obSlide{0%{transform:translateX(-100%)}100%{transform:translateX(400%)}}`}</style>
               <div style={{ textAlign:'center', paddingBottom:8 }}>
                 <div style={{ fontSize:48, marginBottom:10 }}>{selProvider?.logo_emoji || '🔌'}</div>
-                <div style={{ fontSize:18, fontWeight:700, color:'#f0f1fa', marginBottom:4 }}>
+                <div style={{ fontSize:18, fontWeight:700, color:'var(--text)', marginBottom:4 }}>
                   Syncing {selProvider?.display_name}…
                 </div>
-                <div style={{ fontSize:13, color:'rgba(255,255,255,0.4)', marginBottom:20, minHeight:18 }}>{msg}</div>
+                <div style={{ fontSize:13, color:'var(--text2)', marginBottom:20, minHeight:18 }}>{msg}</div>
 
                 {/* Progress bar */}
-                <div style={{ height:4, background:'rgba(255,255,255,0.08)', borderRadius:2, overflow:'hidden', marginBottom:8 }}>
+                <div style={{ height:4, background:'var(--bg3)', borderRadius:2, overflow:'hidden', marginBottom:8 }}>
                   {pct > 0
                     ? <div style={{ height:'100%', width:`${pct}%`, background:'#f59e0b', borderRadius:2, transition:'width .6s ease' }} />
                     : <div style={{ height:'100%', width:'30%', background:'#f59e0b', borderRadius:2, animation:'obSlide 1.4s linear infinite' }} />
@@ -512,28 +512,28 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
                 </div>
 
                 {/* Stats */}
-                <div style={{ display:'flex', justifyContent:'center', gap:16, fontSize:12, color:'rgba(255,255,255,0.35)', marginBottom:20 }}>
+                <div style={{ display:'flex', justifyContent:'center', gap:16, fontSize:12, color:'var(--text2)', marginBottom:20 }}>
                   {rows > 0 && <span>{rows.toLocaleString()} rows synced</span>}
                   {etaStr  && <span>{etaStr}</span>}
                   {pct > 0 && <span>{pct}%</span>}
                 </div>
 
                 {/* What's happening list */}
-                <div style={{ textAlign:'left', background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.06)', borderRadius:10, padding:'12px 14px', marginBottom:16 }}>
+                <div style={{ textAlign:'left', background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:10, padding:'12px 14px', marginBottom:16 }}>
                   {[
                     { icon:'🔗', text:'Authenticating with your account' },
                     { icon:'📥', text:'Downloading and indexing your records' },
                     { icon:'🧠', text:'Building AI analytics cache' },
                     { icon:'⚡', text:'Future queries will be instant' },
                   ].map(({ icon, text }, i) => (
-                    <div key={i} style={{ display:'flex', gap:10, alignItems:'center', padding:'5px 0', borderBottom: i < 3 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
+                    <div key={i} style={{ display:'flex', gap:10, alignItems:'center', padding:'5px 0', borderBottom: i < 3 ? '1px solid var(--border)' : 'none' }}>
                       <span style={{ fontSize:15, flexShrink:0 }}>{icon}</span>
-                      <span style={{ fontSize:12, color:'rgba(255,255,255,0.4)' }}>{text}</span>
+                      <span style={{ fontSize:12, color:'var(--text2)' }}>{text}</span>
                     </div>
                   ))}
                 </div>
 
-                <div style={{ fontSize:12, color:'rgba(255,255,255,0.25)' }}>
+                <div style={{ fontSize:12, color:'var(--text3)' }}>
                   You'll be taken to Analytics Hub automatically when ready.
                 </div>
               </div>
@@ -546,8 +546,8 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
           <Card>
             <div style={{ textAlign:'center', padding:'12px 0 8px' }}>
               <div style={{ fontSize:56, marginBottom:16 }}>🎉</div>
-              <div style={{ fontSize:22, fontWeight:700, color:'#f0f1fa', marginBottom:8 }}>You're all set!</div>
-              <div style={{ fontSize:13, color:'rgba(255,255,255,0.4)', lineHeight:1.7, marginBottom:24 }}>
+              <div style={{ fontSize:22, fontWeight:700, color:'var(--text)', marginBottom:8 }}>You're all set!</div>
+              <div style={{ fontSize:13, color:'var(--text2)', lineHeight:1.7, marginBottom:24 }}>
                 Your database is connected and the analytics cache is building in the background.
                 Head to the <strong style={{color:'var(--blue)'}}>Analytics Hub</strong> — your custom templates will appear once the cache is ready.
               </div>
@@ -558,7 +558,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
                   '⌕  Ask a Question — type anything in plain English',
                   '📈  Forecasting — predict future revenue automatically',
                   '📋  Report Builder — generate professional reports',
-                ].map((t,i) => <div key={i} style={{ fontSize:12, color:'rgba(255,255,255,0.45)', padding:'4px 0' }}>{t}</div>)}
+                ].map((t,i) => <div key={i} style={{ fontSize:12, color:'var(--text2)', padding:'4px 0' }}>{t}</div>)}
               </div>
 
               <button onClick={onComplete} style={{

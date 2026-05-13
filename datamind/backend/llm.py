@@ -195,24 +195,52 @@ def call_deepseek(prompt: str, system: str = "", max_tokens: int = 2000,
                 raise
 
 
+_PLACEHOLDER_KEYS = {"", "your_gemini_api_key_here", "your_deepseek_api_key_here"}
+
+def _is_real_key(key: str) -> bool:
+    """Return True only if key is non-empty and not a placeholder from .env template."""
+    k = (key or "").strip()
+    return bool(k) and k not in _PLACEHOLDER_KEYS and not k.startswith("your_")
+
+
 def call_llm(prompt: str, system: str = "", llm: str = "gemini",
              max_tokens: int = 2000, api_key: str = "", user_email: str = None) -> str:
     """
-    Main dispatcher. Always use the explicit api_key.
-    llm must be 'gemini' or 'deepseek' — this is respected exactly.
-    Returns just the response text (tokens tracked internally).
+    Main dispatcher. Falls back to whichever LLM has a real key when the
+    requested one has none (or only a .env placeholder value).
     """
     llm = (llm or "gemini").lower().strip()
-    log.debug("LLM dispatch", llm=llm, has_key=bool(api_key), user=user_email)
-    
-    if llm == "deepseek":
-        result, _ = call_deepseek(prompt, system, max_tokens, api_key, user_email)
+
+    def _env_key(name: str) -> str:
+        return os.getenv(f"{name.upper()}_API_KEY", "").strip()
+
+    effective_llm = llm
+    effective_key = api_key.strip() if api_key else ""
+
+    # Treat placeholder values as missing
+    if not _is_real_key(effective_key):
+        effective_key = _env_key(llm)
+
+    # Env key might also be a placeholder — treat it as missing too
+    if not _is_real_key(effective_key):
+        other = "deepseek" if llm == "gemini" else "gemini"
+        fallback_key = _env_key(other)
+        if _is_real_key(fallback_key):
+            log.info("LLM key missing/placeholder, auto-switching",
+                     requested=llm, using=other, user=user_email)
+            effective_llm = other
+            effective_key = fallback_key
+
+    log.debug("LLM dispatch", llm=effective_llm, has_key=_is_real_key(effective_key), user=user_email)
+
+    if effective_llm == "deepseek":
+        result, _ = call_deepseek(prompt, system, max_tokens, effective_key, user_email)
         return result
-    elif llm == "gemini":
-        result, _ = call_gemini(prompt, system, max_tokens, api_key, user_email)
+    elif effective_llm == "gemini":
+        result, _ = call_gemini(prompt, system, max_tokens, effective_key, user_email)
         return result
     else:
-        raise ValueError(f"Unknown LLM provider: '{llm}'. Use 'gemini' or 'deepseek'.")
+        raise ValueError(f"Unknown LLM provider: '{effective_llm}'. Use 'gemini' or 'deepseek'.")
 
 
 # ── API key validation ────────────────────────────────────────────────────────

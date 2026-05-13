@@ -148,25 +148,33 @@ def _resolve_api_key(user: dict, llm: str) -> str:
     raise HTTPException(status_code=422, detail=f"Unknown LLM: '{llm}'. Use 'gemini' or 'deepseek'.")
 
 
+def _llm_has_key(user: dict, name: str) -> bool:
+    """Return True if a real (non-placeholder) key exists for this LLM."""
+    from llm import _is_real_key
+    s = user.get("settings", {})
+    if name == "gemini":
+        return _is_real_key(s.get("gemini_api_key", "")) or _is_real_key(os.getenv("GEMINI_API_KEY", ""))
+    if name == "deepseek":
+        return _is_real_key(s.get("deepseek_api_key", "")) or _is_real_key(os.getenv("DEEPSEEK_API_KEY", ""))
+    return False
+
+
 def _get_llm(user: dict) -> str:
     """Return user's preferred LLM, falling back to whichever one actually has a key."""
     s = user.get("settings", {})
     preferred = (s.get("default_llm") or "gemini").lower()
-
-    def _has_key(name: str) -> bool:
-        if name == "gemini":
-            return bool(s.get("gemini_api_key", "").strip() or os.getenv("GEMINI_API_KEY", "").strip())
-        if name == "deepseek":
-            return bool(s.get("deepseek_api_key", "").strip() or os.getenv("DEEPSEEK_API_KEY", "").strip())
-        return False
-
-    if _has_key(preferred):
+    if _llm_has_key(user, preferred):
         return preferred
     for fallback in ("gemini", "deepseek"):
-        if fallback != preferred and _has_key(fallback):
+        if fallback != preferred and _llm_has_key(user, fallback):
             log.info("LLM key fallback", preferred=preferred, using=fallback, user=user.get("email"))
             return fallback
     return preferred  # let _resolve_api_key raise the informative error
+
+
+def _effective_llm(user: dict, requested: str) -> str:
+    """Use requested LLM if a key exists for it, otherwise fall back to _get_llm()."""
+    return requested if _llm_has_key(user, requested) else _get_llm(user)
 
 
 def _status_key(email: str, db_config: dict) -> str:
@@ -704,13 +712,14 @@ class NLQueryRequest(BaseModel):
 
 @app.post("/query")
 def natural_language_query(req: NLQueryRequest, user: dict = Depends(current_user)):
-    log.info("NL query", user=user["email"], llm=req.llm, question=req.question[:80])
-    api_key = _resolve_api_key(user, req.llm)
+    llm = _effective_llm(user, req.llm)
+    log.info("NL query", user=user["email"], llm=llm, question=req.question[:80])
+    api_key = _resolve_api_key(user, llm)
     try:
         conn = get_connection(_resolve_db(user))
         schemas = get_table_schemas(conn, None)
         fkeys = get_foreign_keys(conn)
-        sql = query_to_sql(req.question, schemas, req.llm, fkeys, api_key=api_key, user_email=user["email"])
+        sql = query_to_sql(req.question, schemas, llm, fkeys, api_key=api_key, user_email=user["email"])
         cursor = conn.cursor()
         cursor.execute(sql)
         columns = [desc[0] for desc in cursor.description]
@@ -1024,9 +1033,10 @@ class ReportRequest(BaseModel):
 
 @app.post("/report")
 def generate_report(req: ReportRequest, user: dict = Depends(current_user)):
-    log.info("Generate report", user=user["email"], llm=req.llm,
+    llm = _effective_llm(user, req.llm)
+    log.info("Generate report", user=user["email"], llm=llm,
              title=req.title, sections=req.sections)
-    api_key = _resolve_api_key(user, req.llm)
+    api_key = _resolve_api_key(user, llm)
     try:
         db_config = _resolve_db(user)
         conn = get_connection(db_config)
