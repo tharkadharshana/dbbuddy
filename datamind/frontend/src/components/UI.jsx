@@ -88,7 +88,7 @@ export function UsageMeter() {
       }}>
         <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:6 }}>
           <span style={{ fontSize:12, fontWeight:600, color:'var(--text2)' }}>
-            🧠 AI Tokens
+            🧠 AI Credits
           </span>
           <span style={{ fontSize:10, color: getColor(tokensPct), fontFamily:'var(--mono)' }}>
             {tokensPct}%
