@@ -203,44 +203,85 @@ def _is_real_key(key: str) -> bool:
     return bool(k) and k not in _PLACEHOLDER_KEYS and not k.startswith("your_")
 
 
+def get_llm_priority() -> list:
+    """
+    Return ordered list of LLM providers to try.
+    Reads LLM_PRIORITY from .env (e.g. LLM_PRIORITY=deepseek,gemini).
+    Defaults to gemini,deepseek if not set.
+    """
+    raw = os.getenv("LLM_PRIORITY", "gemini,deepseek")
+    providers = [p.strip().lower() for p in raw.split(",") if p.strip()]
+    known = {"gemini", "deepseek"}
+    # Keep only known providers, preserve order, deduplicate
+    seen = set()
+    result = []
+    for p in providers:
+        if p in known and p not in seen:
+            result.append(p)
+            seen.add(p)
+    # Append any known provider not mentioned so there's always a full list
+    for p in ("gemini", "deepseek"):
+        if p not in seen:
+            result.append(p)
+    return result
+
+
 def call_llm(prompt: str, system: str = "", llm: str = "gemini",
              max_tokens: int = 2000, api_key: str = "", user_email: str = None) -> str:
     """
-    Main dispatcher. Falls back to whichever LLM has a real key when the
-    requested one has none (or only a .env placeholder value).
+    Main dispatcher with priority-based fallback.
+
+    Priority order is determined by:
+      1. The requested `llm` (if it has a real key)
+      2. Then the remaining providers in LLM_PRIORITY env var order
+
+    If a provider has a key but the call fails at runtime (quota, timeout, etc.),
+    it falls through to the next provider in the priority list.
     """
-    llm = (llm or "gemini").lower().strip()
+    requested = (llm or "gemini").lower().strip()
 
     def _env_key(name: str) -> str:
         return os.getenv(f"{name.upper()}_API_KEY", "").strip()
 
-    effective_llm = llm
-    effective_key = api_key.strip() if api_key else ""
+    def _effective_key(name: str, explicit_key: str = "") -> str:
+        k = (explicit_key or "").strip()
+        return k if _is_real_key(k) else _env_key(name)
 
-    # Treat placeholder values as missing
-    if not _is_real_key(effective_key):
-        effective_key = _env_key(llm)
+    def _call_one(name: str, key: str):
+        if name == "deepseek":
+            return call_deepseek(prompt, system, max_tokens, key, user_email)
+        elif name == "gemini":
+            return call_gemini(prompt, system, max_tokens, key, user_email)
+        raise ValueError(f"Unknown LLM provider: '{name}'")
 
-    # Env key might also be a placeholder — treat it as missing too
-    if not _is_real_key(effective_key):
-        other = "deepseek" if llm == "gemini" else "gemini"
-        fallback_key = _env_key(other)
-        if _is_real_key(fallback_key):
-            log.info("LLM key missing/placeholder, auto-switching",
-                     requested=llm, using=other, user=user_email)
-            effective_llm = other
-            effective_key = fallback_key
+    # Build the ordered list: requested provider first, then priority order for the rest
+    priority = get_llm_priority()
+    order = [requested] + [p for p in priority if p != requested]
 
-    log.debug("LLM dispatch", llm=effective_llm, has_key=_is_real_key(effective_key), user=user_email)
+    last_error = None
+    for provider in order:
+        key = _effective_key(provider, api_key if provider == requested else "")
+        if not _is_real_key(key):
+            log.debug("LLM provider skipped — no key", provider=provider)
+            continue
+        try:
+            log.debug("LLM dispatch attempt", provider=provider, user=user_email)
+            result, _ = _call_one(provider, key)
+            if provider != requested:
+                log.info("LLM fallback succeeded", requested=requested, used=provider, user=user_email)
+            return result
+        except ValueError:
+            raise  # key/auth errors are fatal — don't try the next provider
+        except Exception as e:
+            log.warning("LLM provider failed, trying next", provider=provider,
+                        error=str(e), user=user_email)
+            last_error = e
+            continue
 
-    if effective_llm == "deepseek":
-        result, _ = call_deepseek(prompt, system, max_tokens, effective_key, user_email)
-        return result
-    elif effective_llm == "gemini":
-        result, _ = call_gemini(prompt, system, max_tokens, effective_key, user_email)
-        return result
-    else:
-        raise ValueError(f"Unknown LLM provider: '{effective_llm}'. Use 'gemini' or 'deepseek'.")
+    raise last_error or ValueError(
+        f"No LLM provider available. Set at least one API key in Settings or .env "
+        f"(LLM_PRIORITY={','.join(priority)})."
+    )
 
 
 # ── API key validation ────────────────────────────────────────────────────────

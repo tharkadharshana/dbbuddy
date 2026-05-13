@@ -160,16 +160,19 @@ def _llm_has_key(user: dict, name: str) -> bool:
 
 
 def _get_llm(user: dict) -> str:
-    """Return user's preferred LLM, falling back to whichever one actually has a key."""
+    """Return user's preferred LLM, falling back using LLM_PRIORITY env order."""
+    from llm import get_llm_priority
     s = user.get("settings", {})
-    preferred = (s.get("default_llm") or "gemini").lower()
-    if _llm_has_key(user, preferred):
-        return preferred
-    for fallback in ("gemini", "deepseek"):
-        if fallback != preferred and _llm_has_key(user, fallback):
-            log.info("LLM key fallback", preferred=preferred, using=fallback, user=user.get("email"))
-            return fallback
-    return preferred  # let _resolve_api_key raise the informative error
+    preferred = (s.get("default_llm") or "").lower()
+    # Build candidate order: user's preferred first, then env priority order
+    priority = get_llm_priority()
+    order = ([preferred] if preferred else []) + [p for p in priority if p != preferred]
+    for candidate in order:
+        if _llm_has_key(user, candidate):
+            if candidate != preferred and preferred:
+                log.info("LLM key fallback", preferred=preferred, using=candidate, user=user.get("email"))
+            return candidate
+    return order[0] if order else "gemini"  # let _resolve_api_key raise the informative error
 
 
 def _effective_llm(user: dict, requested: str) -> str:
@@ -1072,7 +1075,7 @@ def generate_report(req: ReportRequest, user: dict = Depends(current_user)):
         conn.close()
         narrative = generate_report_summary(
             title=req.title, kpis=kpis, section_data=section_data,
-            llm=req.llm, format=req.format, api_key=api_key,
+            llm=llm, format=req.format, api_key=api_key,
             user_email=user["email"]
         )
         log.info("Report generated", user=user["email"], sections=len(section_data))

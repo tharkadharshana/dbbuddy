@@ -454,7 +454,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
                 { icon:'🔍', text:'Read your full schema and foreign keys' },
                 { icon:'🧠', text:'Generate SQL for 21 analytics templates using AI' },
                 { icon:'✅', text:'Validate each query with EXPLAIN' },
-                { icon:'⚡', text:'Cache everything — future loads are instant, zero AI tokens' },
+                { icon:'⚡', text:'Store everything — future loads are instant, zero AI tokens' },
               ].map(({icon,text},i) => (
                 <div key={i} style={{ display:'flex', gap:10, alignItems:'flex-start', marginBottom:10 }}>
                   <span style={{ fontSize:16, flexShrink:0 }}>{icon}</span>
