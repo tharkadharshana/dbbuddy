@@ -41,6 +41,12 @@ from integrations import (
     get_user_total_rows, _get_internal_conn,
 )
 from credits import get_user_credits, get_usage_history, bootstrap_credit_tables
+from billing import (
+    bootstrap_billing_tables, start_trial, subscribe_to_plan,
+    get_user_subscription, get_subscription_plan,
+    check_ai_limit, purchase_addon, get_llm_usage_history,
+    get_addon_pricing, charge_ai_usage,
+)
 from providers import list_providers, get_provider
 
 log = get_logger(__name__)
@@ -75,6 +81,10 @@ def startup_event():
         bootstrap_credit_tables()
     except Exception as _be:
         log.warning("Credit bootstrap skipped (configure DATAMIND_DB_* in .env)", error=str(_be))
+    try:
+        bootstrap_billing_tables()
+    except Exception as _be:
+        log.warning("Billing bootstrap skipped (configure DATAMIND_DB_* in .env)", error=str(_be))
     start_scheduler()
     log.info("DataMind backend started")
 
@@ -313,6 +323,10 @@ def register(req: RegisterRequest):
     log.info("Register attempt", email=req.email)
     user = create_user(req.name, req.email, req.password)
     token = create_token(req.email)
+    try:
+        start_trial(req.email)
+    except Exception as _te:
+        log.warning("Trial start skipped", email=req.email, error=str(_te))
     log.info("User registered", email=req.email)
     return {"token": token, "user": {"name": user["name"], "email": user["email"]}}
 
@@ -715,6 +729,9 @@ class NLQueryRequest(BaseModel):
 
 @app.post("/query")
 def natural_language_query(req: NLQueryRequest, user: dict = Depends(current_user)):
+    allowed, reason = check_ai_limit(user["email"])
+    if not allowed:
+        raise HTTPException(status_code=402, detail=reason)
     llm = _effective_llm(user, req.llm)
     log.info("NL query", user=user["email"], llm=llm, question=req.question[:80])
     api_key = _resolve_api_key(user, llm)
@@ -1250,6 +1267,115 @@ def get_credit_history(
     except Exception as e:
         log.error("Get credit history failed", user=user["email"], error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BILLING — Subscription & Usage
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.get("/billing/plan")
+def billing_get_plan(user: dict = Depends(current_user)):
+    """Return the Pro plan details."""
+    try:
+        plan = get_subscription_plan()
+        if not plan:
+            raise HTTPException(status_code=503, detail="No active plan found.")
+        return plan
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("Get billing plan failed", user=user["email"], error=str(e))
+        raise HTTPException(status_code=503, detail="Billing service unavailable.")
+
+
+@app.get("/billing/subscription")
+def billing_get_subscription(user: dict = Depends(current_user)):
+    """Return current user subscription state with real-time usage."""
+    try:
+        return get_user_subscription(user["email"])
+    except Exception as e:
+        log.error("Get subscription failed", user=user["email"], error=str(e))
+        return {
+            "status": "no_subscription",
+            "plan_name": "DataMind Pro",
+            "can_use_ai": False,
+            "can_use_db": False,
+            "ai_credits_used": 0,
+            "ai_credits_limit": 0,
+            "db_rows_used": 0,
+            "db_rows_limit": 0,
+            "addon_ai_balance": 0,
+            "addon_db_balance": 0,
+            "usage_pct_ai": 0,
+            "usage_pct_db": 0,
+            "trial_days_remaining": 0,
+            "period_end": None,
+        }
+
+
+class SubscribeRequest(BaseModel):
+    plan_id: int
+
+
+@app.post("/billing/subscribe")
+def billing_subscribe(req: SubscribeRequest, user: dict = Depends(current_user)):
+    """Subscribe or upgrade to a plan."""
+    try:
+        subscribe_to_plan(user["email"], req.plan_id)
+        return {"ok": True, "message": "Subscribed to DataMind Pro."}
+    except Exception as e:
+        log.error("Subscribe failed", user=user["email"], error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/billing/trial/start")
+def billing_start_trial(user: dict = Depends(current_user)):
+    """Idempotent trial start."""
+    try:
+        start_trial(user["email"])
+        return {"ok": True}
+    except Exception as e:
+        log.error("Trial start failed", user=user["email"], error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class AddonRequest(BaseModel):
+    addon_type: str
+    quantity: int = 1
+
+
+@app.post("/billing/addon")
+def billing_purchase_addon(req: AddonRequest, user: dict = Depends(current_user)):
+    """Purchase an add-on pack."""
+    try:
+        purchase_addon(user["email"], req.addon_type, req.quantity)
+        pricing = get_addon_pricing()
+        pack = pricing.get(req.addon_type, {})
+        total_cents = pack.get("price_cents", 0) * req.quantity
+        return {
+            "ok": True,
+            "addon_type": req.addon_type,
+            "quantity": req.quantity,
+            "units_added": pack.get("units", 0) * req.quantity,
+            "total_cents": total_cents,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        log.error("Addon purchase failed", user=user["email"], error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/billing/usage")
+def billing_get_usage(user: dict = Depends(current_user)):
+    """Return LLM usage history (no model names)."""
+    try:
+        history = get_llm_usage_history(user["email"], limit=100)
+        pricing = get_addon_pricing()
+        return {"history": history, "addon_pricing": pricing}
+    except Exception as e:
+        log.error("Get billing usage failed", user=user["email"], error=str(e))
+        return {"history": [], "addon_pricing": {}}
 
 
 # ══════════════════════════════════════════════════════════════════════════════

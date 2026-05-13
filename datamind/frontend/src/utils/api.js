@@ -69,3 +69,11 @@ export const disconnectProvider      = (connection_id)       => api.delete(`/pro
 export const syncProvider            = (connection_id)       => api.post(`/providers/${connection_id}/sync`).then(r => r.data)
 export const fetchProviderStatus     = (connection_id)       => api.get(`/providers/${connection_id}/status`).then(r => r.data)
 export const fetchProviderHistory    = (connection_id)       => api.get(`/providers/${connection_id}/history`).then(r => r.data)
+
+// Billing
+export const fetchBillingPlan  = ()                          => api.get('/billing/plan').then(r => r.data)
+export const fetchSubscription = ()                          => api.get('/billing/subscription').then(r => r.data)
+export const subscribeToPro    = (plan_id)                   => api.post('/billing/subscribe', { plan_id }).then(r => r.data)
+export const startTrial        = ()                          => api.post('/billing/trial/start').then(r => r.data)
+export const purchaseAddon     = (addon_type, quantity)      => api.post('/billing/addon', { addon_type, quantity }).then(r => r.data)
+export const fetchBillingUsage = ()                          => api.get('/billing/usage').then(r => r.data)
