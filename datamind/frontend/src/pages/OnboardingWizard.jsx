@@ -265,8 +265,8 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
               >
                 <span style={{ fontSize:32 }}>🔌</span>
                 <div>
-                  <div style={{ fontWeight:600, fontSize:14, marginBottom:3 }}>Connect via API Integration</div>
-                  <div style={{ fontSize:12, color:'var(--text2)' }}>Loyverse POS, Square, Shopify and more</div>
+                  <div style={{ fontWeight:600, fontSize:14, marginBottom:3 }}>Connect Any API-Enabled Platform</div>
+                  <div style={{ fontSize:12, color:'var(--text2)' }}>POS, eCommerce, CRM, ERP & custom systems</div>
                 </div>
               </button>
               <button onClick={() => setSourceType('db')} style={{
@@ -321,6 +321,11 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
               <div>
                 <div style={{ fontSize:17, fontWeight:700, color:'var(--text)' }}>Connect {selProvider.display_name}</div>
                 <div style={{ fontSize:12, color:'var(--text2)' }}>{selProvider.description}</div>
+                {selProvider.docs_url && (
+                  <a href={selProvider.docs_url} target="_blank" rel="noopener noreferrer" style={{ fontSize:12, color:'var(--blue)', textDecoration:'none', display:'inline-flex', alignItems:'center', gap:4, marginTop:4 }}>
+                    📄 View API Setup Guide ↗
+                  </a>
+                )}
               </div>
             </div>
             {selProvider.credential_fields?.map(f => (
@@ -408,7 +413,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
             {dbResult && <div style={{ marginTop:10 }}><StatusBox ok={dbResult.ok} message={dbResult.ok ? `Connected! Found ${dbResult.table_count} tables: ${dbResult.tables?.slice(0,4).join(', ')}${dbResult.table_count > 4 ? '…' : ''}` : dbResult.error} /></div>}
 
             <div style={{ display:'flex', gap:8, marginTop:14 }}>
-              <button onClick={() => setStep(0)} style={{ padding:'10px 18px', borderRadius:10, fontSize:13, background:'transparent', border:'1px solid var(--border)', color:'var(--text2)', cursor:'pointer' }}>← Back</button>
+              <button onClick={() => setSourceType('')} style={{ padding:'10px 18px', borderRadius:10, fontSize:13, background:'transparent', border:'1px solid var(--border)', color:'var(--text2)', cursor:'pointer' }}>← Back</button>
               <button onClick={handleTestDB} disabled={dbTesting} style={{
                 flex:1, padding:'10px', borderRadius:10, fontSize:13, fontWeight:600,
                 background:'rgba(79,142,247,0.12)', color:'var(--blue)',
@@ -421,18 +426,18 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
             </div>
 
             <NextBtn onClick={() => { setStep(2); setError('') }} disabled={!dbResult?.ok}>
-              Continue → Build Analytics Cache
+              Continue → Set Up Analytics
             </NextBtn>
           </Card>
         )}
 
-        {/* ── STEP 2: Confirm + build cache ─────────────────────────────── */}
+        {/* ── STEP 2: Confirm + build analytics ────────────────────────── */}
         {step === 2 && !syncConnId && (
           <Card>
             <div style={{ fontSize:11, color:'var(--text3)', textTransform:'uppercase', letterSpacing:'.1em', marginBottom:6 }}>Step 3 of 3</div>
-            <div style={{ fontSize:19, fontWeight:700, color:'var(--text)', marginBottom:4 }}>Build your analytics cache</div>
+            <div style={{ fontSize:19, fontWeight:700, color:'var(--text)', marginBottom:4 }}>Set up your analytics</div>
             <div style={{ fontSize:13, color:'var(--text2)', marginBottom:22, lineHeight:1.6 }}>
-              DataMind will now read your schema and generate custom SQL for every analytics template using AI. This runs <strong style={{color:'rgba(255,255,255,.6)'}}>once</strong> and is cached forever.
+              DataMind will now look at your database and build custom analytics for you. This only runs <strong style={{color:'rgba(255,255,255,.6)'}}>once</strong> and everything is saved for future use.
             </div>
 
             {/* Summary */}
@@ -454,7 +459,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
                 { icon:'🔍', text:'Read your full schema and foreign keys' },
                 { icon:'🧠', text:'Generate SQL for 21 analytics templates using AI' },
                 { icon:'✅', text:'Validate each query with EXPLAIN' },
-                { icon:'⚡', text:'Store everything — future loads are instant, zero AI tokens' },
+                { icon:'⚡', text:'Save everything — your insights load instantly, no extra Credits needed' },
               ].map(({icon,text},i) => (
                 <div key={i} style={{ display:'flex', gap:10, alignItems:'flex-start', marginBottom:10 }}>
                   <span style={{ fontSize:16, flexShrink:0 }}>{icon}</span>
@@ -464,7 +469,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
             </div>
 
             {connectErr && <StatusBox ok={false} message={connectErr} />}
-            {connectDone && <StatusBox ok={true} message="Database connected! Building cache in background…" />}
+            {connectDone && <StatusBox ok={true} message="Database connected! Setting up your analytics in the background…" />}
 
             <div style={{ display:'flex', gap:8 }}>
               <button onClick={() => setStep(1)} style={{ padding:'10px 18px', borderRadius:10, fontSize:13, background:'transparent', border:'1px solid var(--border)', color:'var(--text2)', cursor:'pointer' }}>← Back</button>
@@ -478,7 +483,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
                 boxShadow: connectDone ? 'none' : '0 4px 16px rgba(79,142,247,0.3)',
                 opacity: connecting ? 0.7 : 1,
               }}>
-                {connecting ? <><Spinner size={14} color="#fff" />Connecting…</> : connectDone ? '✓ Connected!' : '🚀 Connect & Build Cache'}
+                {connecting ? <><Spinner size={14} color="#fff" />Connecting…</> : connectDone ? '✓ Connected!' : '🚀 Connect & Set Up Analytics'}
               </button>
             </div>
           </Card>
@@ -523,8 +528,8 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
                   {[
                     { icon:'🔗', text:'Authenticating with your account' },
                     { icon:'📥', text:'Downloading and indexing your records' },
-                    { icon:'🧠', text:'Building AI analytics cache' },
-                    { icon:'⚡', text:'Future queries will be instant' },
+                    { icon:'🧠', text:'Setting up your analytics' },
+                    { icon:'⚡', text:'Future questions will load instantly' },
                   ].map(({ icon, text }, i) => (
                     <div key={i} style={{ display:'flex', gap:10, alignItems:'center', padding:'5px 0', borderBottom: i < 3 ? '1px solid var(--border)' : 'none' }}>
                       <span style={{ fontSize:15, flexShrink:0 }}>{icon}</span>
@@ -548,8 +553,8 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
               <div style={{ fontSize:56, marginBottom:16 }}>🎉</div>
               <div style={{ fontSize:22, fontWeight:700, color:'var(--text)', marginBottom:8 }}>You're all set!</div>
               <div style={{ fontSize:13, color:'var(--text2)', lineHeight:1.7, marginBottom:24 }}>
-                Your database is connected and the analytics cache is building in the background.
-                Head to the <strong style={{color:'var(--blue)'}}>Analytics Hub</strong> — your custom templates will appear once the cache is ready.
+                Your database is connected and your analytics are being set up in the background.
+                Head to the <strong style={{color:'var(--blue)'}}>Analytics Hub</strong> — your custom templates will appear shortly.
               </div>
 
               <div style={{ background:'rgba(79,142,247,0.06)', border:'1px solid rgba(79,142,247,0.15)', borderRadius:10, padding:'12px 14px', marginBottom:20, textAlign:'left' }}>
