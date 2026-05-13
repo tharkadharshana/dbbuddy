@@ -251,20 +251,6 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
               Choose whether you have a MySQL database you control, or you want to sync from a business tool like Loyverse.
             </div>
             <div style={{ display:'flex', flexDirection:'column', gap:10, marginBottom:20 }}>
-              <button onClick={() => setSourceType('db')} style={{
-                padding:'16px 18px', borderRadius:12, border:'1px solid var(--border)',
-                background:'var(--bg2)', color:'var(--text)', textAlign:'left', cursor:'pointer',
-                display:'flex', alignItems:'center', gap:14, transition:'all .15s',
-              }}
-                onMouseEnter={e => e.currentTarget.style.borderColor='rgba(79,142,247,0.4)'}
-                onMouseLeave={e => e.currentTarget.style.borderColor='rgba(255,255,255,0.1)'}
-              >
-                <span style={{ fontSize:32 }}>🗄</span>
-                <div>
-                  <div style={{ fontWeight:600, fontSize:14, marginBottom:3 }}>Bring Your Own Database</div>
-                  <div style={{ fontSize:12, color:'var(--text2)' }}>Connect directly to your MySQL database</div>
-                </div>
-              </button>
               <button onClick={async () => {
                 setSourceType('provider')
                 const r = await fetchProviders().catch(() => ({providers:[]}))
@@ -281,6 +267,20 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
                 <div>
                   <div style={{ fontWeight:600, fontSize:14, marginBottom:3 }}>Connect via API Integration</div>
                   <div style={{ fontSize:12, color:'var(--text2)' }}>Loyverse POS, Square, Shopify and more</div>
+                </div>
+              </button>
+              <button onClick={() => setSourceType('db')} style={{
+                padding:'16px 18px', borderRadius:12, border:'1px solid var(--border)',
+                background:'var(--bg2)', color:'var(--text)', textAlign:'left', cursor:'pointer',
+                display:'flex', alignItems:'center', gap:14, transition:'all .15s',
+              }}
+                onMouseEnter={e => e.currentTarget.style.borderColor='rgba(79,142,247,0.4)'}
+                onMouseLeave={e => e.currentTarget.style.borderColor='rgba(255,255,255,0.1)'}
+              >
+                <span style={{ fontSize:32 }}>🗄</span>
+                <div>
+                  <div style={{ fontWeight:600, fontSize:14, marginBottom:3 }}>Bring Your Own Database</div>
+                  <div style={{ fontSize:12, color:'var(--text2)' }}>Connect directly to your MySQL database</div>
                 </div>
               </button>
             </div>
