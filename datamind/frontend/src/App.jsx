@@ -8,10 +8,7 @@ import AnomalyPage       from './pages/AnomalyPage'
 import ReportsPage       from './pages/ReportsPage'
 import SettingsPage      from './pages/SettingsPage'
 import ConnectionsPage   from './pages/ConnectionsPage'
-import BillingPage       from './pages/BillingPage'
-import UsagePage         from './pages/UsagePage'
 import Sidebar           from './components/Sidebar'
-import UsageLimitBanner  from './components/UsageLimitBanner'
 import { fetchTables, fetchCacheStatus, fetchSettings, fetchConnectedProviders, fetchProviderStats } from './utils/api'
 
 export default function App() {
@@ -65,6 +62,7 @@ export default function App() {
       }
 
       if (!suppressOnboarding) {
+        if (!hasKey) { setShowOnboarding(true); return }
         if (!hasDB && !hasProvider) setShowOnboarding(true)
       }
     } catch(e) {}
@@ -115,8 +113,6 @@ export default function App() {
     reports:     <ReportsPage llm={llm} setLlm={setLlm} />,
     connections: <ConnectionsPage onConnectionChange={checkSetup} />,
     settings:    <SettingsPage user={user} onLogout={handleLogout} />,
-    billing:     <BillingPage />,
-    usage:       <UsagePage />,
   }[page] ?? <ChatPage llm={llm} setLlm={setLlm} connection={connection} />
 
   return (
@@ -131,7 +127,6 @@ export default function App() {
         setTheme={setTheme}
       />
       <main style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', minWidth:0 }}>
-        <UsageLimitBanner onNavigate={setPage} />
         <div style={{ flex:1, overflow: noScroll ? 'hidden' : 'auto' }}>
           {pageEl}
         </div>
