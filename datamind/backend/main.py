@@ -701,6 +701,59 @@ _PROVIDER_TEMPLATE_LOADERS = {
     "loyverse":  lambda: __import__("providers.loyverse.analytics",  fromlist=["TEMPLATES"]).TEMPLATES,
 }
 
+_PROVIDER_RUNNER_FACTORIES = {
+    "salesplay": lambda: __import__("providers.salesplay.analytics", fromlist=["run_salesplay_analytics"]).run_salesplay_analytics,
+    "loyverse":  lambda: __import__("providers.loyverse.analytics",  fromlist=["run_loyverse_analytics"]).run_loyverse_analytics,
+}
+
+# Maps report section IDs → provider-specific template IDs
+_PROVIDER_SECTION_MAP = {
+    "salesplay": {
+        "revenue_trend":       "revenue_trend",
+        "revenue_by_category": "category_performance",
+        "revenue_by_location": "shop_performance",
+        "growth_metrics":      "daily_summary",
+        "hourly_pattern":      "hourly_performance",
+        "top_products":        "top_products",
+        "top_customers":       "customer_analysis",
+        "payment_methods":     "payment_breakdown",
+        "cashier_performance": "hourly_performance",
+    },
+    "loyverse": {
+        "revenue_trend":       "revenue_trend",
+        "revenue_by_category": "category_breakdown",
+        "revenue_by_location": "store_performance",
+        "top_products":        "top_products",
+        "top_customers":       "customer_insights",
+        "payment_methods":     "payment_methods",
+        "cashier_performance": "employee_sales",
+    },
+}
+
+# Receipts table name pattern per provider (format with prefix=)
+_PROVIDER_RECEIPTS_TABLE = {
+    "salesplay": "{prefix}receipts",   # no underscore separator
+    "loyverse":  "{prefix}_receipts",  # with underscore separator
+}
+
+
+def _get_provider_kpis(conn, table_prefix: str, provider_id: str) -> Dict:
+    tbl = _PROVIDER_RECEIPTS_TABLE.get(provider_id, "{prefix}receipts").format(prefix=table_prefix)
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"SELECT ROUND(SUM(total_money),2), COUNT(*), ROUND(AVG(total_money),2), "
+            f"MIN(created_at), MAX(created_at) "
+            f"FROM `{tbl}` WHERE created_at IS NOT NULL AND receipt_type='SALE'"
+        )
+        row = cursor.fetchone()
+        if row:
+            keys = ["total_revenue","total_transactions","avg_transaction","from_date","to_date"]
+            return {k: _safe(v) for k, v in zip(keys, row)}
+    except Exception as e:
+        log.warning("Provider KPI fetch failed", provider=provider_id, error=str(e))
+    return {}
+
 
 def _get_integration_catalogue(user_email: str) -> List[Dict]:
     """Build catalogue items from the user's integrations using pre-built provider templates.
@@ -1181,7 +1234,57 @@ def generate_report(req: ReportRequest, user: dict = Depends(current_user)):
     log.info("Generate report", user=user["email"], llm=llm,
              title=req.title, sections=req.sections)
     api_key = _resolve_api_key(user, llm)
+    s = user.get("settings", {})
     try:
+        # ── Provider-only path (SalesPlay / Loyverse / etc.) ─────────────────
+        if not s.get("db_configs"):
+            conns = get_user_connections(user["email"])
+            if not conns:
+                raise HTTPException(status_code=422, detail="No data source connected.")
+            primary    = conns[0]
+            provider_id  = primary.get("provider_id", "")
+            table_prefix = primary.get("table_prefix", "")
+            if not table_prefix:
+                raise HTTPException(status_code=422, detail="Integration tables not ready. Run a sync first.")
+            log.info("Report: provider-only path", user=user["email"],
+                     provider=provider_id, prefix=table_prefix)
+
+            conn = _get_internal_conn()
+            section_data: Dict = {}
+            loader_fn  = _PROVIDER_TEMPLATE_LOADERS.get(provider_id)
+            runner_fn  = _PROVIDER_RUNNER_FACTORIES.get(provider_id)
+            section_map = _PROVIDER_SECTION_MAP.get(provider_id, {})
+
+            if loader_fn and runner_fn:
+                try:
+                    templates = loader_fn()
+                    runner    = runner_fn()
+                    for sid in req.sections:
+                        tid = section_map.get(sid) or (sid if sid in templates else None)
+                        if not tid or tid not in templates:
+                            log.debug("Report: no provider template for section", sid=sid, provider=provider_id)
+                            continue
+                        try:
+                            r = runner(conn, table_prefix, tid)
+                            r["source"] = "provider"
+                            section_data[sid] = r
+                        except Exception as e:
+                            log.warning("Provider report section failed", sid=sid, tid=tid, error=str(e))
+                except Exception as e:
+                    log.warning("Provider report runner error", provider=provider_id, error=str(e))
+
+            kpis = _get_provider_kpis(conn, table_prefix, provider_id)
+            conn.close()
+            narrative = generate_report_summary(
+                title=req.title, kpis=kpis, section_data=section_data,
+                llm=llm, format=req.format, api_key=api_key,
+                user_email=user["email"]
+            )
+            log.info("Report generated (provider)", user=user["email"],
+                     provider=provider_id, sections=len(section_data))
+            return {"title": req.title, "kpis": kpis, "sections": section_data, "narrative": narrative}
+
+        # ── Own-DB path ──────────────────────────────────────────────────────
         db_config = _resolve_db(user)
         conn = get_connection(db_config)
         cache = get_cache(user["email"], db_config)
