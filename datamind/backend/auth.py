@@ -1,18 +1,11 @@
-"""
-Auth & user settings module.
-Uses TinyDB (a tiny JSON file-based DB) so no extra DB is needed.
-All user data is stored in data/users.json next to this file.
-"""
-
 import os
 import json
 from datetime import datetime, timedelta
 from typing import Optional
-from pathlib import Path
 
+import mysql.connector
 from passlib.context import CryptContext
 from jose import JWTError, jwt
-from tinydb import TinyDB, Query
 from fastapi import HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
@@ -22,16 +15,73 @@ SECRET_KEY = os.getenv("SECRET_KEY", "datamind-secret-change-in-production-2024"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 
-DATA_DIR = Path(__file__).parent / "data"
-DATA_DIR.mkdir(exist_ok=True)
-
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 bearer = HTTPBearer(auto_error=False)
 
+_DEFAULT_SETTINGS = {
+    "gemini_api_key": "",
+    "deepseek_api_key": "",
+    "db_configs": [],
+    "active_db_index": 0,
+    "default_llm": "gemini",
+    "theme": "dark",
+}
+
 # ── Database ──────────────────────────────────────────────────────────────────
 
-def _db():
-    return TinyDB(DATA_DIR / "users.json")
+def _get_conn():
+    return mysql.connector.connect(
+        host=os.getenv("DATAMIND_DB_HOST", os.getenv("DB_HOST", "localhost")),
+        port=int(os.getenv("DATAMIND_DB_PORT", os.getenv("DB_PORT", "3306"))),
+        database=os.getenv("DATAMIND_DB_NAME", os.getenv("DB_NAME", "")),
+        user=os.getenv("DATAMIND_DB_USER", os.getenv("DB_USER", "root")),
+        password=os.getenv("DATAMIND_DB_PASSWORD", os.getenv("DB_PASSWORD", "")),
+        connection_timeout=10,
+    )
+
+
+def init_users_table():
+    conn = _get_conn()
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            email         VARCHAR(255) PRIMARY KEY,
+            name          VARCHAR(255) NOT NULL,
+            password_hash VARCHAR(255) NOT NULL,
+            settings      JSON         NOT NULL,
+            created_at    DATETIME     NOT NULL
+        )
+    """)
+    # Add settings column if the table pre-existed without it
+    cursor.execute("""
+        SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME   = 'users'
+          AND COLUMN_NAME  = 'settings'
+    """)
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("ALTER TABLE users ADD COLUMN settings JSON NOT NULL DEFAULT (JSON_OBJECT())")
+    # Add name column if missing (older schema may not have it)
+    cursor.execute("""
+        SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME   = 'users'
+          AND COLUMN_NAME  = 'name'
+    """)
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("ALTER TABLE users ADD COLUMN name VARCHAR(255) NOT NULL DEFAULT ''")
+    # Add password_hash column if missing
+    cursor.execute("""
+        SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME   = 'users'
+          AND COLUMN_NAME  = 'password_hash'
+    """)
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("ALTER TABLE users ADD COLUMN password_hash VARCHAR(255) NOT NULL DEFAULT ''")
+    conn.commit()
+    cursor.close()
+    conn.close()
 
 
 # ── Password ──────────────────────────────────────────────────────────────────
@@ -61,35 +111,43 @@ def decode_token(token: str) -> Optional[str]:
 
 # ── User CRUD ─────────────────────────────────────────────────────────────────
 
+def _row_to_user(row) -> dict:
+    email, name, password_hash, settings_json, created_at = row
+    settings = json.loads(settings_json) if isinstance(settings_json, str) else settings_json
+    return {
+        "email": email,
+        "name": name,
+        "password_hash": password_hash,
+        "settings": {**_DEFAULT_SETTINGS, **settings},
+        "created_at": created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at),
+    }
+
+
 def get_user(email: str) -> Optional[dict]:
-    db = _db()
-    User = Query()
-    result = db.search(User.email == email.lower())
-    return result[0] if result else None
+    conn = _get_conn()
+    cursor = conn.cursor()
+    cursor.execute("SELECT email, name, password_hash, settings, created_at FROM users WHERE email = %s", (email.lower(),))
+    row = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    return _row_to_user(row) if row else None
 
 
 def create_user(name: str, email: str, password: str) -> dict:
     email = email.lower()
     if get_user(email):
         raise HTTPException(status_code=400, detail="Email already registered")
-    db = _db()
-    user = {
-        "name": name,
-        "email": email,
-        "password_hash": hash_password(password),
-        "created_at": datetime.utcnow().isoformat(),
-        # Settings stored per-user
-        "settings": {
-            "gemini_api_key": "",
-            "deepseek_api_key": "",
-            "db_configs": [],          # list of DB connection profiles
-            "active_db_index": 0,
-            "default_llm": "gemini",
-            "theme": "dark",
-        }
-    }
-    db.insert(user)
-    return user
+    settings = dict(_DEFAULT_SETTINGS)
+    conn = _get_conn()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO users (email, name, password_hash, settings, created_at) VALUES (%s, %s, %s, %s, %s)",
+        (email, name, hash_password(password), json.dumps(settings), datetime.utcnow()),
+    )
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return {"email": email, "name": name, "settings": settings, "created_at": datetime.utcnow().isoformat()}
 
 
 def authenticate_user(email: str, password: str) -> dict:
@@ -100,15 +158,27 @@ def authenticate_user(email: str, password: str) -> dict:
 
 
 def update_user_settings(email: str, settings_patch: dict) -> dict:
-    db = _db()
-    User = Query()
     user = get_user(email)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     current = user.get("settings", {})
     current.update(settings_patch)
-    db.update({"settings": current}, User.email == email)
+    conn = _get_conn()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET settings = %s WHERE email = %s", (json.dumps(current), email))
+    conn.commit()
+    cursor.close()
+    conn.close()
     return current
+
+
+def delete_user(email: str):
+    conn = _get_conn()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM users WHERE email = %s", (email.lower(),))
+    conn.commit()
+    cursor.close()
+    conn.close()
 
 
 def get_user_settings(email: str) -> dict:

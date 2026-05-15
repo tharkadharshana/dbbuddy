@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react'
 import {
   fetchSettings, patchSettings, addDBConfig, updateDBConfig,
   deleteDBConfig, activateDBConfig, testDBConnection,
-  fetchCacheStatus, rebuildCache
+  fetchCacheStatus, rebuildCache, deleteAccount,
 } from '../utils/api'
 import { Card, Btn, Badge, Spinner, ErrorBox } from '../components/UI'
 
@@ -247,7 +247,21 @@ export default function SettingsPage({ user, onLogout }) {
               <div style={{ fontSize: 12, color: 'var(--text3)' }}>{user?.email}</div>
             </div>
           </div>
-          <Btn variant="danger" size="sm" onClick={onLogout}>Sign Out</Btn>
+          <div style={{ display:'flex', gap:8 }}>
+            <Btn variant="danger" size="sm" onClick={onLogout}>Sign Out</Btn>
+            <Btn variant="danger" size="sm" onClick={async () => {
+              if (!window.confirm('Permanently delete your account and all data? This cannot be undone.')) return
+              if (!window.confirm('Are you sure? All integrations, synced data and settings will be destroyed.')) return
+              try {
+                await deleteAccount()
+                localStorage.removeItem('dm_token')
+                localStorage.removeItem('dm_user')
+                window.location.href = '/'
+              } catch(e) {
+                alert('Delete failed: ' + (e.response?.data?.detail || e.message))
+              }
+            }}>Delete Account</Btn>
+          </div>
         </Card>
       </Section>
 

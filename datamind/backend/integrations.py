@@ -259,6 +259,36 @@ def disconnect_integration(user_email: str, provider_id: str,
     log.info("Integration disconnected", user=user_email, provider=provider_id)
 
 
+def delete_user_data(user_email: str):
+    """Drop all synced tables and every DB record belonging to this user."""
+    integrations = list_integrations(user_email)
+    conn = _get_internal_conn()
+    cursor = conn.cursor()
+    for integ in integrations:
+        prefix = integ.get("table_prefix", "")
+        if prefix:
+            cursor.execute(
+                "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES "
+                "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME LIKE %s",
+                (f"{prefix}%",)
+            )
+            for (tbl,) in cursor.fetchall():
+                cursor.execute(f"DROP TABLE IF EXISTS `{tbl}`")
+                log.info("Dropped user table", user=user_email, table=tbl)
+    cursor.execute(
+        "DELETE sl FROM sync_logs sl "
+        "JOIN user_integrations ui ON sl.integration_id = ui.id "
+        "WHERE ui.user_email = %s",
+        (user_email,)
+    )
+    cursor.execute("DELETE FROM user_integrations WHERE user_email = %s", (user_email,))
+    cursor.execute("DELETE FROM user_credits WHERE user_email = %s", (user_email,))
+    cursor.execute("DELETE FROM credit_usage_log WHERE user_email = %s", (user_email,))
+    conn.commit()
+    conn.close()
+    log.info("All user data deleted", user=user_email)
+
+
 def get_sync_logs(user_email: str, provider_id: str, limit: int = 20) -> List[Dict]:
     """Return recent sync log entries for an integration."""
     conn = _get_internal_conn()

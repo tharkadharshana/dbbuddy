@@ -39,15 +39,22 @@ from integrations import (
     get_user_connections, get_connection_status,
     trigger_sync, get_sync_history, start_scheduler,
     get_user_total_rows, _get_internal_conn,
+    list_integrations, delete_user_data,
 )
 from credits import get_user_credits, get_usage_history, bootstrap_credit_tables
 from providers import list_providers, get_provider
 
 log = get_logger(__name__)
 
+# Bootstrap integration tables (create if not exist)
+try:
+    bootstrap_integration_tables()
+except Exception as _be:
+    log.warning("Integration bootstrap skipped (configure DATAMIND_DB_* in .env)", error=str(_be))
+
 from auth import (
     create_user, authenticate_user, create_token,
-    get_user_settings, update_user_settings, current_user,
+    get_user_settings, update_user_settings, current_user, init_users_table, delete_user,
 )
 
 app = FastAPI(title="DataMind AI", version="3.0.0")
@@ -61,6 +68,10 @@ app.add_middleware(
 
 @app.on_event("startup")
 def startup_event():
+    try:
+        init_users_table()
+    except Exception as _be:
+        log.warning("Users table bootstrap skipped", error=str(_be))
     try:
         bootstrap_integration_tables()
     except Exception as _be:
@@ -181,7 +192,7 @@ def _status_key(email: str, db_config: dict) -> str:
 
 
 def _validate_table_column(schemas: dict, table: str, column: str):
-    """Raise 400 if table or column isn't in the user's real schema."""
+    """Raise 400 if table or column isn't in the user's real schema (prevents SQL injection)."""
     if table not in schemas:
         raise HTTPException(status_code=400, detail=f"Table '{table}' not found.")
     col_names = [c["name"] for c in schemas[table]]
@@ -685,70 +696,99 @@ def get_table_columns(table_name: str, user: dict = Depends(current_user)):
 # DISCOVER
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _provider_catalogue(user_email: str) -> list:
-    """Build a discover catalogue from all connected provider analytics templates."""
-    conns = get_user_connections(user_email)
-    catalogue = []
-    for conn in conns:
-        pid = conn.get("provider_id")
+_PROVIDER_TEMPLATE_LOADERS = {
+    "salesplay": lambda: __import__("providers.salesplay.analytics", fromlist=["TEMPLATES"]).TEMPLATES,
+    "loyverse":  lambda: __import__("providers.loyverse.analytics",  fromlist=["TEMPLATES"]).TEMPLATES,
+}
+
+
+def _get_integration_catalogue(user_email: str) -> List[Dict]:
+    """Build catalogue items from the user's integrations using pre-built provider templates.
+    Shows templates for any integration that has a table_prefix (i.e. tables were created) —
+    status 'active', 'syncing', and even 'error' are all eligible so users can still browse
+    analytics while sync is in flight or after a transient error.
+    """
+    try:
+        integrations = list_integrations(user_email)
+    except Exception as e:
+        log.warning("Integration catalogue: could not list integrations", user=user_email, error=str(e))
+        return []
+
+    log.info("Integration catalogue: integrations found",
+             user=user_email,
+             count=len(integrations),
+             summary=[{"provider": i.get("provider_id"), "status": i.get("status")} for i in integrations])
+
+    items: List[Dict] = []
+    for integ in integrations:
+        provider_id = integ.get("provider_id")
+        status = integ.get("status")
+        if not integ.get("table_prefix"):
+            log.debug("Integration catalogue: skipping — no table_prefix",
+                      user=user_email, provider=provider_id, status=status)
+            continue
+        loader = _PROVIDER_TEMPLATE_LOADERS.get(provider_id)
+        if not loader:
+            log.debug("Integration catalogue: no templates module for provider",
+                      user=user_email, provider=provider_id)
+            continue
         try:
-            if pid == "salesplay":
-                from providers.salesplay.analytics import TEMPLATES
-            elif pid == "loyverse":
-                from providers.loyverse.analytics import TEMPLATES
-            else:
-                continue
-            for tid, t in TEMPLATES.items():
-                catalogue.append({
-                    "id":          f"{pid}:{tid}",
-                    "title":       t["title"],
-                    "description": t.get("description", ""),
-                    "icon":        t.get("icon", "📊"),
-                    "category":    t.get("category", "Revenue"),
-                    "complexity":  t.get("complexity", "simple"),
-                    "provider_id": pid,
-                })
+            templates = loader()
         except Exception as e:
-            log.warning("Could not load provider templates", provider=pid, error=str(e))
-    return catalogue
+            log.warning("Integration catalogue: failed to load templates",
+                        user=user_email, provider=provider_id, error=str(e))
+            continue
+        label = integ.get("display_label") or provider_id.title()
+        for tid, t in templates.items():
+            items.append({
+                "id": tid,
+                "title": t.get("title", tid),
+                "description": t.get("description", ""),
+                "type": t.get("type", "table"),
+                "icon": t.get("icon", "📊"),
+                "category": label,
+                "provider": provider_id,
+            })
+    log.info("Integration catalogue built", user=user_email, item_count=len(items))
+    return items
 
 
 @app.get("/discover")
 def discover(user: dict = Depends(current_user)):
-    s = user.get("settings", {})
-
-    # Provider-only user: serve integration analytics templates as the catalogue
-    if not s.get("db_configs"):
-        catalogue = _provider_catalogue(user["email"])
-        if catalogue:
-            log.debug("Discover: serving provider templates", user=user["email"],
-                      templates=len(catalogue))
-            return {
-                "catalogue":      catalogue,
-                "from_cache":     True,
-                "built_at":       None,
-                "template_count": len(catalogue),
-            }
-        return {"catalogue": [], "from_cache": False, "building": False, "needs_build": True}
-
-    # Own-DB user: serve from schema cache
     db_config = _resolve_db(user)
+    integration_items = _get_integration_catalogue(user["email"])
     cache = get_cache(user["email"], db_config)
+
     if cache:
-        log.debug("Discover: serving from cache", user=user["email"],
-                  templates=len(cache.get("template_sql", {})))
+        own_catalogue = cache.get("catalogue", [])
+        merged = integration_items + own_catalogue
+        log.info("Discover: serving merged catalogue",
+                 user=user["email"],
+                 own_templates=len(own_catalogue),
+                 integration_templates=len(integration_items),
+                 total=len(merged))
         return {
-            "catalogue": cache.get("catalogue", []),
+            "catalogue": merged,
             "from_cache": True,
             "built_at": cache.get("built_at"),
-            "template_count": len(cache.get("template_sql", {})),
+            "template_count": len(merged),
         }
+
     sk = _status_key(user["email"], db_config)
     build_info = _build_status.get(sk, {})
     if build_info.get("status") == "building":
-        return {"catalogue": [], "from_cache": False, "building": True,
+        log.info("Discover: own-DB cache building, returning integration items only",
+                 user=user["email"], integration_templates=len(integration_items))
+        return {"catalogue": integration_items, "from_cache": False, "building": True,
                 "progress": build_info.get("progress", [])}
-    log.info("Discover: no cache found", user=user["email"])
+
+    if integration_items:
+        log.info("Discover: serving integration-only catalogue (no own-DB cache yet)",
+                 user=user["email"], integration_templates=len(integration_items))
+        return {"catalogue": integration_items, "from_cache": False,
+                "building": False, "needs_build": False, "template_count": len(integration_items)}
+
+    log.info("Discover: no cache and no integrations — needs_build", user=user["email"])
     return {"catalogue": [], "from_cache": False, "building": False, "needs_build": True}
 
 
@@ -794,46 +834,49 @@ class AnalyticsRunRequest(BaseModel):
     template_id: str
     llm: str = "gemini"
     params: Optional[Dict[str, Any]] = {}
+    provider: Optional[str] = None
 
 
 @app.post("/analytics/run")
 def run_analytics(req: AnalyticsRunRequest, user: dict = Depends(current_user)):
-    log.info("Run analytics", user=user["email"], template=req.template_id)
+    log.info("Run analytics", user=user["email"], template=req.template_id, provider=req.provider)
 
-    # Provider template: id is "provider_id:template_id"
-    if ":" in req.template_id:
-        provider_id, template_id = req.template_id.split(":", 1)
+    # Route provider templates straight to the integration analytics handler.
+    if req.provider:
         from integrations import get_integration
-        integration = get_integration(user["email"], provider_id)
+        integration = get_integration(user["email"], req.provider)
         if not integration:
-            raise HTTPException(status_code=404,
-                                detail=f"Provider '{provider_id}' is not connected.")
-        iconn = _get_internal_conn()
+            log.error("Run analytics: integration not connected",
+                      user=user["email"], provider=req.provider)
+            raise HTTPException(status_code=404, detail=f"Integration '{req.provider}' not connected")
+        table_prefix = integration["table_prefix"]
+        conn = _get_internal_conn()
         try:
-            if provider_id == "salesplay":
-                from providers.salesplay.analytics import run_salesplay_analytics
-                result = run_salesplay_analytics(iconn, integration["table_prefix"], template_id)
-            elif provider_id == "loyverse":
-                from providers.loyverse.analytics import run_loyverse_analytics
-                result = run_loyverse_analytics(iconn, integration["table_prefix"], template_id)
-            else:
-                raise HTTPException(status_code=404,
-                                    detail=f"No analytics available for provider '{provider_id}'.")
+            loader = _PROVIDER_TEMPLATE_LOADERS.get(req.provider)
+            runner_map = {
+                "salesplay": lambda: __import__("providers.salesplay.analytics", fromlist=["run_salesplay_analytics"]).run_salesplay_analytics,
+                "loyverse":  lambda: __import__("providers.loyverse.analytics",  fromlist=["run_loyverse_analytics"]).run_loyverse_analytics,
+            }
+            if not loader or req.provider not in runner_map:
+                raise HTTPException(status_code=404, detail=f"No analytics available for {req.provider}")
+            runner = runner_map[req.provider]()
+            result = runner(conn, table_prefix, req.template_id)
             result["source"] = "integration"
-            result["provider"] = provider_id
-            log.info("Provider analytics served", provider=provider_id, template=template_id,
-                     user=user["email"], rows=result.get("row_count", 0))
+            result["provider"] = req.provider
+            log.info("Run analytics: integration template served",
+                     user=user["email"], provider=req.provider, template=req.template_id,
+                     row_count=result.get("row_count"))
             return result
         except HTTPException:
             raise
         except Exception as e:
-            log.error("Provider analytics failed", provider=provider_id,
-                      template=template_id, user=user["email"], error=str(e))
+            log.error("Run analytics: integration template failed",
+                      user=user["email"], provider=req.provider,
+                      template=req.template_id, error=str(e))
             raise HTTPException(status_code=500, detail=str(e))
         finally:
-            iconn.close()
+            conn.close()
 
-    # Own-DB / cache-based template
     db_config = _resolve_db(user)
     conn = get_connection(db_config)
     try:
@@ -1048,8 +1091,6 @@ def anomalies(req: AnomalyRequest, user: dict = Depends(current_user)):
         rows = cursor.fetchall()
         conn.close()
         return run_anomaly_detection(rows, has_date=bool(req.date_column))
-    except HTTPException:
-        raise
     except Exception as e:
         log.error("Anomaly detection failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
@@ -1282,12 +1323,34 @@ def provider_stats(user: dict = Depends(current_user)):
 
 @app.delete("/providers/{connection_id}")
 def disconnect_provider_route(connection_id: str, user: dict = Depends(current_user)):
-    """Disconnect and remove a provider connection."""
+    """Disconnect a provider and drop all its synced tables."""
     log.info("Disconnecting provider", user=user["email"], connection_id=connection_id)
     try:
-        disconnect_provider(user["email"], connection_id)
+        from integrations import disconnect_integration
+        disconnect_integration(user["email"], connection_id, drop_tables=True)
         return {"ok": True}
     except Exception as e:
+        log.error("Disconnect provider failed", user=user["email"], connection_id=connection_id, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/auth/account")
+def delete_account(user: dict = Depends(current_user)):
+    """Permanently delete the current user and all their data."""
+    email = user["email"]
+    log.info("Account deletion requested", user=email)
+    try:
+        delete_user_data(email)
+        from cache import list_caches
+        import os
+        for p in list_caches(email):
+            try: os.remove(p)
+            except Exception: pass
+        delete_user(email)
+        log.info("Account deleted", user=email)
+        return {"ok": True}
+    except Exception as e:
+        log.error("Account deletion failed", user=email, error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1382,7 +1445,8 @@ def list_integration_templates(
                     "id": tid,
                     "title": t["title"],
                     "description": t.get("description", ""),
-                    "type": t.get("type", "table")
+                    "type": t.get("type", "table"),
+                    "icon": t.get("icon", "📊"),
                 }
                 for tid, t in templates.items()
             ]

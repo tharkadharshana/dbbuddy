@@ -58,11 +58,13 @@ export default function App() {
         const cfg = s.db_configs[s.active_db_index || 0]
         setConnection({ display_name: cfg?.name || cfg?.database, type:'db', logo:'🗄' })
       } else {
-        setConnection(null)
+        setConnection({ display_name: 'DataMind DB', type: 'db', logo: '🗄' })
       }
 
       if (!suppressOnboarding) {
-        if (!hasDB && !hasProvider) setShowOnboarding(true)
+        // Only force onboarding if they have no LLM key AND no connected provider.
+        // Integration users can use pre-built analytics without an LLM key.
+        if (!hasKey && !hasProvider && !hasDB) { setShowOnboarding(true); return }
       }
     } catch(e) {}
   }
