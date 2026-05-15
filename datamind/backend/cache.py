@@ -39,6 +39,10 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 
+from logger import get_logger
+
+log = get_logger(__name__)
+
 DATA_DIR = Path(__file__).parent / "data" / "cache"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -65,11 +69,17 @@ def get_cache(email: str, db_config: dict) -> Optional[Dict]:
     """Return the cache for this user+DB, or None if not built yet."""
     p = _cache_path(email, db_config)
     if not p.exists():
+        log.debug("Cache miss", user=email, path=p.name,
+                  db=db_config.get("database", "env"))
         return None
     try:
         with open(p) as f:
-            return json.load(f)
-    except Exception:
+            data = json.load(f)
+        log.debug("Cache hit", user=email, path=p.name,
+                  templates=len(data.get("template_sql", {})))
+        return data
+    except Exception as e:
+        log.warning("Cache read failed", user=email, path=p.name, error=str(e))
         return None
 
 
@@ -80,6 +90,9 @@ def save_cache(email: str, db_config: dict, data: Dict):
     data["built_at"] = datetime.utcnow().isoformat()
     with open(p, "w") as f:
         json.dump(data, f, indent=2)
+    log.info("Cache saved", user=email, path=p.name,
+             templates=len(data.get("template_sql", {})),
+             catalogue=len(data.get("catalogue", [])))
 
 
 def invalidate_cache(email: str, db_config: dict):
@@ -87,6 +100,7 @@ def invalidate_cache(email: str, db_config: dict):
     p = _cache_path(email, db_config)
     if p.exists():
         p.unlink()
+        log.info("Cache invalidated", user=email, path=p.name)
 
 
 def list_caches(email: str) -> List[str]:

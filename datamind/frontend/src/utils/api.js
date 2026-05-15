@@ -26,6 +26,7 @@ api.interceptors.response.use(
 export const register  = (name, email, password) => api.post('/auth/register', { name, email, password }).then(r => r.data)
 export const login     = (email, password) => api.post('/auth/login', { email, password }).then(r => r.data)
 export const fetchMe   = () => api.get('/auth/me').then(r => r.data)
+export const deleteAccount = () => api.delete('/auth/account').then(r => r.data)
 
 // Settings
 export const fetchSettings        = () => api.get('/settings').then(r => r.data)
@@ -41,7 +42,7 @@ export const fetchTables          = () => api.get('/tables').then(r => r.data)
 export const fetchTableColumns    = (table) => api.get(`/tables/${encodeURIComponent(table)}/columns`).then(r => r.data)
 export const fetchDiscover        = () => api.get('/discover').then(r => r.data)
 export const runNLQuery           = (question, llm) => api.post('/query', { question, llm }).then(r => r.data)
-export const runAnalytics         = (template_id, llm, params={}) => api.post('/analytics/run', { template_id, llm, params }).then(r => r.data)
+export const runAnalytics         = (template_id, llm, params={}, provider=null) => api.post('/analytics/run', { template_id, llm, params, provider }).then(r => r.data)
 export const runForecast          = (table, date_column, value_column, periods=90) => api.post('/forecast', { table, date_column, value_column, periods }).then(r => r.data)
 export const runAutoForecast      = (periods=90) => api.get(`/forecast/auto?periods=${periods}`).then(r => r.data)
 export const runAnomalies         = (table, value_column, date_column=null) => api.post('/anomalies', { table, value_column, date_column }).then(r => r.data)
@@ -69,3 +70,5 @@ export const disconnectProvider      = (connection_id)       => api.delete(`/pro
 export const syncProvider            = (connection_id)       => api.post(`/providers/${connection_id}/sync`).then(r => r.data)
 export const fetchProviderStatus     = (connection_id)       => api.get(`/providers/${connection_id}/status`).then(r => r.data)
 export const fetchProviderHistory    = (connection_id)       => api.get(`/providers/${connection_id}/history`).then(r => r.data)
+export const fetchIntegrationTemplates = (provider_id)       => api.get(`/integrations/${provider_id}/analytics/templates`).then(r => r.data)
+export const runIntegrationAnalytics   = (provider_id, template_id) => api.post(`/integrations/${provider_id}/analytics/run`, { template_id }).then(r => r.data)
