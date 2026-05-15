@@ -145,14 +145,15 @@ def deduct_credits(
     cursor = conn.cursor()
     
     try:
-        # Update user credits
+        # Ensure a credit record exists, then deduct atomically
         cursor.execute("""
-            UPDATE user_credits
-            SET ai_credits = GREATEST(ai_credits - %s, 0),
+            INSERT INTO user_credits (user_email, ai_credits, total_tokens_used)
+            VALUES (%s, (SELECT config_value FROM pricing_config WHERE config_key = 'monthly_credit_limit'), %s)
+            ON DUPLICATE KEY UPDATE
+                ai_credits = GREATEST(ai_credits - %s, 0),
                 total_tokens_used = total_tokens_used + %s,
                 updated_at = NOW()
-            WHERE user_email = %s
-        """, (amount, tokens_used, user_email))
+        """, (user_email, tokens_used, amount, tokens_used))
         
         # Log usage
         cursor.execute("""
