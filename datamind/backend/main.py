@@ -701,6 +701,59 @@ _PROVIDER_TEMPLATE_LOADERS = {
     "loyverse":  lambda: __import__("providers.loyverse.analytics",  fromlist=["TEMPLATES"]).TEMPLATES,
 }
 
+_PROVIDER_RUNNER_FACTORIES = {
+    "salesplay": lambda: __import__("providers.salesplay.analytics", fromlist=["run_salesplay_analytics"]).run_salesplay_analytics,
+    "loyverse":  lambda: __import__("providers.loyverse.analytics",  fromlist=["run_loyverse_analytics"]).run_loyverse_analytics,
+}
+
+# Maps report section IDs → provider-specific template IDs
+_PROVIDER_SECTION_MAP = {
+    "salesplay": {
+        "revenue_trend":       "revenue_trend",
+        "revenue_by_category": "category_performance",
+        "revenue_by_location": "shop_performance",
+        "growth_metrics":      "daily_summary",
+        "hourly_pattern":      "hourly_performance",
+        "top_products":        "top_products",
+        "top_customers":       "customer_analysis",
+        "payment_methods":     "payment_breakdown",
+        "cashier_performance": "hourly_performance",
+    },
+    "loyverse": {
+        "revenue_trend":       "revenue_trend",
+        "revenue_by_category": "category_breakdown",
+        "revenue_by_location": "store_performance",
+        "top_products":        "top_products",
+        "top_customers":       "customer_insights",
+        "payment_methods":     "payment_methods",
+        "cashier_performance": "employee_sales",
+    },
+}
+
+# Receipts table name pattern per provider (format with prefix=)
+_PROVIDER_RECEIPTS_TABLE = {
+    "salesplay": "{prefix}receipts",   # no underscore separator
+    "loyverse":  "{prefix}_receipts",  # with underscore separator
+}
+
+
+def _get_provider_kpis(conn, table_prefix: str, provider_id: str) -> Dict:
+    tbl = _PROVIDER_RECEIPTS_TABLE.get(provider_id, "{prefix}receipts").format(prefix=table_prefix)
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"SELECT ROUND(SUM(total_money),2), COUNT(*), ROUND(AVG(total_money),2), "
+            f"MIN(created_at), MAX(created_at) "
+            f"FROM `{tbl}` WHERE created_at IS NOT NULL AND receipt_type='SALE'"
+        )
+        row = cursor.fetchone()
+        if row:
+            keys = ["total_revenue","total_transactions","avg_transaction","from_date","to_date"]
+            return {k: _safe(v) for k, v in zip(keys, row)}
+    except Exception as e:
+        log.warning("Provider KPI fetch failed", provider=provider_id, error=str(e))
+    return {}
+
 
 def _get_integration_catalogue(user_email: str) -> List[Dict]:
     """Build catalogue items from the user's integrations using pre-built provider templates.
@@ -950,6 +1003,12 @@ def _hardcoded(tid: str, conn) -> Optional[Dict]:
         "top_products":        ("SELECT p.name, p.category, ROUND(SUM(ii.qty*ii.itemPrice),2) as revenue, SUM(ii.qty) as units FROM invoice_items ii JOIN products p ON ii.itemCode=p.itemCode GROUP BY p.itemCode,p.name,p.category ORDER BY revenue DESC LIMIT 20", "Top Products"),
         "top_customers":       ("SELECT c.name, COUNT(DISTINCT i.invoiceNumber) as orders, ROUND(SUM(i.invoiceTotal),2) as lifetime_value FROM customers c JOIN invoices i ON c.customerId=i.customerId GROUP BY c.customerId,c.name ORDER BY lifetime_value DESC LIMIT 25", "Top Customers"),
         "payment_methods":     ("SELECT payMethod as payment_method, COUNT(*) as transactions, ROUND(SUM(invoiceTotal),2) as revenue FROM invoices WHERE payMethod IS NOT NULL GROUP BY payMethod ORDER BY revenue DESC", "Payment Methods"),
+        "discount_analysis":   ("SELECT CASE WHEN totalDiscount IS NULL OR totalDiscount=0 THEN 'No Discount' WHEN totalDiscount/NULLIF(invoiceTotal,0)<0.05 THEN '<5%' WHEN totalDiscount/NULLIF(invoiceTotal,0)<0.10 THEN '5-10%' WHEN totalDiscount/NULLIF(invoiceTotal,0)<0.20 THEN '10-20%' ELSE '>20%' END as discount_band, COUNT(*) as invoices, ROUND(AVG(invoiceTotal),2) as avg_order_value, ROUND(SUM(invoiceTotal),2) as total_revenue FROM invoices GROUP BY discount_band ORDER BY total_revenue DESC", "Discount Impact Analysis"),
+        "margin_by_category":  ("SELECT p.category, COUNT(DISTINCT p.itemCode) as skus, ROUND(AVG(ii.itemPrice),2) as avg_price, ROUND(AVG(ii.itemCost),2) as avg_cost, ROUND(AVG((ii.itemPrice-ii.itemCost)/NULLIF(ii.itemPrice,0)*100),1) as avg_margin_pct, ROUND(SUM(ii.qty*(ii.itemPrice-ii.itemCost)),2) as total_gross_profit FROM invoice_items ii JOIN products p ON ii.itemCode=p.itemCode GROUP BY p.category ORDER BY total_gross_profit DESC", "Margin by Category"),
+        "slow_products":       ("SELECT p.name, p.category, COALESCE(SUM(ii.qty),0) as total_units, COALESCE(ROUND(SUM(ii.qty*ii.itemPrice),2),0) as revenue, DATEDIFF(CURDATE(),MAX(i.invoiceDate)) as days_since_last_sale FROM products p LEFT JOIN invoice_items ii ON p.itemCode=ii.itemCode LEFT JOIN invoices i ON ii.invoiceNumber=i.invoiceNumber GROUP BY p.itemCode,p.name,p.category HAVING total_units<10 OR days_since_last_sale>30 OR days_since_last_sale IS NULL ORDER BY total_units ASC LIMIT 25", "Slow-Moving Products"),
+        "customer_retention":  ("SELECT DATE_FORMAT(first_month,'%Y-%m') as cohort_month, COUNT(*) as new_customers, SUM(CASE WHEN total_orders>1 THEN 1 ELSE 0 END) as retained, ROUND(SUM(CASE WHEN total_orders>1 THEN 1 ELSE 0 END)/COUNT(*)*100,1) as retention_pct FROM (SELECT customerId, MIN(invoiceDate) as first_month, COUNT(DISTINCT invoiceNumber) as total_orders FROM invoices WHERE customerId IS NOT NULL AND invoiceDate IS NOT NULL GROUP BY customerId) t GROUP BY DATE_FORMAT(first_month,'%Y-%m') ORDER BY cohort_month DESC LIMIT 12", "Customer Retention by Cohort"),
+        "loyalty_tiers":       ("SELECT CASE WHEN c.loyaltyPoints IS NULL OR c.loyaltyPoints=0 THEN 'No Points' WHEN c.loyaltyPoints<100 THEN 'Bronze' WHEN c.loyaltyPoints<500 THEN 'Silver' WHEN c.loyaltyPoints<1000 THEN 'Gold' ELSE 'Platinum' END as tier, COUNT(DISTINCT c.customerId) as customers, ROUND(AVG(t.lifetime_value),2) as avg_ltv, ROUND(AVG(t.avg_order),2) as avg_order_value FROM customers c LEFT JOIN (SELECT customerId, SUM(invoiceTotal) as lifetime_value, AVG(invoiceTotal) as avg_order FROM invoices GROUP BY customerId) t ON c.customerId=t.customerId GROUP BY tier ORDER BY avg_ltv DESC", "Loyalty Tier Performance"),
+        "credit_outstanding":  ("SELECT DATE_FORMAT(invoiceDate,'%Y-%m') as month, COUNT(*) as credit_invoices, ROUND(SUM(creditAmt),2) as total_credit, ROUND(SUM(CASE WHEN isPaid=1 THEN creditAmt ELSE 0 END),2) as collected, ROUND(SUM(CASE WHEN isPaid=0 OR isPaid IS NULL THEN creditAmt ELSE 0 END),2) as outstanding FROM invoices WHERE creditAmt>0 GROUP BY month ORDER BY month DESC LIMIT 12", "Credit & Outstanding"),
     }
     if tid not in QUERIES:
         return None
@@ -1175,7 +1234,57 @@ def generate_report(req: ReportRequest, user: dict = Depends(current_user)):
     log.info("Generate report", user=user["email"], llm=llm,
              title=req.title, sections=req.sections)
     api_key = _resolve_api_key(user, llm)
+    s = user.get("settings", {})
     try:
+        # ── Provider-only path (SalesPlay / Loyverse / etc.) ─────────────────
+        if not s.get("db_configs"):
+            conns = get_user_connections(user["email"])
+            if not conns:
+                raise HTTPException(status_code=422, detail="No data source connected.")
+            primary    = conns[0]
+            provider_id  = primary.get("provider_id", "")
+            table_prefix = primary.get("table_prefix", "")
+            if not table_prefix:
+                raise HTTPException(status_code=422, detail="Integration tables not ready. Run a sync first.")
+            log.info("Report: provider-only path", user=user["email"],
+                     provider=provider_id, prefix=table_prefix)
+
+            conn = _get_internal_conn()
+            section_data: Dict = {}
+            loader_fn  = _PROVIDER_TEMPLATE_LOADERS.get(provider_id)
+            runner_fn  = _PROVIDER_RUNNER_FACTORIES.get(provider_id)
+            section_map = _PROVIDER_SECTION_MAP.get(provider_id, {})
+
+            if loader_fn and runner_fn:
+                try:
+                    templates = loader_fn()
+                    runner    = runner_fn()
+                    for sid in req.sections:
+                        tid = section_map.get(sid) or (sid if sid in templates else None)
+                        if not tid or tid not in templates:
+                            log.debug("Report: no provider template for section", sid=sid, provider=provider_id)
+                            continue
+                        try:
+                            r = runner(conn, table_prefix, tid)
+                            r["source"] = "provider"
+                            section_data[sid] = r
+                        except Exception as e:
+                            log.warning("Provider report section failed", sid=sid, tid=tid, error=str(e))
+                except Exception as e:
+                    log.warning("Provider report runner error", provider=provider_id, error=str(e))
+
+            kpis = _get_provider_kpis(conn, table_prefix, provider_id)
+            conn.close()
+            narrative = generate_report_summary(
+                title=req.title, kpis=kpis, section_data=section_data,
+                llm=llm, format=req.format, api_key=api_key,
+                user_email=user["email"]
+            )
+            log.info("Report generated (provider)", user=user["email"],
+                     provider=provider_id, sections=len(section_data))
+            return {"title": req.title, "kpis": kpis, "sections": section_data, "narrative": narrative}
+
+        # ── Own-DB path ──────────────────────────────────────────────────────
         db_config = _resolve_db(user)
         conn = get_connection(db_config)
         cache = get_cache(user["email"], db_config)
