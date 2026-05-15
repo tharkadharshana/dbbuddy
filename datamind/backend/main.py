@@ -685,8 +685,65 @@ def get_table_columns(table_name: str, user: dict = Depends(current_user)):
 # DISCOVER
 # ══════════════════════════════════════════════════════════════════════════════
 
+_PROVIDER_ICON = {
+    "revenue_trend":       "📈", "top_products":        "🏷️",
+    "top_items":           "🏷️", "customer_analysis":   "👥",
+    "customer_insights":   "👥", "payment_breakdown":   "💳",
+    "payment_methods":     "💳", "hourly_performance":  "🕐",
+    "hourly_sales":        "🕐", "category_performance":"🏷️",
+    "category_breakdown":  "🏷️", "daily_summary":       "📅",
+    "shop_performance":    "📍", "store_performance":   "📍",
+    "employee_sales":      "👤",
+}
+
+
+def _provider_catalogue(user_email: str) -> list:
+    """Build a discover catalogue from all connected provider analytics templates."""
+    conns = get_user_connections(user_email)
+    catalogue = []
+    for conn in conns:
+        pid = conn.get("provider_id")
+        try:
+            if pid == "salesplay":
+                from providers.salesplay.analytics import TEMPLATES
+            elif pid == "loyverse":
+                from providers.loyverse.analytics import TEMPLATES
+            else:
+                continue
+            for tid, t in TEMPLATES.items():
+                catalogue.append({
+                    "id":          f"{pid}:{tid}",
+                    "title":       t["title"],
+                    "description": t.get("description", ""),
+                    "icon":        _PROVIDER_ICON.get(tid, "📊"),
+                    "category":    "Revenue",
+                    "complexity":  "simple",
+                    "provider_id": pid,
+                })
+        except Exception as e:
+            log.warning("Could not load provider templates", provider=pid, error=str(e))
+    return catalogue
+
+
 @app.get("/discover")
 def discover(user: dict = Depends(current_user)):
+    s = user.get("settings", {})
+
+    # Provider-only user: serve integration analytics templates as the catalogue
+    if not s.get("db_configs"):
+        catalogue = _provider_catalogue(user["email"])
+        if catalogue:
+            log.debug("Discover: serving provider templates", user=user["email"],
+                      templates=len(catalogue))
+            return {
+                "catalogue":      catalogue,
+                "from_cache":     True,
+                "built_at":       None,
+                "template_count": len(catalogue),
+            }
+        return {"catalogue": [], "from_cache": False, "building": False, "needs_build": True}
+
+    # Own-DB user: serve from schema cache
     db_config = _resolve_db(user)
     cache = get_cache(user["email"], db_config)
     if cache:
@@ -754,6 +811,41 @@ class AnalyticsRunRequest(BaseModel):
 @app.post("/analytics/run")
 def run_analytics(req: AnalyticsRunRequest, user: dict = Depends(current_user)):
     log.info("Run analytics", user=user["email"], template=req.template_id)
+
+    # Provider template: id is "provider_id:template_id"
+    if ":" in req.template_id:
+        provider_id, template_id = req.template_id.split(":", 1)
+        from integrations import get_integration
+        integration = get_integration(user["email"], provider_id)
+        if not integration:
+            raise HTTPException(status_code=404,
+                                detail=f"Provider '{provider_id}' is not connected.")
+        iconn = _get_internal_conn()
+        try:
+            if provider_id == "salesplay":
+                from providers.salesplay.analytics import run_salesplay_analytics
+                result = run_salesplay_analytics(iconn, integration["table_prefix"], template_id)
+            elif provider_id == "loyverse":
+                from providers.loyverse.analytics import run_loyverse_analytics
+                result = run_loyverse_analytics(iconn, integration["table_prefix"], template_id)
+            else:
+                raise HTTPException(status_code=404,
+                                    detail=f"No analytics available for provider '{provider_id}'.")
+            result["source"] = "integration"
+            result["provider"] = provider_id
+            log.info("Provider analytics served", provider=provider_id, template=template_id,
+                     user=user["email"], rows=result.get("row_count", 0))
+            return result
+        except HTTPException:
+            raise
+        except Exception as e:
+            log.error("Provider analytics failed", provider=provider_id,
+                      template=template_id, user=user["email"], error=str(e))
+            raise HTTPException(status_code=500, detail=str(e))
+        finally:
+            iconn.close()
+
+    # Own-DB / cache-based template
     db_config = _resolve_db(user)
     conn = get_connection(db_config)
     try:
