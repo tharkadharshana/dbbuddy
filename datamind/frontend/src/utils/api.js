@@ -72,3 +72,10 @@ export const fetchProviderStatus     = (connection_id)       => api.get(`/provid
 export const fetchProviderHistory    = (connection_id)       => api.get(`/providers/${connection_id}/history`).then(r => r.data)
 export const fetchIntegrationTemplates = (provider_id)       => api.get(`/integrations/${provider_id}/analytics/templates`).then(r => r.data)
 export const runIntegrationAnalytics   = (provider_id, template_id) => api.post(`/integrations/${provider_id}/analytics/run`, { template_id }).then(r => r.data)
+
+// ── Billing ───────────────────────────────────────────────────────────────────
+export const fetchBillingPlans  = () => api.get('/billing/plans').then(r => r.data)
+export const fetchSubscription  = () => api.get('/billing/subscription').then(r => r.data)
+export const subscribeToPlan    = (plan_id) => api.post('/billing/subscribe', { plan_id }).then(r => r.data)
+export const purchaseAddon      = (addon_type, quantity) => api.post('/billing/addon', { addon_type, quantity }).then(r => r.data)
+export const fetchBillingUsage  = () => api.get('/billing/usage').then(r => r.data)
