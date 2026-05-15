@@ -250,6 +250,51 @@ export function PieChartSimple({ data, nameKey, valueKey, height=220 }) {
   )
 }
 
+// ── AI Quota Wall ─────────────────────────────────────────────────────────────
+
+export function AIQuotaWall({ sub, onNavigate }) {
+  const isNoSub    = !sub || sub.status === 'no_subscription'
+  const isExpired  = sub?.status === 'expired' || sub?.status === 'cancelled'
+  const isExhausted = sub?.usage_pct_ai >= 100
+
+  if (!isNoSub && !isExpired && !isExhausted) return null
+
+  let title, body
+  if (isNoSub) {
+    title = 'No active plan'
+    body  = 'Choose a plan to unlock AI features.'
+  } else if (isExpired) {
+    title = 'Subscription expired'
+    body  = 'Renew your subscription to continue using AI features.'
+  } else {
+    const resetDate = sub?.period_end
+      ? new Date(sub.period_end).toLocaleDateString('en-US', { month: 'long', day: 'numeric' })
+      : 'next month'
+    title = 'AI credits exhausted'
+    body  = `You've used all ${sub.ai_total_available} AI credits for this billing period. Your quota resets on ${resetDate}. Purchase add-on credits to keep going.`
+  }
+
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+      flex: 1, padding: 40, textAlign: 'center',
+    }}>
+      <div style={{ fontSize: 48, marginBottom: 16 }}>🔒</div>
+      <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text)', marginBottom: 10 }}>{title}</div>
+      <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.7, maxWidth: 400, marginBottom: 24 }}>{body}</div>
+      <button
+        onClick={() => onNavigate && onNavigate('billing')}
+        style={{
+          padding: '10px 24px', borderRadius: 8, border: 'none',
+          background: 'var(--blue)', color: '#fff', fontWeight: 600, fontSize: 14, cursor: 'pointer',
+        }}
+      >
+        Manage Plan
+      </button>
+    </div>
+  )
+}
+
 // ── Data Table ────────────────────────────────────────────────────────────────
 
 export function DataTable({ columns, data, maxHeight=320 }) {

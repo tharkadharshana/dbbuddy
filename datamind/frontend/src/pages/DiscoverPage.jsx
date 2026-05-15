@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { fetchDiscover, runAnalytics, fetchCacheProgress, rebuildCache,
          fetchConnectedProviders, fetchIntegrationTemplates, runIntegrationAnalytics } from '../utils/api'
 import { Card, Badge, Spinner, Spinner2, ErrorBox, KPICard, ChartCard, DataTable,
-         BarChartSimple, LineChartSimple, PieChartSimple, UsageMeter, COLORS, Btn } from '../components/UI'
+         BarChartSimple, LineChartSimple, PieChartSimple, UsageMeter, COLORS, Btn, AIQuotaWall } from '../components/UI'
 import { ComposedChart, Bar, Line, Area, XAxis, YAxis, CartesianGrid, Tooltip,
          ResponsiveContainer } from 'recharts'
 
@@ -221,7 +221,7 @@ function ResultPanel({ result, templateId }) {
 }
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
-export default function DiscoverPage({ llm, setLlm }) {
+export default function DiscoverPage({ llm, setLlm, sub, onNavigate }) {
   const [catalogue, setCatalogue]   = useState([])
   const [loading, setLoading]       = useState(true)
   const [building, setBuilding]     = useState(false)
@@ -299,6 +299,8 @@ export default function DiscoverPage({ llm, setLlm }) {
 
   const categories = ['All', ...new Set(catalogue.map(c => c.category))]
   const visible = filter === 'All' ? catalogue : catalogue.filter(c => c.category === filter)
+
+  if (sub && !sub.can_use_ai) return <AIQuotaWall sub={sub} onNavigate={onNavigate} />
 
   // Show build progress screen
   if (building) return <BuildProgress onDone={() => { setBuilding(false); load() }} />

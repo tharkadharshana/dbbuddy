@@ -870,6 +870,9 @@ class NLQueryRequest(BaseModel):
 
 @app.post("/query")
 def natural_language_query(req: NLQueryRequest, user: dict = Depends(current_user)):
+    ok, reason = check_ai_limit(user["email"])
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
     llm = _effective_llm(user, req.llm)
     log.info("NL query", user=user["email"], llm=llm, question=req.question[:80])
     api_key = _resolve_api_key(user, llm)
@@ -906,6 +909,9 @@ class AnalyticsRunRequest(BaseModel):
 
 @app.post("/analytics/run")
 def run_analytics(req: AnalyticsRunRequest, user: dict = Depends(current_user)):
+    ok, reason = check_ai_limit(user["email"])
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
     log.info("Run analytics", user=user["email"], template=req.template_id, provider=req.provider)
 
     # Route provider templates straight to the integration analytics handler.
@@ -1047,6 +1053,9 @@ class ForecastRequest(BaseModel):
 
 @app.post("/forecast")
 def forecast(req: ForecastRequest, user: dict = Depends(current_user)):
+    ok, reason = check_ai_limit(user["email"])
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
     log.info("Forecast (manual)", user=user["email"],
              table=req.table, date_col=req.date_column, value_col=req.value_column)
     try:
@@ -1072,6 +1081,9 @@ def forecast(req: ForecastRequest, user: dict = Depends(current_user)):
 
 @app.get("/forecast/auto")
 def auto_forecast(periods: int = 90, user: dict = Depends(current_user)):
+    ok, reason = check_ai_limit(user["email"])
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
     s = user.get("settings", {})
 
     # Provider-only user: run forecast on their synced receipts table
@@ -1145,6 +1157,9 @@ class AnomalyRequest(BaseModel):
 
 @app.post("/anomalies")
 def anomalies(req: AnomalyRequest, user: dict = Depends(current_user)):
+    ok, reason = check_ai_limit(user["email"])
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
     log.info("Anomaly detection (manual)", user=user["email"], table=req.table)
     try:
         conn = get_connection(_resolve_db(user))
@@ -1171,6 +1186,9 @@ def anomalies(req: AnomalyRequest, user: dict = Depends(current_user)):
 
 @app.get("/anomalies/auto")
 def auto_anomalies(user: dict = Depends(current_user)):
+    ok, reason = check_ai_limit(user["email"])
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
     s = user.get("settings", {})
 
     # Provider-only user: run anomaly detection on their synced receipts table
@@ -1244,6 +1262,9 @@ class ReportRequest(BaseModel):
 
 @app.post("/report")
 def generate_report(req: ReportRequest, user: dict = Depends(current_user)):
+    ok, reason = check_ai_limit(user["email"])
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
     llm = _effective_llm(user, req.llm)
     log.info("Generate report", user=user["email"], llm=llm,
              title=req.title, sections=req.sections)

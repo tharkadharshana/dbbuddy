@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { Card, Btn, UsageMeter, Spinner, ErrorBox, Badge, COLORS } from '../components/UI'
+import { Card, Btn, UsageMeter, Spinner, ErrorBox, Badge, COLORS, AIQuotaWall } from '../components/UI'
 import { generateReport } from '../utils/api'
 
 const TT = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)', borderRadius:8, fontSize:12, color:'#f0f1fa' }
@@ -205,7 +205,7 @@ function RenderedReport({ report }) {
 
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
-export default function ReportsPage({ llm, setLlm }) {
+export default function ReportsPage({ llm, setLlm, sub, onNavigate }) {
   const [title, setTitle]         = useState('')
   const [selected, setSelected]   = useState([])
   const [format, setFormat]       = useState('full')
@@ -236,6 +236,8 @@ export default function ReportsPage({ llm, setLlm }) {
   }
 
   const categories = [...new Set(ALL_SECTIONS.map(s => s.category))]
+
+  if (sub && !sub.can_use_ai) return <AIQuotaWall sub={sub} onNavigate={onNavigate} />
 
   return (
     <div style={{ display:'flex', height:'100%', overflow:'hidden' }}>

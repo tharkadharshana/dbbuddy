@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react'
 import { ComposedChart, Area, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart } from 'recharts'
-import { Card, Btn, Spinner, Spinner2, Empty, ErrorBox, KPICard } from '../components/UI'
+import { Card, Btn, Spinner, Spinner2, Empty, ErrorBox, KPICard, AIQuotaWall } from '../components/UI'
 import { runAutoForecast, runForecast, fetchTables, fetchTableColumns } from '../utils/api'
 
 const TT = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)', borderRadius:8, fontSize:12, color:'#f0f1fa' }
 
-export default function ForecastPage() {
+export default function ForecastPage({ sub, onNavigate }) {
   const [mode, setMode]       = useState('auto')
   const [periods, setPeriods] = useState(90)
   const [loading, setLoading] = useState(false)
@@ -58,6 +58,8 @@ export default function ForecastPage() {
 
   const weeklyData = result ? Object.entries(result.weekly_seasonality||{}).map(([day,val]) => ({ day: day.slice(0,3), value:+val.toFixed(2) })) : []
   const { summary } = result || {}
+
+  if (sub && !sub.can_use_ai) return <AIQuotaWall sub={sub} onNavigate={onNavigate} />
 
   return (
     <div style={{ padding:20, display:'flex', flexDirection:'column', gap:14, height:'100%', overflowY:'auto' }}>

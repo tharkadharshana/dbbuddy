@@ -1,24 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react'
-import { fetchSubscription } from '../utils/api'
+import React, { useState } from 'react'
 
-export default function UsageLimitBanner({ onNavigate }) {
-  const [sub, setSub]           = useState(null)
+export default function UsageLimitBanner({ sub, onNavigate }) {
   const [dismissed, setDismissed] = useState(false)
-  const intervalRef = useRef(null)
-
-  useEffect(() => {
-    load()
-    intervalRef.current = setInterval(load, 5 * 60 * 1000)
-    return () => clearInterval(intervalRef.current)
-  }, [])
-
-  async function load() {
-    try {
-      const data = await fetchSubscription()
-      setSub(data)
-      setDismissed(false)
-    } catch { /* silent */ }
-  }
 
   if (!sub || dismissed) return null
 
@@ -36,7 +19,7 @@ export default function UsageLimitBanner({ onNavigate }) {
   } else if (usage_pct_ai >= 100) {
     message = "You've used all your AI credits for this billing period."
   } else if (usage_pct_db >= 100) {
-    message = "You've reached your DB row limit for this billing period."
+    message = "You've reached your DB row limit. You can still read and export existing data."
   } else if (status === 'trial' && trial_days_remaining <= 2) {
     message = `Your free trial ends in ${trial_days_remaining} day${trial_days_remaining === 1 ? '' : 's'}.`
     color  = 'var(--amber)'

@@ -81,7 +81,7 @@ function ConfirmModal({ plan, onConfirm, onCancel, loading }) {
 }
 
 // ── Main page ─────────────────────────────────────────────────────────────────
-export default function BillingPage() {
+export default function BillingPage({ onSubChange }) {
   const [plans, setPlans]         = useState([])
   const [sub, setSub]             = useState(null)
   const [loading, setLoading]     = useState(true)
@@ -116,6 +116,7 @@ export default function BillingPage() {
       showToast(`Switched to ${confirmPlan.name} plan.`)
       setConfirmPlan(null)
       await loadAll()
+      onSubChange && onSubChange()
     } catch (e) {
       showToast(e?.response?.data?.detail || 'Subscription failed.', 'error')
     }
@@ -131,6 +132,7 @@ export default function BillingPage() {
       showToast('Add-ons purchased successfully.')
       setAddonQty({ ai_credits: 0, db_rows: 0 })
       await loadAll()
+      onSubChange && onSubChange()
     } catch (e) {
       showToast(e?.response?.data?.detail || 'Purchase failed.', 'error')
     }
