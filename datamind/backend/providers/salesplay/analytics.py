@@ -13,6 +13,7 @@ TEMPLATES = {
     "revenue_trend": {
         "title": "Daily Revenue Trend",
         "description": "Revenue trend over the last 90 days",
+        "category": "Revenue", "complexity": "simple", "icon": "📈",
         "type": "timeseries",
         "sql": """
             SELECT
@@ -31,6 +32,7 @@ TEMPLATES = {
     "top_products": {
         "title": "Top 20 Products by Revenue",
         "description": "Best selling products in the last 30 days",
+        "category": "Products", "complexity": "simple", "icon": "🏷️",
         "type": "table",
         "sql": """
             SELECT
@@ -52,6 +54,7 @@ TEMPLATES = {
     "customer_analysis": {
         "title": "Customer Purchase Analysis",
         "description": "RFM-style analysis on customer behavior",
+        "category": "Customers", "complexity": "medium", "icon": "👥",
         "type": "table",
         "sql": """
             SELECT
@@ -73,6 +76,7 @@ TEMPLATES = {
     "payment_breakdown": {
         "title": "Payment Method Distribution",
         "description": "Revenue by payment type in the last 30 days",
+        "category": "Payments", "complexity": "simple", "icon": "💳",
         "type": "chart",
         "sql": """
             SELECT
@@ -91,6 +95,7 @@ TEMPLATES = {
     "hourly_performance": {
         "title": "Sales by Hour of Day",
         "description": "Peak sales hours analysis for the last 30 days",
+        "category": "Operations", "complexity": "simple", "icon": "🕐",
         "type": "chart",
         "sql": """
             SELECT
@@ -109,6 +114,7 @@ TEMPLATES = {
     "category_performance": {
         "title": "Category Sales Performance",
         "description": "Revenue breakdown by product category",
+        "category": "Products", "complexity": "simple", "icon": "🏷️",
         "type": "table",
         "sql": """
             SELECT
@@ -131,6 +137,7 @@ TEMPLATES = {
     "daily_summary": {
         "title": "Daily Sales Summary",
         "description": "Complete daily sales metrics for the last 30 days",
+        "category": "Revenue", "complexity": "simple", "icon": "📅",
         "type": "table",
         "sql": """
             SELECT
@@ -150,6 +157,7 @@ TEMPLATES = {
     "shop_performance": {
         "title": "Shop Performance Comparison",
         "description": "Revenue and transactions by shop location",
+        "category": "Locations", "complexity": "simple", "icon": "📍",
         "type": "table",
         "sql": """
             SELECT

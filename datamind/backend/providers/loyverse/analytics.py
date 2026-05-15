@@ -14,6 +14,7 @@ TEMPLATES = {
     "revenue_trend": {
         "title": "Daily Revenue Trend",
         "description": "Revenue trend over the last 90 days",
+        "category": "Revenue", "complexity": "simple", "icon": "📈",
         "type": "timeseries",
         "sql": """
             SELECT
@@ -31,6 +32,7 @@ TEMPLATES = {
     "top_items": {
         "title": "Top 20 Items by Revenue",
         "description": "Best selling items in the last 30 days",
+        "category": "Products", "complexity": "simple", "icon": "🏷️",
         "type": "table",
         "sql": """
             SELECT
@@ -51,6 +53,7 @@ TEMPLATES = {
     "customer_insights": {
         "title": "Customer Purchase Insights",
         "description": "Customer spending and frequency analysis",
+        "category": "Customers", "complexity": "medium", "icon": "👥",
         "type": "table",
         "sql": """
             SELECT
@@ -72,6 +75,7 @@ TEMPLATES = {
     "payment_methods": {
         "title": "Payment Method Breakdown",
         "description": "Transaction distribution by payment type",
+        "category": "Payments", "complexity": "simple", "icon": "💳",
         "type": "chart",
         "sql": """
             SELECT
@@ -90,6 +94,7 @@ TEMPLATES = {
     "store_performance": {
         "title": "Store Performance Comparison",
         "description": "Revenue and metrics by store location",
+        "category": "Locations", "complexity": "simple", "icon": "📍",
         "type": "table",
         "sql": """
             SELECT
@@ -109,6 +114,7 @@ TEMPLATES = {
     "employee_sales": {
         "title": "Employee Sales Performance",
         "description": "Sales metrics by employee",
+        "category": "Employees", "complexity": "simple", "icon": "👤",
         "type": "table",
         "sql": """
             SELECT
@@ -127,6 +133,7 @@ TEMPLATES = {
     "category_breakdown": {
         "title": "Category Sales Breakdown",
         "description": "Revenue analysis by item category",
+        "category": "Products", "complexity": "simple", "icon": "🏷️",
         "type": "table",
         "sql": """
             SELECT
@@ -148,6 +155,7 @@ TEMPLATES = {
     "hourly_sales": {
         "title": "Sales by Hour",
         "description": "Peak hours analysis for the last 30 days",
+        "category": "Operations", "complexity": "simple", "icon": "🕐",
         "type": "chart",
         "sql": """
             SELECT

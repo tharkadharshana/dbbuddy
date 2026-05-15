@@ -685,18 +685,6 @@ def get_table_columns(table_name: str, user: dict = Depends(current_user)):
 # DISCOVER
 # ══════════════════════════════════════════════════════════════════════════════
 
-_PROVIDER_ICON = {
-    "revenue_trend":       "📈", "top_products":        "🏷️",
-    "top_items":           "🏷️", "customer_analysis":   "👥",
-    "customer_insights":   "👥", "payment_breakdown":   "💳",
-    "payment_methods":     "💳", "hourly_performance":  "🕐",
-    "hourly_sales":        "🕐", "category_performance":"🏷️",
-    "category_breakdown":  "🏷️", "daily_summary":       "📅",
-    "shop_performance":    "📍", "store_performance":   "📍",
-    "employee_sales":      "👤",
-}
-
-
 def _provider_catalogue(user_email: str) -> list:
     """Build a discover catalogue from all connected provider analytics templates."""
     conns = get_user_connections(user_email)
@@ -715,9 +703,9 @@ def _provider_catalogue(user_email: str) -> list:
                     "id":          f"{pid}:{tid}",
                     "title":       t["title"],
                     "description": t.get("description", ""),
-                    "icon":        _PROVIDER_ICON.get(tid, "📊"),
-                    "category":    "Revenue",
-                    "complexity":  "simple",
+                    "icon":        t.get("icon", "📊"),
+                    "category":    t.get("category", "Revenue"),
+                    "complexity":  t.get("complexity", "simple"),
                     "provider_id": pid,
                 })
         except Exception as e:
