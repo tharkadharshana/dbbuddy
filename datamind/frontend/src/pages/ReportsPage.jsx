@@ -5,6 +5,51 @@ import { generateReport } from '../utils/api'
 
 const TT = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)', borderRadius:8, fontSize:12, color:'#f0f1fa' }
 
+// ── Markdown → JSX renderer ───────────────────────────────────────────────────
+function renderInline(text) {
+  const parts = []
+  let remaining = text, key = 0
+  while (remaining.length) {
+    const boldIdx = remaining.indexOf('**')
+    if (boldIdx === -1) { parts.push(<span key={key++}>{remaining}</span>); break }
+    if (boldIdx > 0) parts.push(<span key={key++}>{remaining.slice(0, boldIdx)}</span>)
+    const endIdx = remaining.indexOf('**', boldIdx + 2)
+    if (endIdx === -1) { parts.push(<span key={key++}>{remaining.slice(boldIdx)}</span>); break }
+    parts.push(<strong key={key++} style={{ color:'var(--text)', fontWeight:700 }}>{remaining.slice(boldIdx + 2, endIdx)}</strong>)
+    remaining = remaining.slice(endIdx + 2)
+  }
+  return parts
+}
+
+function NarrativeRenderer({ text }) {
+  if (!text) return null
+  const blocks = text.split(/\n\n+/)
+  return (
+    <div style={{ fontSize:14, color:'var(--text2)', lineHeight:1.9 }}>
+      {blocks.map((block, i) => {
+        const trimmed = block.trim()
+        if (!trimmed) return null
+        // Bold-only line → section heading
+        if (/^\*\*[^*]+\*\*$/.test(trimmed)) {
+          return <h3 key={i} style={{ fontSize:15, fontWeight:700, color:'var(--text)', marginTop: i===0?0:22, marginBottom:8 }}>{trimmed.slice(2,-2)}</h3>
+        }
+        // Numbered or bulleted list items
+        if (/^(\d+\.|[-•])\s/.test(trimmed)) {
+          const lines = trimmed.split('\n').filter(Boolean)
+          return (
+            <ul key={i} style={{ margin:'8px 0', paddingLeft:20, listStyleType:'disc' }}>
+              {lines.map((line, j) => (
+                <li key={j} style={{ marginBottom:6 }}>{renderInline(line.replace(/^(\d+\.|[-•])\s+/, ''))}</li>
+              ))}
+            </ul>
+          )
+        }
+        return <p key={i} style={{ margin:'0 0 12px' }}>{renderInline(trimmed)}</p>
+      })}
+    </div>
+  )
+}
+
 const ALL_SECTIONS = [
   { id:'revenue_trend',       label:'Revenue Trend',         category:'Revenue' },
   { id:'revenue_by_category', label:'Category Breakdown',    category:'Revenue' },
@@ -65,6 +110,7 @@ function MiniChart({ data, columns, title }) {
 // ── Rendered Report ───────────────────────────────────────────────────────────
 function RenderedReport({ report }) {
   const { title, kpis, sections, narrative } = report
+  const reportRef = React.useRef(null)
   const kpiKeys = ['total_revenue','total_invoices','avg_ticket','unique_customers']
   const kpiLabels = { total_revenue:'Total Revenue', total_invoices:'Total Invoices', avg_ticket:'Avg Ticket', unique_customers:'Unique Customers' }
   const kpiColors = ['var(--blue)','var(--green)','var(--purple)','var(--amber)']
@@ -74,8 +120,29 @@ function RenderedReport({ report }) {
     navigator.clipboard.writeText(text)
   }
 
+  function downloadPDF() {
+    const node = reportRef.current
+    if (!node) return
+    const win = window.open('', '_blank')
+    const styles = Array.from(document.styleSheets).map(ss => {
+      try { return Array.from(ss.cssRules).map(r => r.cssText).join('\n') } catch { return '' }
+    }).join('\n')
+    win.document.write(`<!DOCTYPE html><html><head>
+      <meta charset="utf-8"><title>${title}</title>
+      <style>
+        ${styles}
+        body { background:#fff !important; color:#111 !important; font-family:system-ui,sans-serif; margin:32px; }
+        * { print-color-adjust:exact; -webkit-print-color-adjust:exact; }
+        @media print { body { margin:16px; } }
+      </style>
+    </head><body>${node.innerHTML}</body></html>`)
+    win.document.close()
+    win.focus()
+    setTimeout(() => { win.print(); win.close() }, 400)
+  }
+
   return (
-    <div style={{ background:'var(--bg1)', border:'1px solid var(--border)', borderRadius:'var(--r-xl)', overflow:'hidden' }}>
+    <div ref={reportRef} style={{ background:'var(--bg1)', border:'1px solid var(--border)', borderRadius:'var(--r-xl)', overflow:'hidden' }}>
       {/* Report header */}
       <div style={{ padding:'24px 28px', borderBottom:'1px solid var(--border)', background:'linear-gradient(135deg, rgba(79,142,247,0.08), rgba(167,139,250,0.06))' }}>
         <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between' }}>
@@ -86,7 +153,10 @@ function RenderedReport({ report }) {
               {kpis?.from_date && `Period: ${kpis.from_date} → ${kpis.to_date}`}
             </div>
           </div>
-          <Btn size="sm" variant="ghost" onClick={copyReport}>Copy Text</Btn>
+          <div style={{ display:'flex', gap:8 }}>
+            <Btn size="sm" variant="ghost" onClick={copyReport}>Copy Text</Btn>
+            <Btn size="sm" variant="ghost" onClick={downloadPDF}>Download PDF</Btn>
+          </div>
         </div>
 
         {/* KPI row */}
@@ -105,7 +175,7 @@ function RenderedReport({ report }) {
       {/* Narrative */}
       <div style={{ padding:'24px 28px', borderBottom:'1px solid var(--border)' }}>
         <div style={{ fontSize:12, color:'var(--text3)', fontWeight:600, textTransform:'uppercase', letterSpacing:'.08em', marginBottom:14 }}>Executive Analysis</div>
-        <div style={{ fontSize:14, color:'var(--text2)', lineHeight:1.85, whiteSpace:'pre-wrap' }}>{narrative}</div>
+        <NarrativeRenderer text={narrative} />
       </div>
 
       {/* Data sections with mini charts */}
