@@ -43,6 +43,12 @@ from integrations import (
 )
 from credits import get_user_credits, get_usage_history, bootstrap_credit_tables
 from providers import list_providers, get_provider
+from billing import (
+    bootstrap_billing_tables, start_trial, subscribe_to_plan,
+    get_user_subscription, get_subscription_plans, get_plan_by_id,
+    check_ai_limit, purchase_addon, get_llm_usage_history,
+    get_addon_pricing, charge_ai_usage,
+)
 
 log = get_logger(__name__)
 
@@ -80,6 +86,10 @@ def startup_event():
         bootstrap_credit_tables()
     except Exception as _be:
         log.warning("Credit bootstrap skipped (configure DATAMIND_DB_* in .env)", error=str(_be))
+    try:
+        bootstrap_billing_tables()
+    except Exception as _be:
+        log.warning("Billing bootstrap skipped", error=str(_be))
     start_scheduler()
     log.info("DataMind backend started")
 
@@ -327,6 +337,10 @@ def register(req: RegisterRequest):
     log.info("Register attempt", email=req.email)
     user = create_user(req.name, req.email, req.password)
     token = create_token(req.email)
+    try:
+        start_trial(req.email)
+    except Exception as _te:
+        log.warning("Trial start skipped", email=req.email, error=str(_te))
     log.info("User registered", email=req.email)
     return {"token": token, "user": {"name": user["name"], "email": user["email"]}}
 
@@ -1679,8 +1693,58 @@ def forecast_integration(
     except HTTPException:
         raise
     except Exception as e:
-        log.error("Integration forecast failed", 
+        log.error("Integration forecast failed",
                   provider=provider_id,
                   user=user["email"],
                   error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── BILLING ───────────────────────────────────────────────────────────────────
+
+@app.get("/billing/plans")
+def billing_plans():
+    try:
+        return {"plans": get_subscription_plans()}
+    except Exception as e:
+        log.error("Get billing plans failed", error=str(e))
+        return {"plans": []}
+
+
+@app.get("/billing/subscription")
+def billing_subscription(user: dict = Depends(current_user)):
+    try:
+        return get_user_subscription(user["email"])
+    except Exception as e:
+        log.error("Get subscription failed", user=user["email"], error=str(e))
+        return {"status": "no_subscription"}
+
+
+class SubscribeRequest(BaseModel):
+    plan_id: int
+
+@app.post("/billing/subscribe")
+def billing_subscribe(req: SubscribeRequest, user: dict = Depends(current_user)):
+    plan = get_plan_by_id(req.plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    subscribe_to_plan(user["email"], req.plan_id)
+    return {"ok": True}
+
+
+class AddonRequest(BaseModel):
+    addon_type: str
+    quantity: int = 1
+
+@app.post("/billing/addon")
+def billing_addon(req: AddonRequest, user: dict = Depends(current_user)):
+    purchase_addon(user["email"], req.addon_type, req.quantity)
+    return {"ok": True}
+
+
+@app.get("/billing/usage")
+def billing_usage(user: dict = Depends(current_user)):
+    return {
+        "history": get_llm_usage_history(user["email"]),
+        "pricing": get_addon_pricing(),
+    }
