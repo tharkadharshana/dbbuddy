@@ -399,13 +399,17 @@ def _run_sync(integration_id: int, user_email: str, provider_id: str,
         "rows_synced": 0, "elapsed_s": 0,
     }
 
-    result: SyncResult = provider.sync(
-        creds=creds,
-        conn=_get_internal_conn(),  # fresh connection for the sync itself
-        table_prefix=table_prefix,
-        since=since,
-        progress_callback=_progress,
-    )
+    sync_conn = _get_internal_conn()
+    try:
+        result: SyncResult = provider.sync(
+            creds=creds,
+            conn=sync_conn,
+            table_prefix=table_prefix,
+            since=since,
+            progress_callback=_progress,
+        )
+    finally:
+        sync_conn.close()
 
     # Update status
     status = "success" if result.ok else "error"

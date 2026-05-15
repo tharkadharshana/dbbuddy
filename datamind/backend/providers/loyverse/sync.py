@@ -107,10 +107,10 @@ def sync_stores(client: LoyverseAPIClient, cursor, prefix: str, since=None) -> i
     for r in rows:
         cursor.execute(f"""
             INSERT INTO `{prefix}_stores`
-              (id, _name, address, phone_number, description, default_tax_id, created_at, updated_at)
+              (id, name, address, phone_number, description, default_tax_id, created_at, updated_at)
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
             ON DUPLICATE KEY UPDATE
-              _name=VALUES(_name), address=VALUES(address),
+              name=VALUES(name), address=VALUES(address),
               phone_number=VALUES(phone_number), updated_at=VALUES(updated_at)
         """, (
             r.get("id"), _str(r.get("name"), 255), _str(r.get("address")),
@@ -127,10 +127,10 @@ def sync_employees(client: LoyverseAPIClient, cursor, prefix: str, since=None) -
     for r in rows:
         cursor.execute(f"""
             INSERT INTO `{prefix}_employees`
-              (id, _name, email, phone_number, role, store_id, created_at, updated_at)
+              (id, name, email, phone_number, role, store_id, created_at, updated_at)
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
             ON DUPLICATE KEY UPDATE
-              _name=VALUES(_name), email=VALUES(email), role=VALUES(role),
+              name=VALUES(name), email=VALUES(email), role=VALUES(role),
               store_id=VALUES(store_id), updated_at=VALUES(updated_at)
         """, (
             r.get("id"), _str(r.get("name"), 255), _str(r.get("email"), 255),
@@ -146,9 +146,9 @@ def sync_categories(client: LoyverseAPIClient, cursor, prefix: str, since=None) 
     count = 0
     for r in rows:
         cursor.execute(f"""
-            INSERT INTO `{prefix}_categories` (id, _name, color)
+            INSERT INTO `{prefix}_categories` (id, name, color)
             VALUES (%s,%s,%s)
-            ON DUPLICATE KEY UPDATE _name=VALUES(_name), color=VALUES(color)
+            ON DUPLICATE KEY UPDATE name=VALUES(name), color=VALUES(color)
         """, (r.get("id"), _str(r.get("name"), 255), _str(r.get("color"), 20)))
         count += 1
     return count
@@ -203,13 +203,13 @@ def sync_customers(client: LoyverseAPIClient, cursor, prefix: str, since=None) -
     for r in rows:
         cursor.execute(f"""
             INSERT INTO `{prefix}_customers`
-              (id, _name, email, phone_number, address, city, region,
+              (id, name, email, phone_number, address, city, region,
                postal_code, country_code, customer_code, note,
                total_visits, total_spent, points_balance,
                created_at, updated_at, deleted_at)
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             ON DUPLICATE KEY UPDATE
-              _name=VALUES(_name), email=VALUES(email), total_visits=VALUES(total_visits),
+              name=VALUES(name), email=VALUES(email), total_visits=VALUES(total_visits),
               total_spent=VALUES(total_spent), points_balance=VALUES(points_balance),
               updated_at=VALUES(updated_at), deleted_at=VALUES(deleted_at)
         """, (

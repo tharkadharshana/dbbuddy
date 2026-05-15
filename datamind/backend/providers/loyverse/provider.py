@@ -59,10 +59,6 @@ class LoyverseProvider(BaseProvider):
     # ── Schema ────────────────────────────────────────────────────────────────
 
     def get_schema_sql(self, table_prefix: str) -> str:
-        """
-        Read schema.sql and substitute {prefix} with the actual table prefix.
-        The schema uses `_name` columns instead of `name` to avoid MySQL reserved word issues.
-        """
         sql = _SCHEMA_PATH.read_text(encoding="utf-8")
         return sql.replace("{prefix}", table_prefix)
 

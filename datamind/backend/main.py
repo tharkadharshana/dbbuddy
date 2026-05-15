@@ -191,6 +191,15 @@ def _status_key(email: str, db_config: dict) -> str:
     return hashlib.md5(key.encode()).hexdigest()[:16]
 
 
+def _validate_table_column(schemas: dict, table: str, column: str):
+    """Raise 400 if table or column isn't in the user's real schema (prevents SQL injection)."""
+    if table not in schemas:
+        raise HTTPException(status_code=400, detail=f"Table '{table}' not found.")
+    col_names = [c["name"] for c in schemas[table]]
+    if column not in col_names:
+        raise HTTPException(status_code=400, detail=f"Column '{column}' not found in table '{table}'.")
+
+
 def _run_sql(conn, sql: str, title: str) -> dict:
     cursor = conn.cursor()
     log.debug("Executing SQL", title=title, sql=sql[:120])
@@ -969,6 +978,9 @@ def forecast(req: ForecastRequest, user: dict = Depends(current_user)):
              table=req.table, date_col=req.date_column, value_col=req.value_column)
     try:
         conn = get_connection(_resolve_db(user))
+        schemas = get_table_schemas(conn, None)
+        _validate_table_column(schemas, req.table, req.date_column)
+        _validate_table_column(schemas, req.table, req.value_column)
         cursor = conn.cursor()
         cursor.execute(
             f"SELECT DATE(`{req.date_column}`) as ds, SUM(`{req.value_column}`) as y "
@@ -978,6 +990,8 @@ def forecast(req: ForecastRequest, user: dict = Depends(current_user)):
         conn.close()
         log.info("Forecast data loaded", rows=len(rows))
         return run_forecast(rows, req.periods)
+    except HTTPException:
+        raise
     except Exception as e:
         log.error("Forecast failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
@@ -1061,6 +1075,10 @@ def anomalies(req: AnomalyRequest, user: dict = Depends(current_user)):
     log.info("Anomaly detection (manual)", user=user["email"], table=req.table)
     try:
         conn = get_connection(_resolve_db(user))
+        schemas = get_table_schemas(conn, None)
+        _validate_table_column(schemas, req.table, req.value_column)
+        if req.date_column:
+            _validate_table_column(schemas, req.table, req.date_column)
         cursor = conn.cursor()
         if req.date_column:
             cursor.execute(

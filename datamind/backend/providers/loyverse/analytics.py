@@ -18,7 +18,7 @@ TEMPLATES = {
     "revenue_trend": {
         "title": "Daily Revenue Trend",
         "description": "Revenue over the last 90 days",
-        "icon": "📈",
+        "category": "Revenue", "complexity": "simple", "icon": "📈",
         "type": "timeseries",
         "sql": """
             SELECT
@@ -36,7 +36,7 @@ TEMPLATES = {
     "top_products": {
         "title": "Top 20 Products by Revenue",
         "description": "Best-selling products in the last 30 days",
-        "icon": "🏆",
+        "category": "Products", "complexity": "simple", "icon": "🏆",
         "type": "table",
         "sql": """
             SELECT
@@ -58,7 +58,7 @@ TEMPLATES = {
     "customer_insights": {
         "title": "Customer Purchase Insights",
         "description": "Spending behaviour and frequency per customer",
-        "icon": "👥",
+        "category": "Customers", "complexity": "medium", "icon": "👥",
         "type": "table",
         "sql": """
             SELECT
@@ -80,7 +80,7 @@ TEMPLATES = {
     "payment_methods": {
         "title": "Payment Method Breakdown",
         "description": "Transaction distribution by payment type in the last 30 days",
-        "icon": "💳",
+        "category": "Payments", "complexity": "simple", "icon": "💳",
         "type": "chart",
         "sql": """
             SELECT
@@ -99,7 +99,7 @@ TEMPLATES = {
     "store_performance": {
         "title": "Store Performance Comparison",
         "description": "Revenue and transactions by store in the last 30 days",
-        "icon": "🏪",
+        "category": "Locations", "complexity": "simple", "icon": "🏪",
         "type": "table",
         "sql": """
             SELECT
@@ -119,7 +119,7 @@ TEMPLATES = {
     "employee_sales": {
         "title": "Employee Sales Performance",
         "description": "Sales metrics by employee in the last 30 days",
-        "icon": "👤",
+        "category": "Employees", "complexity": "simple", "icon": "👤",
         "type": "table",
         "sql": """
             SELECT
@@ -138,7 +138,7 @@ TEMPLATES = {
     "category_breakdown": {
         "title": "Category Sales Breakdown",
         "description": "Revenue by product category in the last 30 days",
-        "icon": "🏷️",
+        "category": "Products", "complexity": "simple", "icon": "🏷️",
         "type": "table",
         "sql": """
             SELECT
@@ -159,7 +159,7 @@ TEMPLATES = {
     "hourly_sales": {
         "title": "Sales by Hour of Day",
         "description": "Peak hours analysis for the last 30 days",
-        "icon": "🕐",
+        "category": "Operations", "complexity": "simple", "icon": "🕐",
         "type": "chart",
         "sql": """
             SELECT
