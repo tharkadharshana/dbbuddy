@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { fetchDiscover, runAnalytics, fetchCacheProgress, rebuildCache } from '../utils/api'
+import { fetchDiscover, runAnalytics, fetchCacheProgress, rebuildCache,
+         fetchConnectedProviders, fetchIntegrationTemplates, runIntegrationAnalytics } from '../utils/api'
 import { Card, Badge, Spinner, Spinner2, ErrorBox, KPICard, ChartCard, DataTable,
          BarChartSimple, LineChartSimple, PieChartSimple, UsageMeter, COLORS, Btn } from '../components/UI'
 import { ComposedChart, Bar, Line, Area, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -237,13 +238,43 @@ export default function DiscoverPage({ llm, setLlm }) {
     setLoading(true); setError(null)
     try {
       const d = await fetchDiscover()
-      if (d.building) { setBuilding(true); setCatalogue([]); }
-      else if (d.needs_build) { setNeedsBuild(true); setCatalogue([]); }
-      else {
+      if (d.building) { setBuilding(true); setCatalogue([]); return }
+
+      // /discover returned catalogue (own-DB cache or merged) — use it directly
+      if (!d.needs_build) {
         setCatalogue(d.catalogue || [])
         setCacheInfo({ built_at: d.built_at, template_count: d.template_count })
         setBuilding(false); setNeedsBuild(false)
+        return
       }
+
+      // /discover says needs_build — but user may have API integrations.
+      // Fetch connected providers and pull their pre-built templates directly.
+      const providers = await fetchConnectedProviders().catch(() => ({ connections: [] }))
+      const connections = providers.connections || []
+      if (connections.length > 0) {
+        const all = await Promise.all(
+          connections.map(c =>
+            fetchIntegrationTemplates(c.provider_id)
+              .then(r => (r.templates || []).map(t => ({
+                ...t,
+                category: c.display_name || c.provider_id,
+                provider: c.provider_id,
+              })))
+              .catch(() => [])
+          )
+        )
+        const integrationCatalogue = all.flat()
+        if (integrationCatalogue.length > 0) {
+          setCatalogue(integrationCatalogue)
+          setCacheInfo(null)
+          setBuilding(false); setNeedsBuild(false)
+          return
+        }
+      }
+
+      // Truly nothing available
+      setNeedsBuild(true); setCatalogue([])
     } catch(e) { setError(e.response?.data?.detail || e.message) }
     finally { setLoading(false) }
   }
@@ -253,7 +284,9 @@ export default function DiscoverPage({ llm, setLlm }) {
   async function handleRun(item) {
     setSelected(item); setRunning(true); setResult(null); setRunError(null)
     try {
-      const data = await runAnalytics(item.id, llm, {})
+      const data = item.provider
+        ? await runIntegrationAnalytics(item.provider, item.id)
+        : await runAnalytics(item.id, llm, {})
       setResult(data)
     } catch(e) { setRunError(e.response?.data?.detail || e.message) }
     finally { setRunning(false) }

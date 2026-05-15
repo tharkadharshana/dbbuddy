@@ -3,7 +3,15 @@
     "allow": [
       "Bash(Get-ChildItem -Path \"d:\\\\Projects\\\\datamind-ai\\\\datamind\\\\frontend\" -Recurse -Filter \"*.tsx\")",
       "Bash(Select-Object -First 20 -ExpandProperty FullName)",
-      "Bash(Get-ChildItem -Path \"d:\\\\Projects\\\\datamind-ai\" -Recurse -File -Name)"
+      "Bash(Get-ChildItem -Path \"d:\\\\Projects\\\\datamind-ai\" -Recurse -File -Name)",
+      "Bash(Get-ChildItem -Path \"d:\\\\Projects\\\\datamind-ai\" -Recurse -Depth 2 -Directory)",
+      "Bash(Select-Object -First 30)",
+      "Bash(Format-Table FullName)",
+      "Bash(Remove-Item \"d:\\\\Projects\\\\datamind-ai\\\\datamind\\\\backend\\\\data\\\\cache\\\\*\" -Force)",
+      "Bash(Get-ChildItem -Path \"d:\\\\Projects\\\\datamind-ai\\\\datamind\\\\backend\" -Recurse -Directory)",
+      "Bash(Select-Object -First 20 FullName)",
+      "Bash(Get-ChildItem -Path \"d:\\\\Projects\\\\datamind-ai\\\\datamind\\\\frontend\" -Filter \"*.tsx\" -Recurse -Exclude \"node_modules\")",
+      "Bash(python3 -c ' *)"
     ]
   }
 }
