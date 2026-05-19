@@ -41,7 +41,7 @@ from integrations import (
     get_user_total_rows, _get_internal_conn,
     list_integrations, delete_user_data,
 )
-from credits import get_user_credits, get_usage_history, bootstrap_credit_tables
+# credits.py / legacy credit tables removed — billing system supersedes them
 from providers import list_providers, get_provider
 from billing import (
     bootstrap_billing_tables, start_trial, subscribe_to_plan,
@@ -84,10 +84,6 @@ def startup_event():
         bootstrap_integration_tables()
     except Exception as _be:
         log.warning("Integration bootstrap skipped in startup", error=str(_be))
-    try:
-        bootstrap_credit_tables()
-    except Exception as _be:
-        log.warning("Credit bootstrap skipped (configure DATAMIND_DB_* in .env)", error=str(_be))
     try:
         bootstrap_billing_tables()
     except Exception as _be:
@@ -1623,31 +1619,6 @@ def provider_history(connection_id: str, user: dict = Depends(current_user)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# ══════════════════════════════════════════════════════════════════════════════
-# CREDITS AND USAGE TRACKING
-# ══════════════════════════════════════════════════════════════════════════════
-
-@app.get("/credits")
-def get_credits(user: dict = Depends(current_user)):
-    """Get user's credit balance and usage statistics."""
-    try:
-        return get_user_credits(user["email"])
-    except Exception as e:
-        log.error("Get credits failed", user=user["email"], error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/credits/history")
-def get_credit_history(
-    limit: int = 50,
-    user: dict = Depends(current_user)
-):
-    """Get user's credit usage history."""
-    try:
-        return {"history": get_usage_history(user["email"], limit)}
-    except Exception as e:
-        log.error("Get credit history failed", user=user["email"], error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
