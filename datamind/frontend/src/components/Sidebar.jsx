@@ -152,7 +152,6 @@ export default function Sidebar({ active, setActive, connection, cacheStatus, to
         <NavItem id="connections" label="Connections"   icon={IC.plug}     active={active} setActive={setActive} />
         <NavItem id="billing"     label="Billing"       icon={IC.billing}  active={active} setActive={setActive} />
         <NavItem id="usage"       label="Usage"         icon={IC.usage}    active={active} setActive={setActive} />
-        <NavItem id="docs"        label="How Billing Works" icon={IC.docs} active={active} setActive={setActive} />
         <NavItem id="settings"    label="Settings"      icon={IC.settings} active={active} setActive={setActive} />
       </nav>
 

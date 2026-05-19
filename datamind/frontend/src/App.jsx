@@ -126,7 +126,7 @@ export default function App() {
     anomaly:     <AnomalyPage sub={sub} onNavigate={setPage} />,
     reports:     <ReportsPage llm={llm} setLlm={setLlm} sub={sub} onNavigate={setPage} />,
     connections: <ConnectionsPage onConnectionChange={checkSetup} sub={sub} />,
-    settings:    <SettingsPage user={user} onLogout={handleLogout} />,
+    settings:    <SettingsPage user={user} onLogout={handleLogout} onNavigate={setPage} />,
     billing:     <BillingPage onSubChange={loadSub} />,
     usage:       <UsagePage sub={sub} />,
     docs:        <DocsPage />,
