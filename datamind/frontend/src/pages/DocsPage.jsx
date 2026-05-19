@@ -333,9 +333,9 @@ function PlansAndLimits() {
         <Table
           headers={['Plan', 'Tokens / month', 'Monthly price']}
           rows={[
-            ['Starter', '800',    '$5'],
-            ['Growth',  '2,750',  '$10'],
-            ['Pro',     '12,000', '$25'],
+            ['Starter', '500',    '$5'],
+            ['Growth',  '1,500',  '$10'],
+            ['Pro',     '10,000', '$25'],
           ]}
         />
         <P>
