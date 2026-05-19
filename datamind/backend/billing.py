@@ -209,11 +209,11 @@ def bootstrap_billing_tables():
                     'AI credits charged per 1000 tokens. Adjust to control user-visible usage and profitability.')
         """)
 
-        # Seed plans
+        # Seed plans  (name, price_usd, price_cents, ai_credits, db_rows, sort_order)
         plans = [
-            ("Starter", "5.00",  500,  300,    500_000,    1),
-            ("Growth",  "10.00", 1000, 750,  2_000_000,    2),
-            ("Pro",     "25.00", 2500, 2000, 10_000_000,   3),
+            ("Starter", "5.00",   500,   500,  2_000_000,    1),
+            ("Growth",  "10.00", 1000,  1500,  5_000_000,    2),
+            ("Pro",     "25.00", 2500, 10000, 20_000_000,    3),
         ]
         for name, price_usd, price_cents, ai_credits, db_rows, sort_order in plans:
             cur.execute("SELECT id FROM subscription_plans WHERE name = %s", (name,))
@@ -234,8 +234,8 @@ def bootstrap_billing_tables():
                     VALUES (%s,%s,'monthly',%s,%s,%s,14,30,1,%s)
                 """, (name, price_usd, price_cents, ai_credits, db_rows, sort_order))
 
-        # Seed unified token limits (ai_credits + db_rows/1000)
-        _TOKEN_LIMITS = {"Starter": 800.0, "Growth": 2750.0, "Pro": 12000.0}
+        # Seed unified token limits
+        _TOKEN_LIMITS = {"Starter": 500.0, "Growth": 1500.0, "Pro": 10000.0}
         for _pname, _tlimit in _TOKEN_LIMITS.items():
             cur.execute(
                 "UPDATE subscription_plans SET tokens_limit=%s WHERE name=%s",
@@ -480,6 +480,78 @@ def get_user_subscription(user_email: str) -> Dict:
     finally:
         cur.close()
         conn.close()
+
+
+# Plans that include each gated feature.
+_PLAN_FEATURE_GATE: dict = {
+    "forecast":          {"Growth", "Pro"},
+    "anomaly_detection": {"Growth", "Pro"},
+    "external_api":      {"Pro"},
+}
+
+# Data-history window per plan: months to look back, and row fallback when no date column.
+_PLAN_HISTORY: dict = {
+    "Starter": {"months": 1,  "row_limit": 1000},
+    "Growth":  {"months": 3,  "row_limit": 3000},
+    "Pro":     {"months": 12, "row_limit": 12000},
+}
+
+
+def check_plan_feature(user_email: str, feature: str) -> Tuple[bool, str]:
+    """Return (True,'') if the user's plan includes *feature*, (False, reason) otherwise.
+    Fails open on DB errors so a billing outage never hard-blocks the app."""
+    try:
+        conn = _get_conn()
+        cur  = conn.cursor(dictionary=True)
+        cur.execute("""
+            SELECT sp.name AS plan_name
+            FROM user_subscriptions us
+            JOIN subscription_plans sp ON sp.id = us.plan_id
+            WHERE us.user_email = %s AND us.status IN ('trial','active')
+            ORDER BY us.id DESC LIMIT 1
+        """, (user_email,))
+        row = cur.fetchone()
+        cur.close(); conn.close()
+        if not row:
+            return False, "No active subscription."
+        plan_name   = row["plan_name"]
+        allowed     = _PLAN_FEATURE_GATE.get(feature)
+        if allowed and plan_name not in allowed:
+            upgrade_to = sorted(allowed)[0]
+            return False, f"Upgrade to {upgrade_to} or above to use this feature."
+        return True, ""
+    except Exception as e:
+        log.warning("check_plan_feature failed open", feature=feature, email=user_email, error=str(e))
+        return True, ""
+
+
+def get_plan_history_limit(user_email: str) -> dict:
+    """Return the data-history window for the user's current plan.
+
+    Returns a dict with keys:
+      months      — how far back to filter date columns
+      row_limit   — max rows to return when no date column is available
+      cutoff_date — concrete date object (today minus months*30 days)
+    """
+    from datetime import date, timedelta
+    try:
+        conn = _get_conn()
+        cur  = conn.cursor(dictionary=True)
+        cur.execute("""
+            SELECT sp.name AS plan_name
+            FROM user_subscriptions us
+            JOIN subscription_plans sp ON sp.id = us.plan_id
+            WHERE us.user_email = %s AND us.status IN ('trial','active')
+            ORDER BY us.id DESC LIMIT 1
+        """, (user_email,))
+        row = cur.fetchone()
+        cur.close(); conn.close()
+        plan_name = (row or {}).get("plan_name", "Starter")
+    except Exception:
+        plan_name = "Starter"
+    limits = _PLAN_HISTORY.get(plan_name, _PLAN_HISTORY["Starter"])
+    cutoff = date.today() - timedelta(days=limits["months"] * 30)
+    return {**limits, "plan_name": plan_name, "cutoff_date": cutoff}
 
 
 def check_ai_limit(user_email: str) -> Tuple[bool, str]:
