@@ -265,11 +265,9 @@ export default function SettingsPage({ user, onLogout, onNavigate }) {
         </Card>
       </Section>
 
-      {/* ── LLM API Keys ─────────────────────────────────────────────────── */}
+      {/* ── LLM API Keys — hidden, re-enable when switching to BYOK model ──
       <Section title="LLM API Keys" subtitle="Your keys are stored per-account and never shared. Used for NL queries, report generation, and the one-time cache build.">
         <Card style={{ padding: '18px 20px' }}>
-
-          {/* Default LLM toggle */}
           <Field label="Default LLM">
             <div style={{ display: 'flex', gap: 8 }}>
               {['gemini', 'deepseek'].map(llm => (
@@ -285,7 +283,6 @@ export default function SettingsPage({ user, onLogout, onNavigate }) {
               ))}
             </div>
           </Field>
-
           <Field label="Gemini API Key" hint="Get yours free at aistudio.google.com → API Keys">
             <div style={{ display: 'flex', gap: 8 }}>
               {inp(geminiKey, setGeminiKey, geminiKey ? '••••••••••••••••' : 'AIza…', 'password', true)}
@@ -295,7 +292,6 @@ export default function SettingsPage({ user, onLogout, onNavigate }) {
               </a>
             </div>
           </Field>
-
           <Field label="DeepSeek API Key" hint="Get yours at platform.deepseek.com → API Keys">
             <div style={{ display: 'flex', gap: 8 }}>
               {inp(deepseekKey, setDeepseekKey, deepseekKey ? '••••••••••••••••' : 'sk-…', 'password', true)}
@@ -305,7 +301,6 @@ export default function SettingsPage({ user, onLogout, onNavigate }) {
               </a>
             </div>
           </Field>
-
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <Btn onClick={saveAPIKeys} disabled={saving}>
               {saving ? <><Spinner size={12} color="#fff" /> Saving…</> : 'Save API Keys'}
@@ -314,6 +309,7 @@ export default function SettingsPage({ user, onLogout, onNavigate }) {
           </div>
         </Card>
       </Section>
+      ── end LLM API Keys ── */}
 
       {/* ── Database Connections ──────────────────────────────────────────── */}
       <Section title="Database Connections"
