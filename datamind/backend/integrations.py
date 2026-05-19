@@ -357,7 +357,20 @@ def _run_sync(integration_id: int, user_email: str, provider_id: str,
     row = cursor.fetchone()
     creds = _decrypt(row["credentials_enc"])
     table_prefix = row["table_prefix"]
-    since = row["last_sync_at"] if sync_type == "delta" and row["last_sync_at"] else None
+    if sync_type == "delta" and row["last_sync_at"]:
+        since = row["last_sync_at"]          # delta: continue from last sync
+    else:
+        # Full sync: limit to plan's data-history window so we don't import
+        # years of data for users on restricted plans.
+        try:
+            from billing import get_plan_history_limit
+            history = get_plan_history_limit(user_email)
+            since = datetime.combine(history["cutoff_date"], datetime.min.time())
+            log.info("Full sync history cutoff applied",
+                     user=user_email, months=history["months"], since=str(since))
+        except Exception as _he:
+            log.warning("Could not get plan history limit — syncing all data", error=str(_he))
+            since = None
     conn.close()
 
     provider = get_provider(provider_id)

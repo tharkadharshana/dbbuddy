@@ -281,14 +281,22 @@ def validate_llm_key(llm: str, api_key: str) -> Dict[str, Any]:
 # ── Text-to-SQL ───────────────────────────────────────────────────────────────
 
 def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "gemini",
-                 fkeys: list = None, api_key: str = "", user_email: str = None) -> str:
+                 fkeys: list = None, api_key: str = "", user_email: str = None,
+                 history_months: int = None) -> str:
     schema_text = schema_to_text(schemas, fkeys)
+    history_hint = (
+        f" Only return data from the last {history_months} month(s) — add "
+        f"WHERE date_col >= DATE_SUB(NOW(), INTERVAL {history_months} MONTH) "
+        f"using the most relevant date/time column. If no date column exists, add LIMIT {history_months * 1000}."
+        if history_months else ""
+    )
     system = (
         "You are an expert MySQL query writer. "
         "Given a database schema (with foreign key relationships) and a plain English question, "
         "write a valid MySQL SELECT query that may JOIN multiple tables as needed. "
         "Return ONLY the raw SQL — no markdown, no backticks, no explanation. "
         "Never use DROP, DELETE, INSERT, UPDATE, or any mutating statement."
+        + history_hint
     )
     prompt = f"Schema:\n{schema_text}\n\nQuestion: {question}\n\nSQL:"
     log.info("Generating SQL from NL question", llm=llm, question=question[:80])

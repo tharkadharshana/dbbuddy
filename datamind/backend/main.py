@@ -49,6 +49,7 @@ from billing import (
     check_ai_limit, check_db_limit, purchase_addon, get_llm_usage_history,
     get_addon_pricing, charge_ai_usage, get_ai_credit_rate, set_ai_credit_rate,
     calculate_tokens, charge_tokens, get_token_usage_history,
+    check_plan_feature, get_plan_history_limit,
 )
 
 log = get_logger(__name__)
@@ -242,6 +243,14 @@ def _charge_op(email: str, op_type: str, rows: int):
         charge_tokens(email, tokens, op_type, rows_returned=rows)
     except Exception as _ce:
         log.warning("_charge_op failed silently", op=op_type, error=str(_ce))
+
+
+def _apply_row_limit(result: dict, row_limit: int) -> dict:
+    """Truncate result rows to plan row_limit. Applied to analytics when no date filter ran."""
+    if result.get("data") and len(result["data"]) > row_limit:
+        result["data"]      = result["data"][:row_limit]
+        result["row_count"] = len(result["data"])
+    return result
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -899,17 +908,23 @@ def natural_language_query(req: NLQueryRequest, user: dict = Depends(current_use
     llm = _effective_llm(user, req.llm)
     log.info("NL query", user=user["email"], llm=llm, question=req.question[:80])
     api_key = _resolve_api_key(user, llm)
+    history = get_plan_history_limit(user["email"])
     try:
         conn = get_connection(_resolve_db(user))
         schemas = get_table_schemas(conn, None)
         fkeys = get_foreign_keys(conn)
-        sql = query_to_sql(req.question, schemas, llm, fkeys, api_key=api_key, user_email=user["email"])
+        sql = query_to_sql(req.question, schemas, llm, fkeys, api_key=api_key,
+                           user_email=user["email"], history_months=history["months"])
         cursor = conn.cursor()
         cursor.execute(sql)
         columns = [desc[0] for desc in cursor.description]
         rows = cursor.fetchall()
         conn.close()
         data = [{k: _safe(v) for k, v in dict(zip(columns, row)).items()} for row in rows]
+        # Enforce plan row limit as fallback (applies when no date column filtered by LLM)
+        row_limit = history["row_limit"]
+        if len(data) > row_limit:
+            data = data[:row_limit]
         log.info("NL query complete", user=user["email"], rows=len(data))
         _charge_op(user["email"], "nl_query_rows", len(data))
         return {"sql": sql, "columns": columns, "data": data, "row_count": len(data)}
@@ -936,6 +951,7 @@ def run_analytics(req: AnalyticsRunRequest, user: dict = Depends(current_user)):
     ok, reason = check_ai_limit(user["email"])
     if not ok:
         raise HTTPException(status_code=402, detail=reason)
+    _row_limit = get_plan_history_limit(user["email"])["row_limit"]
     log.info("Run analytics", user=user["email"], template=req.template_id, provider=req.provider)
 
     # Route provider templates straight to the integration analytics handler.
@@ -963,6 +979,7 @@ def run_analytics(req: AnalyticsRunRequest, user: dict = Depends(current_user)):
             log.info("Run analytics: integration template served",
                      user=user["email"], provider=req.provider, template=req.template_id,
                      row_count=result.get("row_count"))
+            _apply_row_limit(result, _row_limit)
             _charge_op(user["email"], _ANALYTICS_OP.get(req.template_id, "prebuilt_template"),
                        result.get("row_count", 0))
             return result
@@ -992,6 +1009,7 @@ def run_analytics(req: AnalyticsRunRequest, user: dict = Depends(current_user)):
                 result = _run_sql(conn, sql, title)
                 result["source"] = "cache"
                 log.info("Analytics served from cache", template=req.template_id)
+                _apply_row_limit(result, _row_limit)
                 _charge_op(user["email"], _ANALYTICS_OP.get(req.template_id, "prebuilt_template"),
                            result.get("row_count", 0))
                 conn.close()
@@ -1004,6 +1022,7 @@ def run_analytics(req: AnalyticsRunRequest, user: dict = Depends(current_user)):
         r = _try_python(req.template_id, conn)
         if r:
             r["source"] = "python"
+            _apply_row_limit(r, _row_limit)
             _charge_op(user["email"], _ANALYTICS_OP.get(req.template_id, "prebuilt_template"),
                        r.get("row_count", 0))
             conn.close()
@@ -1014,6 +1033,7 @@ def run_analytics(req: AnalyticsRunRequest, user: dict = Depends(current_user)):
         if r:
             r["source"] = "fallback"
             log.warning("Analytics using hardcoded fallback SQL", template=req.template_id)
+            _apply_row_limit(r, _row_limit)
             _charge_op(user["email"], _ANALYTICS_OP.get(req.template_id, "prebuilt_template"),
                        r.get("row_count", 0))
             conn.close()
@@ -1085,6 +1105,9 @@ class ForecastRequest(BaseModel):
 
 @app.post("/forecast")
 def forecast(req: ForecastRequest, user: dict = Depends(current_user)):
+    ok, reason = check_plan_feature(user["email"], "forecast")
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
     ok, reason = check_ai_limit(user["email"])
     if not ok:
         raise HTTPException(status_code=402, detail=reason)
@@ -1095,14 +1118,17 @@ def forecast(req: ForecastRequest, user: dict = Depends(current_user)):
         schemas = get_table_schemas(conn, None)
         _validate_table_column(schemas, req.table, req.date_column)
         _validate_table_column(schemas, req.table, req.value_column)
+        history = get_plan_history_limit(user["email"])
         cursor = conn.cursor()
         cursor.execute(
             f"SELECT DATE(`{req.date_column}`) as ds, SUM(`{req.value_column}`) as y "
-            f"FROM `{req.table}` WHERE `{req.date_column}` IS NOT NULL GROUP BY ds ORDER BY ds"
+            f"FROM `{req.table}` WHERE `{req.date_column}` IS NOT NULL "
+            f"AND `{req.date_column}` >= %s GROUP BY ds ORDER BY ds",
+            (history["cutoff_date"],)
         )
         rows = cursor.fetchall()
         conn.close()
-        log.info("Forecast data loaded", rows=len(rows))
+        log.info("Forecast data loaded", rows=len(rows), months=history["months"])
         result = run_forecast(rows, req.periods)
         _charge_op(user["email"], "forecast", len(rows))
         return result
@@ -1115,6 +1141,9 @@ def forecast(req: ForecastRequest, user: dict = Depends(current_user)):
 
 @app.get("/forecast/auto")
 def auto_forecast(periods: int = 90, user: dict = Depends(current_user)):
+    ok, reason = check_plan_feature(user["email"], "forecast")
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
     ok, reason = check_ai_limit(user["email"])
     if not ok:
         raise HTTPException(status_code=402, detail=reason)
@@ -1130,14 +1159,16 @@ def auto_forecast(periods: int = 90, user: dict = Depends(current_user)):
             raise HTTPException(status_code=422, detail="Integration tables not ready.")
         receipts_tbl = f"{prefix}receipts"
         log.info("Provider auto forecast", user=user["email"], table=receipts_tbl)
+        history = get_plan_history_limit(user["email"])
         try:
             iconn = _get_internal_conn()
             cursor = iconn.cursor()
             cursor.execute(
                 f"SELECT DATE(created_at) AS ds, SUM(total_money) AS y "
                 f"FROM `{receipts_tbl}` "
-                f"WHERE created_at IS NOT NULL AND total_money > 0 "
-                f"GROUP BY DATE(created_at) ORDER BY DATE(created_at)"
+                f"WHERE created_at IS NOT NULL AND total_money > 0 AND created_at >= %s "
+                f"GROUP BY DATE(created_at) ORDER BY DATE(created_at)",
+                (history["cutoff_date"],)
             )
             rows = cursor.fetchall()
             iconn.close()
@@ -1162,10 +1193,12 @@ def auto_forecast(periods: int = 90, user: dict = Depends(current_user)):
              from_cache=bool(cache and auto.get("forecast_table")))
     try:
         conn = get_connection(db_config)
+        history = get_plan_history_limit(user["email"])
         cursor = conn.cursor()
         cursor.execute(
             f"SELECT DATE(`{d_col}`) as ds, SUM(`{v_col}`) as y "
-            f"FROM `{table}` WHERE `{d_col}` IS NOT NULL GROUP BY ds ORDER BY ds"
+            f"FROM `{table}` WHERE `{d_col}` IS NOT NULL AND `{d_col}` >= %s GROUP BY ds ORDER BY ds",
+            (history["cutoff_date"],)
         )
         rows = cursor.fetchall()
         conn.close()
@@ -1193,6 +1226,9 @@ class AnomalyRequest(BaseModel):
 
 @app.post("/anomalies")
 def anomalies(req: AnomalyRequest, user: dict = Depends(current_user)):
+    ok, reason = check_plan_feature(user["email"], "anomaly_detection")
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
     ok, reason = check_ai_limit(user["email"])
     if not ok:
         raise HTTPException(status_code=402, detail=reason)
@@ -1203,15 +1239,20 @@ def anomalies(req: AnomalyRequest, user: dict = Depends(current_user)):
         _validate_table_column(schemas, req.table, req.value_column)
         if req.date_column:
             _validate_table_column(schemas, req.table, req.date_column)
+        history = get_plan_history_limit(user["email"])
         cursor = conn.cursor()
         if req.date_column:
             cursor.execute(
                 f"SELECT `{req.date_column}`, `{req.value_column}` "
                 f"FROM `{req.table}` WHERE `{req.date_column}` IS NOT NULL "
-                f"ORDER BY `{req.date_column}`"
+                f"AND `{req.date_column}` >= %s ORDER BY `{req.date_column}`",
+                (history["cutoff_date"],)
             )
         else:
-            cursor.execute(f"SELECT `{req.value_column}` FROM `{req.table}`")
+            cursor.execute(
+                f"SELECT `{req.value_column}` FROM `{req.table}` LIMIT %s",
+                (history["row_limit"],)
+            )
         rows = cursor.fetchall()
         conn.close()
         result = run_anomaly_detection(rows, has_date=bool(req.date_column))
@@ -1224,6 +1265,9 @@ def anomalies(req: AnomalyRequest, user: dict = Depends(current_user)):
 
 @app.get("/anomalies/auto")
 def auto_anomalies(user: dict = Depends(current_user)):
+    ok, reason = check_plan_feature(user["email"], "anomaly_detection")
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
     ok, reason = check_ai_limit(user["email"])
     if not ok:
         raise HTTPException(status_code=402, detail=reason)
@@ -1239,14 +1283,16 @@ def auto_anomalies(user: dict = Depends(current_user)):
             raise HTTPException(status_code=422, detail="Integration tables not ready.")
         receipts_tbl = f"{prefix}receipts"
         log.info("Provider auto anomaly", user=user["email"], table=receipts_tbl)
+        history = get_plan_history_limit(user["email"])
         try:
             iconn = _get_internal_conn()
             cursor = iconn.cursor()
             cursor.execute(
                 f"SELECT DATE(created_at), SUM(total_money) "
                 f"FROM `{receipts_tbl}` "
-                f"WHERE created_at IS NOT NULL AND total_money > 0 "
-                f"GROUP BY DATE(created_at) ORDER BY DATE(created_at)"
+                f"WHERE created_at IS NOT NULL AND total_money > 0 AND created_at >= %s "
+                f"GROUP BY DATE(created_at) ORDER BY DATE(created_at)",
+                (history["cutoff_date"],)
             )
             rows = cursor.fetchall()
             iconn.close()
@@ -1268,12 +1314,14 @@ def auto_anomalies(user: dict = Depends(current_user)):
     v_col  = auto.get("anomaly_value_col")or "invoiceTotal"
     log.info("Auto anomaly detection", user=user["email"],
              table=table, date_col=d_col, value_col=v_col)
+    history = get_plan_history_limit(user["email"])
     try:
         conn = get_connection(db_config)
         cursor = conn.cursor()
         cursor.execute(
             f"SELECT `{d_col}`, SUM(`{v_col}`) FROM `{table}` "
-            f"WHERE `{d_col}` IS NOT NULL GROUP BY `{d_col}` ORDER BY `{d_col}`"
+            f"WHERE `{d_col}` IS NOT NULL AND `{d_col}` >= %s GROUP BY `{d_col}` ORDER BY `{d_col}`",
+            (history["cutoff_date"],)
         )
         rows = cursor.fetchall()
         conn.close()
@@ -1486,6 +1534,9 @@ def connect_provider_route(req: ProviderConnectRequest,
     Connect a provider: validate, create tables, trigger full sync.
     Sync runs in background.
     """
+    ok, reason = check_plan_feature(user["email"], "external_api")
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
     ok, reason = check_db_limit(user["email"], 0)
     if not ok:
         raise HTTPException(status_code=402, detail=reason)
