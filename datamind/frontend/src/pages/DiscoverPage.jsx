@@ -335,7 +335,7 @@ export default function DiscoverPage({ llm, setLlm, sub, onNavigate }) {
               <button onClick={handleRebuild} title="Rebuild cache" style={{ padding:'5px 10px', background:'var(--bg3)', border:'1px solid var(--border)', borderRadius:'var(--r-sm)', fontSize:11, color:'var(--text3)', cursor:'pointer' }}>↺ Rebuild</button>
             </div>
           </div>
-          <div style={{ marginBottom:12 }}><UsageMeter /></div>
+          <div style={{ marginBottom:12 }}><UsageMeter sub={sub} /></div>
           <div style={{ display:'flex', gap:4, flexWrap:'wrap', marginBottom:10 }}>
             {categories.map(cat => (
               <button key={cat} onClick={() => setFilter(cat)} style={{

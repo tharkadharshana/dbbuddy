@@ -31,13 +31,18 @@ const PLAN_FEATURES = {
 }
 
 // ── Usage progress bar ────────────────────────────────────────────────────────
-function UsageBar({ label, used, limit, pct }) {
+function UsageBar({ label, used, limit, pct, addon = 0 }) {
   const color = pct >= 100 ? 'var(--red)' : pct >= 80 ? 'var(--amber)' : 'var(--blue)'
   return (
     <div style={{ flex: 1 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--text3)', marginBottom: 4 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11, color: 'var(--text3)', marginBottom: 4 }}>
         <span>{label}</span>
-        <span>{used.toLocaleString()} / {limit.toLocaleString()}</span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+          {used.toLocaleString()} / {limit.toLocaleString()}
+          {addon > 0 && (
+            <span style={{ color: 'var(--green)', fontWeight: 600 }}>+{addon.toLocaleString()}</span>
+          )}
+        </span>
       </div>
       <div style={{ height: 6, borderRadius: 3, background: 'var(--bg3)', overflow: 'hidden' }}>
         <div style={{ height: '100%', width: `${Math.min(pct, 100)}%`, background: color, borderRadius: 3, transition: 'width .3s' }} />
@@ -214,14 +219,16 @@ export default function BillingPage({ onSubChange }) {
             <UsageBar
               label="AI Credits"
               used={sub.ai_base_used}
-              limit={sub.ai_total_available}
+              limit={sub.ai_base_limit}
               pct={sub.usage_pct_ai}
+              addon={sub.ai_addon_balance}
             />
             <UsageBar
               label="DB Rows"
               used={sub.db_base_used}
-              limit={sub.db_total_available}
+              limit={sub.db_base_limit}
               pct={sub.usage_pct_db}
+              addon={sub.db_addon_balance}
             />
           </div>
         </div>

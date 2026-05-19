@@ -250,7 +250,7 @@ export default function ReportsPage({ llm, setLlm, sub, onNavigate }) {
           {/* LLM + Format */}
           <div style={{ marginBottom:14 }}>
             <div style={{ fontSize:11, color:'var(--text3)', marginBottom:6, fontWeight:500, textTransform:'uppercase', letterSpacing:'.07em' }}>LLM</div>
-            <UsageMeter />
+            <UsageMeter sub={sub} />
           </div>
           <div style={{ marginBottom:16 }}>
             <div style={{ fontSize:11, color:'var(--text3)', marginBottom:6, fontWeight:500, textTransform:'uppercase', letterSpacing:'.07em' }}>Report Style</div>

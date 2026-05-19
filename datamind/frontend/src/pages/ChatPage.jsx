@@ -199,7 +199,7 @@ export default function ChatPage({ llm, setLlm, connection, sub, onNavigate }) {
 
       {/* LLM selector with token meter */}
       <div style={{ display:'flex', justifyContent:'flex-end', padding:'10px 20px 0', flexShrink:0 }}>
-        <UsageMeter />
+        <UsageMeter sub={sub} />
       </div>
 
       {/* Messages area */}

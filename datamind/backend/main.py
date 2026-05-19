@@ -47,7 +47,7 @@ from billing import (
     bootstrap_billing_tables, start_trial, subscribe_to_plan,
     get_user_subscription, get_subscription_plans, get_plan_by_id,
     check_ai_limit, check_db_limit, purchase_addon, get_llm_usage_history,
-    get_addon_pricing, charge_ai_usage,
+    get_addon_pricing, charge_ai_usage, get_ai_credit_rate, set_ai_credit_rate,
 )
 
 log = get_logger(__name__)
@@ -1775,3 +1775,19 @@ def billing_usage(user: dict = Depends(current_user)):
         "history": get_llm_usage_history(user["email"]),
         "pricing": get_addon_pricing(),
     }
+
+
+@app.get("/billing/config")
+def billing_config_get(_user: dict = Depends(current_user)):
+    return {"ai_credit_rate": get_ai_credit_rate()}
+
+
+class BillingConfigRequest(BaseModel):
+    ai_credit_rate: float
+
+@app.post("/billing/config")
+def billing_config_set(req: BillingConfigRequest, _user: dict = Depends(current_user)):
+    if req.ai_credit_rate <= 0:
+        raise HTTPException(status_code=400, detail="ai_credit_rate must be positive")
+    set_ai_credit_rate(req.ai_credit_rate)
+    return {"ok": True, "ai_credit_rate": req.ai_credit_rate}

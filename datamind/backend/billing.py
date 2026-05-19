@@ -100,12 +100,33 @@ def bootstrap_billing_tables():
                 tokens          INT           NOT NULL DEFAULT 0,
                 model           VARCHAR(50),
                 endpoint        VARCHAR(255),
-                credits_charged DECIMAL(8,2)  NOT NULL DEFAULT 0,
+                credits_charged DECIMAL(10,4) NOT NULL DEFAULT 0,
                 actual_cost     DECIMAL(10,6) NOT NULL DEFAULT 0,
                 created_at      TIMESTAMP     DEFAULT CURRENT_TIMESTAMP,
                 INDEX idx_llm_email   (user_email),
                 INDEX idx_llm_created (created_at)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """)
+
+        # Migrate ai_base_used to DECIMAL so fractional credits are stored accurately
+        cur.execute("""
+            ALTER TABLE subscription_usage
+            MODIFY COLUMN ai_base_used DECIMAL(12,4) NOT NULL DEFAULT 0
+        """)
+
+        # Config table — stores system-wide settings like the AI credit rate
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS billing_config (
+                config_key   VARCHAR(100) PRIMARY KEY,
+                config_value VARCHAR(255) NOT NULL,
+                description  TEXT,
+                updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """)
+        cur.execute("""
+            INSERT IGNORE INTO billing_config (config_key, config_value, description)
+            VALUES ('ai_credit_rate', '1.0',
+                    'AI credits charged per 1000 tokens. Adjust to control user-visible usage and profitability.')
         """)
 
         # Seed plans
@@ -383,32 +404,52 @@ def check_db_limit(user_email: str, rows: int) -> Tuple[bool, str]:
         return True, ""
 
 
-def charge_ai_usage(user_email: str, tokens: int, model: str, endpoint: str, api_key_cost: float = 0.0):
-    """Log an AI call and increment usage counters."""
+def get_ai_credit_rate() -> float:
+    """Return the credits-per-1000-tokens multiplier from billing_config."""
     try:
-        credits_per_1k = 0.03  # default
-        model_lower = (model or "").lower()
-        if "gemini" in model_lower:
-            credits_per_1k = 0.001
-        elif "deepseek" in model_lower:
-            credits_per_1k = 0.0003
+        conn = _get_conn()
+        cur = conn.cursor(dictionary=True)
+        cur.execute("SELECT config_value FROM billing_config WHERE config_key = 'ai_credit_rate'")
+        row = cur.fetchone()
+        cur.close(); conn.close()
+        return float(row["config_value"]) if row else 1.0
+    except Exception:
+        return 1.0
 
-        credits_charged = round(tokens / 1000 * credits_per_1k, 6)
+
+def set_ai_credit_rate(rate: float):
+    """Update the credits-per-1000-tokens multiplier."""
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO billing_config (config_key, config_value)
+        VALUES ('ai_credit_rate', %s)
+        ON DUPLICATE KEY UPDATE config_value = VALUES(config_value)
+    """, (str(rate),))
+    conn.commit()
+    cur.close(); conn.close()
+
+
+def charge_ai_usage(user_email: str, tokens: int, model: str, endpoint: str, api_key_cost: float = 0.0):
+    """Log an AI call and increment billing credits by (tokens / 1000 * ai_credit_rate)."""
+    try:
+        rate = get_ai_credit_rate()
+        credits_charged = round(tokens / 1000 * rate, 4)
 
         conn = _get_conn()
         conn.autocommit = False
         cur = conn.cursor(dictionary=True)
         try:
+            # Store raw tokens internally — never shown to end users
             cur.execute("""
                 INSERT INTO llm_usage_log (user_email, tokens, model, endpoint, credits_charged, actual_cost)
                 VALUES (%s, %s, %s, %s, %s, %s)
             """, (user_email, tokens, model, endpoint, credits_charged, api_key_cost))
 
-            # Get current subscription period
+            # Increment the user-visible AI credit counter for the active subscription period
             cur.execute("""
-                SELECT period_start, ai_credits AS ai_base_limit
+                SELECT period_start
                 FROM user_subscriptions us
-                JOIN subscription_plans sp ON sp.id = us.plan_id
                 WHERE us.user_email = %s AND us.status IN ('trial', 'active')
                 ORDER BY us.id DESC LIMIT 1
             """, (user_email,))
@@ -416,9 +457,9 @@ def charge_ai_usage(user_email: str, tokens: int, model: str, endpoint: str, api
             if sub:
                 cur.execute("""
                     INSERT INTO subscription_usage (user_email, period_start, ai_base_used)
-                    VALUES (%s, %s, 1)
-                    ON DUPLICATE KEY UPDATE ai_base_used = ai_base_used + 1
-                """, (user_email, sub["period_start"]))
+                    VALUES (%s, %s, %s)
+                    ON DUPLICATE KEY UPDATE ai_base_used = ai_base_used + %s
+                """, (user_email, sub["period_start"], credits_charged, credits_charged))
 
             conn.commit()
         except Exception:

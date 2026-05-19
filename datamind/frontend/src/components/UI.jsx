@@ -40,90 +40,42 @@ export function Spinner({ size=18, color='var(--blue)' }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" style={{animation:'spin .8s linear infinite'}}><circle cx="12" cy="12" r="9" stroke={color} strokeWidth="2.5" strokeDasharray="40 20" strokeLinecap="round"/></svg>
 }
 
-// Token usage meter — stored in localStorage keyed by llm
-function getTokenUsage(llm) {
-  try { return JSON.parse(localStorage.getItem(`dm_tokens_${llm}`) || '{"used":0,"limit":1000000}') }
-  catch { return {used:0,limit:1000000} }
-}
-export function addTokenUsage(llm, tokens) {
-  const u = getTokenUsage(llm)
-  u.used = (u.used || 0) + (tokens || 0)
-  localStorage.setItem(`dm_tokens_${llm}`, JSON.stringify(u))
-}
+export function UsageMeter({ sub }) {
+  if (!sub || sub.status === 'no_subscription') return null
 
-export function UsageMeter() {
-  const [credits, setCredits] = React.useState(null)
-  const [totalRows, setTotalRows] = React.useState(0)
+  const aiUsed  = sub.ai_base_used  || 0
+  const aiTotal = sub.ai_total_available || 1
+  const aiPct   = Math.min(100, Math.round((aiUsed / aiTotal) * 100))
 
-  React.useEffect(() => {
-    const auth = { 'Authorization': `Bearer ${localStorage.getItem('dm_token')}` }
-    fetch('/api/credits', { headers: auth })
-      .then(r => r.ok ? r.json() : null)
-      .then(data => setCredits(data))
-      .catch(() => {})
-    fetch('/api/providers/stats', { headers: auth })
-      .then(r => r.ok ? r.json() : null)
-      .then(data => { if (data?.total_rows) setTotalRows(data.total_rows) })
-      .catch(() => {})
-  }, [])
+  const dbUsed  = sub.db_base_used  || 0
+  const dbTotal = sub.db_total_available || 1
+  const dbPct   = Math.min(100, Math.round((dbUsed / dbTotal) * 100))
 
-  const tokensUsed = credits?.total_tokens_used || 0
-  const tokensLimit = 1_000_000
-  const tokensPct = Math.min(100, Math.round((tokensUsed / tokensLimit) * 100))
+  const color = (pct) => pct >= 100 ? 'var(--red)' : pct >= 80 ? 'var(--amber)' : 'var(--blue)'
 
-  const rowsUsed = totalRows || credits?.total_db_rows || 0
-  const rowsLimit = 100_000
-  const rowsPct = Math.min(100, Math.round((rowsUsed / rowsLimit) * 100))
-
-  const getColor = (pct) => pct > 80 ? 'var(--red)' : pct > 50 ? 'var(--amber)' : 'var(--blue)'
+  const pill = (label, used, total, pct) => (
+    <div style={{
+      display:'flex', flexDirection:'column', gap:4,
+      padding:'7px 12px', borderRadius:'var(--r-md)',
+      border:'1px solid var(--border)', background:'var(--bg2)', minWidth:130,
+    }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:6 }}>
+        <span style={{ fontSize:12, fontWeight:600, color:'var(--text2)' }}>{label}</span>
+        <span style={{ fontSize:10, color: color(pct), fontFamily:'var(--mono)' }}>{pct}%</span>
+      </div>
+      <div style={{ height:3, borderRadius:99, background:'var(--bg3)', overflow:'hidden' }}>
+        <div style={{ height:'100%', width:`${pct}%`, borderRadius:99, background:color(pct), transition:'width .3s' }} />
+      </div>
+      <div style={{ fontSize:9, color:'var(--text3)', fontFamily:'var(--mono)' }}>
+        {Number(used).toLocaleString(undefined, {maximumFractionDigits:1})} / {total.toLocaleString()}
+      </div>
+    </div>
+  )
 
   return (
     <div style={{ display:'flex', gap:8 }}>
-      <div style={{
-        display:'flex', flexDirection:'column', gap:4,
-        padding:'7px 12px', borderRadius:'var(--r-md)', 
-        border:'1px solid var(--border)',
-        background:'var(--bg2)',
-        minWidth:130,
-      }}>
-        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:6 }}>
-          <span style={{ fontSize:12, fontWeight:600, color:'var(--text2)' }}>
-            🧠 AI Credits
-          </span>
-          <span style={{ fontSize:10, color: getColor(tokensPct), fontFamily:'var(--mono)' }}>
-            {tokensPct}%
-          </span>
-        </div>
-        <div style={{ height:3, borderRadius:99, background:'var(--bg3)', overflow:'hidden' }}>
-          <div style={{ height:'100%', width:`${tokensPct}%`, borderRadius:99, background:getColor(tokensPct), transition:'width .3s' }} />
-        </div>
-        <div style={{ fontSize:9, color:'var(--text3)', fontFamily:'var(--mono)' }}>
-          {tokensUsed.toLocaleString()} / {tokensLimit.toLocaleString()}
-        </div>
-      </div>
-
-      <div style={{
-        display:'flex', flexDirection:'column', gap:4,
-        padding:'7px 12px', borderRadius:'var(--r-md)', 
-        border:'1px solid var(--border)',
-        background:'var(--bg2)',
-        minWidth:130,
-      }}>
-        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:6 }}>
-          <span style={{ fontSize:12, fontWeight:600, color:'var(--text2)' }}>
-            📊 DB Rows
-          </span>
-          <span style={{ fontSize:10, color: getColor(rowsPct), fontFamily:'var(--mono)' }}>
-            {rowsPct}%
-          </span>
-        </div>
-        <div style={{ height:3, borderRadius:99, background:'var(--bg3)', overflow:'hidden' }}>
-          <div style={{ height:'100%', width:`${rowsPct}%`, borderRadius:99, background:getColor(rowsPct), transition:'width .3s' }} />
-        </div>
-        <div style={{ fontSize:9, color:'var(--text3)', fontFamily:'var(--mono)' }}>
-          {rowsUsed.toLocaleString()} / {rowsLimit.toLocaleString()}
-        </div>
-      </div>
+      {pill('🧠 AI Credits', aiUsed, aiTotal, aiPct)}
+      {pill('📊 DB Rows',    dbUsed, dbTotal, dbPct)}
     </div>
   )
 }
