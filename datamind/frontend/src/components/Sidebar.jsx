@@ -151,7 +151,6 @@ export default function Sidebar({ active, setActive, connection, cacheStatus, to
         <div style={{ height:1, background:'var(--border)', margin:'8px 4px' }} />
         <NavItem id="connections" label="Connections"   icon={IC.plug}     active={active} setActive={setActive} />
         <NavItem id="billing"     label="Billing"       icon={IC.billing}  active={active} setActive={setActive} />
-        <NavItem id="usage"       label="Usage"         icon={IC.usage}    active={active} setActive={setActive} />
         <NavItem id="settings"    label="Settings"      icon={IC.settings} active={active} setActive={setActive} />
       </nav>
 
