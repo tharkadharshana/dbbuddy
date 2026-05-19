@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { fetchSubscription, fetchBillingUsage } from '../utils/api'
+import { fetchBillingUsage } from '../utils/api'
 import { Card, Spinner, Badge } from '../components/UI'
 
 function UsageBar({ label, used, limit, pct }) {
@@ -21,25 +21,24 @@ function UsageBar({ label, used, limit, pct }) {
   )
 }
 
-export default function UsagePage() {
-  const [sub, setSub]         = useState(null)
-  const [usage, setUsage]     = useState(null)
-  const [loading, setLoading] = useState(true)
+export default function UsagePage({ sub }) {
+  const [usage, setUsage]         = useState(null)
+  const [usageLoading, setUsageLoading] = useState(true)
 
   useEffect(() => {
-    Promise.all([fetchSubscription(), fetchBillingUsage()])
-      .then(([s, u]) => { setSub(s); setUsage(u) })
+    fetchBillingUsage()
+      .then(u => setUsage(u))
       .catch(() => {})
-      .finally(() => setLoading(false))
+      .finally(() => setUsageLoading(false))
   }, [])
 
-  if (loading) return (
+  const history = usage?.history || []
+
+  if (!sub) return (
     <div style={{ padding: 32, display: 'flex', alignItems: 'center', gap: 10, color: 'var(--text3)' }}>
       <Spinner /> Loading usage data…
     </div>
   )
-
-  const history = usage?.history || []
 
   return (
     <div style={{ maxWidth: 1000, padding: '24px 24px 60px' }}>
@@ -100,7 +99,11 @@ export default function UsagePage() {
       {/* AI usage history */}
       <Card style={{ padding: 20 }}>
         <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 16 }}>Recent AI Usage</div>
-        {history.length === 0 ? (
+        {usageLoading ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text3)', fontSize: 13 }}>
+            <Spinner /> Loading…
+          </div>
+        ) : history.length === 0 ? (
           <div style={{ fontSize: 13, color: 'var(--text3)' }}>No AI usage recorded yet.</div>
         ) : (
           <div style={{ overflow: 'auto' }}>

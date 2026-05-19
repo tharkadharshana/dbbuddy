@@ -46,7 +46,7 @@ from providers import list_providers, get_provider
 from billing import (
     bootstrap_billing_tables, start_trial, subscribe_to_plan,
     get_user_subscription, get_subscription_plans, get_plan_by_id,
-    check_ai_limit, purchase_addon, get_llm_usage_history,
+    check_ai_limit, check_db_limit, purchase_addon, get_llm_usage_history,
     get_addon_pricing, charge_ai_usage,
 )
 
@@ -1446,6 +1446,9 @@ def connect_provider_route(req: ProviderConnectRequest,
     Connect a provider: validate, create tables, trigger full sync.
     Sync runs in background.
     """
+    ok, reason = check_db_limit(user["email"], 0)
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
     log.info("Connecting provider", user=user["email"], provider=req.provider_id)
     try:
         connection_id = connect_provider(user["email"], req.provider_id, req.credentials)
@@ -1502,6 +1505,9 @@ def delete_account(user: dict = Depends(current_user)):
 def manual_sync(connection_id: str, background_tasks: BackgroundTasks,
                 user: dict = Depends(current_user)):
     """Manually trigger a delta sync for a connection."""
+    ok, reason = check_db_limit(user["email"], 0)
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
     log.info("Manual sync triggered", user=user["email"], connection_id=connection_id)
     background_tasks.add_task(trigger_sync, user["email"], connection_id, full=False)
     return {"ok": True, "message": "Sync started in background"}

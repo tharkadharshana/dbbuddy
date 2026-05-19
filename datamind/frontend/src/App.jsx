@@ -127,7 +127,7 @@ export default function App() {
     connections: <ConnectionsPage onConnectionChange={checkSetup} sub={sub} />,
     settings:    <SettingsPage user={user} onLogout={handleLogout} />,
     billing:     <BillingPage onSubChange={loadSub} />,
-    usage:       <UsagePage />,
+    usage:       <UsagePage sub={sub} />,
   }[page] ?? <ChatPage llm={llm} setLlm={setLlm} connection={connection} />
 
   return (
