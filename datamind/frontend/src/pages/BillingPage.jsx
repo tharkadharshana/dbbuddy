@@ -31,14 +31,15 @@ const PLAN_FEATURES = {
 }
 
 // ── Usage progress bar ────────────────────────────────────────────────────────
-function UsageBar({ label, used, limit, pct, addon = 0 }) {
+function UsageBar({ label, used, limit, pct, addon = 0, decimals = 0 }) {
   const color = pct >= 100 ? 'var(--red)' : pct >= 80 ? 'var(--amber)' : 'var(--blue)'
+  const fmt = (n) => Number(n).toLocaleString(undefined, { maximumFractionDigits: decimals })
   return (
     <div style={{ flex: 1 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11, color: 'var(--text3)', marginBottom: 4 }}>
         <span>{label}</span>
         <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-          {used.toLocaleString()} / {limit.toLocaleString()}
+          {fmt(used)} / {fmt(limit)}
           {addon > 0 && (
             <span style={{ color: 'var(--green)', fontWeight: 600 }}>+{addon.toLocaleString()}</span>
           )}
@@ -222,6 +223,7 @@ export default function BillingPage({ onSubChange }) {
               limit={sub.ai_base_limit}
               pct={sub.usage_pct_ai}
               addon={sub.ai_addon_balance}
+              decimals={1}
             />
             <UsageBar
               label="DB Rows"

@@ -2,13 +2,14 @@ import React, { useState, useEffect } from 'react'
 import { fetchBillingUsage } from '../utils/api'
 import { Card, Spinner, Badge } from '../components/UI'
 
-function UsageBar({ label, used, limit, pct }) {
+function UsageBar({ label, used, limit, pct, decimals = 0 }) {
   const color = pct >= 100 ? 'var(--red)' : pct >= 80 ? 'var(--amber)' : 'var(--blue)'
+  const fmt = (n) => Number(n).toLocaleString(undefined, { maximumFractionDigits: decimals })
   return (
     <div style={{ flex: 1, minWidth: 200 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text3)', marginBottom: 5 }}>
         <span>{label}</span>
-        <span>{used.toLocaleString()} / {limit.toLocaleString()}</span>
+        <span>{fmt(used)} / {fmt(limit)}</span>
       </div>
       <div style={{ height: 8, borderRadius: 4, background: 'var(--bg3)', overflow: 'hidden' }}>
         <div style={{
@@ -72,6 +73,7 @@ export default function UsagePage({ sub }) {
               used={sub.ai_base_used}
               limit={sub.ai_total_available}
               pct={sub.usage_pct_ai}
+              decimals={1}
             />
             <UsageBar
               label="DB Rows"

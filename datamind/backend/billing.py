@@ -108,10 +108,14 @@ def bootstrap_billing_tables():
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """)
 
-        # Migrate ai_base_used to DECIMAL so fractional credits are stored accurately
+        # Migrate columns to wider types — safe to run repeatedly
         cur.execute("""
             ALTER TABLE subscription_usage
             MODIFY COLUMN ai_base_used DECIMAL(12,4) NOT NULL DEFAULT 0
+        """)
+        cur.execute("""
+            ALTER TABLE llm_usage_log
+            MODIFY COLUMN credits_charged DECIMAL(10,4) NOT NULL DEFAULT 0
         """)
 
         # Config table — stores system-wide settings like the AI credit rate
@@ -335,9 +339,15 @@ def get_user_subscription(user_email: str) -> Dict:
         db_addon_bal = _get_addon_balance(cur, user_email, "db_rows")
 
         ai_base_used  = usage["ai_base_used"]
-        db_base_used  = usage["db_base_used"]
         ai_base_limit = sub["ai_base_limit"]
         db_base_limit = int(sub["db_base_limit"])
+
+        # DB rows: count actual synced rows live — subscription_usage.db_base_used is never written
+        try:
+            from integrations import get_user_total_rows
+            db_base_used = get_user_total_rows(user_email)
+        except Exception:
+            db_base_used = usage["db_base_used"]
 
         ai_total = ai_base_limit + ai_addon_bal
         db_total = db_base_limit + db_addon_bal
@@ -353,7 +363,7 @@ def get_user_subscription(user_email: str) -> Dict:
             "plan_name":           sub["plan_name"],
             "plan_id":             sub["plan_id"],
             "price_cents":         sub["price_cents"],
-            "ai_base_used":        ai_base_used,
+            "ai_base_used":        round(float(ai_base_used), 1),
             "ai_base_limit":       ai_base_limit,
             "ai_addon_balance":    ai_addon_bal,
             "ai_total_available":  ai_total,
@@ -431,45 +441,45 @@ def set_ai_credit_rate(rate: float):
 
 
 def charge_ai_usage(user_email: str, tokens: int, model: str, endpoint: str, api_key_cost: float = 0.0):
-    """Log an AI call and increment billing credits by (tokens / 1000 * ai_credit_rate)."""
+    """Log an AI call and increment billing credits by (tokens / 1000 * ai_credit_rate).
+    The log insert and credit update are intentionally separate transactions so one
+    failing never silently drops the other."""
+    rate = get_ai_credit_rate()
+    credits_charged = round(tokens / 1000 * rate, 4)
+
+    # 1. Write to audit log (independent — never rolled back by the credit step)
     try:
-        rate = get_ai_credit_rate()
-        credits_charged = round(tokens / 1000 * rate, 4)
-
         conn = _get_conn()
-        conn.autocommit = False
-        cur = conn.cursor(dictionary=True)
-        try:
-            # Store raw tokens internally — never shown to end users
-            cur.execute("""
-                INSERT INTO llm_usage_log (user_email, tokens, model, endpoint, credits_charged, actual_cost)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """, (user_email, tokens, model, endpoint, credits_charged, api_key_cost))
-
-            # Increment the user-visible AI credit counter for the active subscription period
-            cur.execute("""
-                SELECT period_start
-                FROM user_subscriptions us
-                WHERE us.user_email = %s AND us.status IN ('trial', 'active')
-                ORDER BY us.id DESC LIMIT 1
-            """, (user_email,))
-            sub = cur.fetchone()
-            if sub:
-                cur.execute("""
-                    INSERT INTO subscription_usage (user_email, period_start, ai_base_used)
-                    VALUES (%s, %s, %s)
-                    ON DUPLICATE KEY UPDATE ai_base_used = ai_base_used + %s
-                """, (user_email, sub["period_start"], credits_charged, credits_charged))
-
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            cur.close()
-            conn.close()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO llm_usage_log (user_email, tokens, model, endpoint, credits_charged, actual_cost)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (user_email, tokens, model, endpoint, credits_charged, api_key_cost))
+        conn.commit()
+        cur.close(); conn.close()
     except Exception as e:
-        log.warning("charge_ai_usage failed", email=user_email, error=str(e))
+        log.warning("charge_ai_usage: log insert failed", email=user_email, error=str(e))
+
+    # 2. Increment the user-visible credit counter for the active period
+    try:
+        conn = _get_conn()
+        cur = conn.cursor(dictionary=True)
+        cur.execute("""
+            SELECT period_start FROM user_subscriptions
+            WHERE user_email = %s AND status IN ('trial', 'active')
+            ORDER BY id DESC LIMIT 1
+        """, (user_email,))
+        sub = cur.fetchone()
+        if sub:
+            cur.execute("""
+                INSERT INTO subscription_usage (user_email, period_start, ai_base_used)
+                VALUES (%s, %s, %s)
+                ON DUPLICATE KEY UPDATE ai_base_used = ai_base_used + %s
+            """, (user_email, sub["period_start"], credits_charged, credits_charged))
+            conn.commit()
+        cur.close(); conn.close()
+    except Exception as e:
+        log.warning("charge_ai_usage: credit update failed", email=user_email, error=str(e))
 
 
 def purchase_addon(user_email: str, addon_type: str, quantity: int):
