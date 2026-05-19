@@ -90,7 +90,7 @@ export default function BillingPage({ onSubChange }) {
   const [loading, setLoading]     = useState(true)
   const [confirmPlan, setConfirmPlan] = useState(null)
   const [subscribing, setSubscribing] = useState(false)
-  const [addonQty, setAddonQty]   = useState({ ai_credits: 0, db_rows: 0 })
+  const [addonQty, setAddonQty]   = useState({ tokens: 0 })
   const [addonLoading, setAddonLoading] = useState(false)
   const [toast, setToast]         = useState(null)
 
@@ -127,13 +127,12 @@ export default function BillingPage({ onSubChange }) {
   }
 
   async function handlePurchaseAddons() {
-    const items = Object.entries(addonQty).filter(([, qty]) => qty > 0)
-    if (!items.length) return
+    if (!addonQty.tokens) return
     setAddonLoading(true)
     try {
-      await Promise.all(items.map(([type, qty]) => purchaseAddon(type, qty)))
+      await purchaseAddon('ai_credits', addonQty.tokens)
       showToast('Add-ons purchased successfully.')
-      setAddonQty({ ai_credits: 0, db_rows: 0 })
+      setAddonQty({ tokens: 0 })
       await loadAll()
       onSubChange && onSubChange()
     } catch (e) {
@@ -158,7 +157,7 @@ export default function BillingPage({ onSubChange }) {
     return sub?.plan_id === plan.id && sub?.status === 'active'
   }
 
-  const addonTotal = (addonQty.ai_credits + addonQty.db_rows) * 1  // $1 per pack
+  const addonTotal = addonQty.tokens * 1  // $1 per pack (50 Tokens)
 
   if (loading) return (
     <div style={{ padding: 40, display: 'flex', alignItems: 'center', gap: 10, color: 'var(--text3)' }}>
@@ -298,31 +297,30 @@ export default function BillingPage({ onSubChange }) {
             </tr>
           </thead>
           <tbody>
-            {[
-              { key: 'ai_credits', icon: '⚡', label: 'AI Credits', price: '$1 per 50 credits' },
-              { key: 'db_rows',    icon: '🗄', label: 'DB Rows',    price: '$1 per 100K rows' },
-            ].map(row => (
-              <tr key={row.key} style={{ borderBottom: '1px solid var(--border)' }}>
-                <td style={{ padding: '12px 16px' }}><span style={{ marginRight: 6 }}>{row.icon}</span>{row.label}</td>
-                <td style={{ padding: '12px 16px', color: 'var(--text3)' }}>{row.price}</td>
-                <td style={{ padding: '12px 16px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <button
-                      onClick={() => setAddonQty(q => ({ ...q, [row.key]: Math.max(0, q[row.key] - 1) }))}
-                      style={{ width: 26, height: 26, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg3)', cursor: 'pointer', fontSize: 15, color: 'var(--text2)' }}
-                    >−</button>
-                    <span style={{ width: 24, textAlign: 'center', fontWeight: 600 }}>{addonQty[row.key]}</span>
-                    <button
-                      onClick={() => setAddonQty(q => ({ ...q, [row.key]: q[row.key] + 1 }))}
-                      style={{ width: 26, height: 26, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg3)', cursor: 'pointer', fontSize: 15, color: 'var(--text2)' }}
-                    >+</button>
-                  </div>
-                </td>
-                <td style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 600 }}>
-                  ${addonQty[row.key]}.00
-                </td>
-              </tr>
-            ))}
+            <tr style={{ borderBottom: '1px solid var(--border)' }}>
+              <td style={{ padding: '12px 16px' }}>
+                <span style={{ marginRight: 6 }}>⚡</span>
+                <span style={{ fontWeight: 500 }}>Tokens</span>
+                <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--text3)' }}>50 Tokens per pack · rolls over</span>
+              </td>
+              <td style={{ padding: '12px 16px', color: 'var(--text3)' }}>$1 per 50 Tokens</td>
+              <td style={{ padding: '12px 16px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <button
+                    onClick={() => setAddonQty(q => ({ ...q, tokens: Math.max(0, q.tokens - 1) }))}
+                    style={{ width: 26, height: 26, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg3)', cursor: 'pointer', fontSize: 15, color: 'var(--text2)' }}
+                  >−</button>
+                  <span style={{ width: 24, textAlign: 'center', fontWeight: 600 }}>{addonQty.tokens}</span>
+                  <button
+                    onClick={() => setAddonQty(q => ({ ...q, tokens: q.tokens + 1 }))}
+                    style={{ width: 26, height: 26, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg3)', cursor: 'pointer', fontSize: 15, color: 'var(--text2)' }}
+                  >+</button>
+                </div>
+              </td>
+              <td style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 600 }}>
+                ${addonQty.tokens}.00
+              </td>
+            </tr>
             <tr>
               <td colSpan={3} style={{ padding: '12px 16px', fontWeight: 600 }}>Total</td>
               <td style={{ padding: '12px 16px', textAlign: 'right', fontWeight: 700, fontSize: 15 }}>
