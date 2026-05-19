@@ -148,11 +148,16 @@ def bootstrap_billing_tables():
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """)
 
-        # Migrate columns to wider types — safe to run repeatedly
-        cur.execute("""
-            ALTER TABLE subscription_usage
-            MODIFY COLUMN ai_base_used DECIMAL(12,4) NOT NULL DEFAULT 0
-        """)
+        # Widen column type — wrapped in try/except because ai_base_used
+        # is dropped later in this same bootstrap; on second startup the
+        # column is already gone and this MODIFY would throw 1054.
+        try:
+            cur.execute("""
+                ALTER TABLE subscription_usage
+                MODIFY COLUMN ai_base_used DECIMAL(12,4) NOT NULL DEFAULT 0
+            """)
+        except Exception:
+            pass
         cur.execute("""
             ALTER TABLE llm_usage_log
             MODIFY COLUMN credits_charged DECIMAL(10,4) NOT NULL DEFAULT 0
