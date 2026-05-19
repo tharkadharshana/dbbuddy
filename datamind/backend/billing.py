@@ -84,7 +84,6 @@ def bootstrap_billing_tables():
                 id             INT AUTO_INCREMENT PRIMARY KEY,
                 name           VARCHAR(50)    NOT NULL,
                 price_usd      DECIMAL(10,2)  NOT NULL DEFAULT 0.00,
-                billing_period VARCHAR(20)    NOT NULL DEFAULT 'monthly',
                 price_cents    INT            NOT NULL DEFAULT 0,
                 ai_credits     INT            NOT NULL DEFAULT 0,
                 db_rows        BIGINT         NOT NULL DEFAULT 0,
@@ -247,16 +246,15 @@ def bootstrap_billing_tables():
                 cur.execute("""
                     UPDATE subscription_plans
                     SET price_usd=%s, price_cents=%s, ai_credits=%s, db_rows=%s,
-                        billing_period='monthly', trial_days=14, validity_days=30,
-                        is_active=1, sort_order=%s
+                        trial_days=14, validity_days=30, is_active=1, sort_order=%s
                     WHERE id=%s
                 """, (price_usd, price_cents, ai_credits, db_rows, sort_order, row["id"]))
             else:
                 cur.execute("""
                     INSERT INTO subscription_plans
-                        (name, price_usd, billing_period, price_cents, ai_credits,
+                        (name, price_usd, price_cents, ai_credits,
                          db_rows, trial_days, validity_days, is_active, sort_order)
-                    VALUES (%s,%s,'monthly',%s,%s,%s,14,30,1,%s)
+                    VALUES (%s,%s,%s,%s,%s,14,30,1,%s)
                 """, (name, price_usd, price_cents, ai_credits, db_rows, sort_order))
 
         # Seed unified token limits
