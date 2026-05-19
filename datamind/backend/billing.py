@@ -109,13 +109,10 @@ def bootstrap_billing_tables():
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS subscription_usage (
-                id            INT AUTO_INCREMENT PRIMARY KEY,
-                user_email    VARCHAR(255) NOT NULL,
-                period_start  DATE         NOT NULL,
-                ai_base_used  INT          NOT NULL DEFAULT 0,
-                ai_addon_used INT          NOT NULL DEFAULT 0,
-                db_base_used  BIGINT       NOT NULL DEFAULT 0,
-                db_addon_used BIGINT       NOT NULL DEFAULT 0,
+                id           INT AUTO_INCREMENT PRIMARY KEY,
+                user_email   VARCHAR(255)  NOT NULL,
+                period_start DATE          NOT NULL,
+                tokens_used  DECIMAL(12,4) NOT NULL DEFAULT 0,
                 UNIQUE KEY uq_usage (user_email, period_start)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """)
@@ -125,7 +122,6 @@ def bootstrap_billing_tables():
                 id              INT AUTO_INCREMENT PRIMARY KEY,
                 user_email      VARCHAR(255) NOT NULL,
                 addon_type      ENUM('ai_credits','db_rows') NOT NULL,
-                units           INT          NOT NULL,
                 units_remaining INT          NOT NULL,
                 purchased_at    TIMESTAMP    DEFAULT CURRENT_TIMESTAMP,
                 INDEX idx_addon_email (user_email)
@@ -140,7 +136,6 @@ def bootstrap_billing_tables():
                 model           VARCHAR(50),
                 endpoint        VARCHAR(255),
                 credits_charged DECIMAL(10,4) NOT NULL DEFAULT 0,
-                actual_cost     DECIMAL(10,6) NOT NULL DEFAULT 0,
                 created_at      TIMESTAMP     DEFAULT CURRENT_TIMESTAMP,
                 INDEX idx_llm_email   (user_email),
                 INDEX idx_llm_created (created_at)

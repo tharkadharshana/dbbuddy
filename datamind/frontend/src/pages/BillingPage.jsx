@@ -126,7 +126,8 @@ export default function BillingPage({ onSubChange }) {
 
   function switchTab(t) {
     setTab(t)
-    if (t === 'usage' && !usage) loadUsage()
+    if (t === 'usage') loadUsage()
+    if (t === 'plans') loadAll()
   }
 
   function showToast(msg, type = 'success') {
