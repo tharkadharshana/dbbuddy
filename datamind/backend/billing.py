@@ -645,7 +645,7 @@ def charge_tokens(user_email: str, tokens: float, operation_type: str,
         conn.commit()
         cur.close(); conn.close()
     except Exception as e:
-        log.warning("charge_tokens: log insert failed", email=user_email, error=str(e))
+        log.error("charge_tokens: usage_log insert failed", email=user_email, error=str(e))
 
     # 2. Increment tokens_used for the active subscription period
     try:
@@ -666,7 +666,7 @@ def charge_tokens(user_email: str, tokens: float, operation_type: str,
             conn.commit()
         cur.close(); conn.close()
     except Exception as e:
-        log.warning("charge_tokens: usage update failed", email=user_email, error=str(e))
+        log.error("charge_tokens: subscription_usage update failed", email=user_email, error=str(e))
 
 
 def charge_ai_usage(user_email: str, tokens: int, model: str, endpoint: str, api_key_cost: float = 0.0):

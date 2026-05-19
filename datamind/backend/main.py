@@ -1681,21 +1681,22 @@ def run_integration_analytics(
     user: dict = Depends(current_user)
 ):
     """Run analytics on integration data."""
+    ok, reason = check_ai_limit(user["email"])
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
+
     from integrations import get_integration, _get_internal_conn
-    
+    _row_limit = get_plan_history_limit(user["email"])["row_limit"]
+
     try:
-        # Get integration record
         integration = get_integration(user["email"], provider_id)
         if not integration:
             raise HTTPException(status_code=404, detail="Integration not connected")
-        
+
         table_prefix = integration["table_prefix"]
-        
-        # Connect to DataMind's internal DB
         conn = _get_internal_conn()
-        
+
         try:
-            # Import provider-specific analytics
             if provider_id == "salesplay":
                 from providers.salesplay.analytics import run_salesplay_analytics
                 result = run_salesplay_analytics(conn, table_prefix, req.template_id)
@@ -1703,26 +1704,23 @@ def run_integration_analytics(
                 from providers.loyverse.analytics import run_loyverse_analytics
                 result = run_loyverse_analytics(conn, table_prefix, req.template_id)
             else:
-                raise HTTPException(
-                    status_code=404, 
-                    detail=f"No analytics available for {provider_id}"
-                )
-            
-            result["source"] = "integration"
+                raise HTTPException(status_code=404, detail=f"No analytics available for {provider_id}")
+
+            result["source"]   = "integration"
             result["provider"] = provider_id
+            _apply_row_limit(result, _row_limit)
+            _charge_op(user["email"], _ANALYTICS_OP.get(req.template_id, "prebuilt_template"),
+                       result.get("row_count", 0))
             return result
-            
+
         finally:
             conn.close()
-            
+
     except HTTPException:
         raise
     except Exception as e:
-        log.error("Integration analytics failed", 
-                  provider=provider_id, 
-                  template=req.template_id, 
-                  user=user["email"],
-                  error=str(e))
+        log.error("Integration analytics failed", provider=provider_id,
+                  template=req.template_id, user=user["email"], error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1740,52 +1738,52 @@ def forecast_integration(
     user: dict = Depends(current_user)
 ):
     """Run forecast on integration data."""
+    ok, reason = check_plan_feature(user["email"], "forecast")
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
+    ok, reason = check_ai_limit(user["email"])
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
+
     from integrations import get_integration, _get_internal_conn
-    
+    history = get_plan_history_limit(user["email"])
+
     try:
         integration = get_integration(user["email"], provider_id)
         if not integration:
             raise HTTPException(status_code=404, detail="Integration not connected")
-        
+
         conn = _get_internal_conn()
         table_prefix = integration["table_prefix"]
-        
+
         try:
-            # Build SQL for forecast query
-            sql = f"""
-                SELECT DATE({req.date_column}) as date, 
-                       SUM({req.value_column}) as value
-                FROM {table_prefix}_{req.table}
-                WHERE {req.date_column} IS NOT NULL
-                GROUP BY DATE({req.date_column})
-                ORDER BY date
-            """
-            
             cursor = conn.cursor()
-            cursor.execute(sql)
+            cursor.execute(
+                f"SELECT DATE({req.date_column}) as date, SUM({req.value_column}) as value "
+                f"FROM {table_prefix}_{req.table} "
+                f"WHERE {req.date_column} IS NOT NULL AND {req.date_column} >= %s "
+                f"GROUP BY DATE({req.date_column}) ORDER BY date",
+                (history["cutoff_date"],)
+            )
             rows = cursor.fetchall()
-            
+
             if len(rows) < 10:
-                raise HTTPException(
-                    status_code=400, 
-                    detail="Need at least 10 data points for forecasting"
-                )
-            
+                raise HTTPException(status_code=400, detail="Need at least 10 data points for forecasting")
+
             result = run_forecast(rows, req.periods)
-            result["source"] = "integration"
+            result["source"]   = "integration"
             result["provider"] = provider_id
+            _charge_op(user["email"], "forecast", len(rows))
             return result
-            
+
         finally:
             conn.close()
-            
+
     except HTTPException:
         raise
     except Exception as e:
-        log.error("Integration forecast failed",
-                  provider=provider_id,
-                  user=user["email"],
-                  error=str(e))
+        log.error("Integration forecast failed", provider=provider_id,
+                  user=user["email"], error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
