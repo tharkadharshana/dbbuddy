@@ -230,9 +230,8 @@ def bootstrap_billing_tables():
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """)
         cur.execute("""
-            INSERT IGNORE INTO billing_config (config_key, config_value, description)
-            VALUES ('ai_credit_rate', '1.0',
-                    'AI credits charged per 1000 tokens. Adjust to control user-visible usage and profitability.')
+            INSERT IGNORE INTO billing_config (config_key, config_value)
+            VALUES ('ai_credit_rate', '1.0')
         """)
 
         # Seed plans  (name, price_usd, price_cents, ai_credits, db_rows, sort_order)
