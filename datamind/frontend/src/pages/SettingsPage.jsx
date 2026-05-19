@@ -426,40 +426,23 @@ export default function SettingsPage({ user, onLogout, onNavigate }) {
       {/* ── How Billing Works ────────────────────────────────────────────── */}
       <Section title="How Billing Works" subtitle="Every operation — AI queries, analytics templates, forecasting, data syncs — consumes Tokens from your plan.">
         <Card style={{ padding: '18px 20px' }}>
-          <div style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', marginBottom: 8 }}>Token formula</div>
-            <div style={{
-              background: 'var(--bg3)', border: '1px solid var(--border)',
-              borderRadius: 8, padding: '10px 14px',
-              fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)',
-              lineHeight: 1.7,
-            }}>
-              {'Tokens = (AI tokens ÷ 1,000) + (rows returned ÷ 1,000) + feature cost'}
-            </div>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10, marginBottom: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10, marginBottom: 16 }}>
             {[
-              { label: 'NL query result rows', cost: 'rows ÷ 1,000' },
-              { label: 'Prebuilt template',    cost: '1.0 + rows ÷ 1,000' },
-              { label: 'Forecasting',          cost: '2.0 + rows ÷ 1,000' },
-              { label: 'Anomaly detection',    cost: '2.0 + rows ÷ 1,000' },
-              { label: 'AI language model',    cost: 'LLM tokens ÷ 1,000' },
-              { label: 'Integration sync',     cost: 'rows ÷ 1,000' },
-            ].map(({ label, cost }) => (
-              <div key={label} style={{
-                background: 'var(--bg3)', border: '1px solid var(--border)',
-                borderRadius: 8, padding: '10px 12px',
-              }}>
-                <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 3 }}>{label}</div>
-                <div style={{ fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--blue)', fontWeight: 600 }}>{cost}</div>
+              { icon: '🗄', label: 'Data volume',    desc: 'More rows = more Tokens' },
+              { icon: '⚙️', label: 'Operation type', desc: 'AI & ML ops cost more than SQL templates' },
+              { icon: '📅', label: 'Data history',   desc: 'Plan determines how far back you can query' },
+            ].map(({ icon, label, desc }) => (
+              <div key={label} style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 8, padding: '12px 14px' }}>
+                <div style={{ fontSize: 18, marginBottom: 6 }}>{icon}</div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 3 }}>{label}</div>
+                <div style={{ fontSize: 11, color: 'var(--text3)' }}>{desc}</div>
               </div>
             ))}
           </div>
 
           <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 14 }}>
-            Minimum charge per operation: <span style={{ fontFamily: 'var(--mono)', color: 'var(--text)' }}>0.1 Tokens</span>.
-            Heavy data users spend more because their queries return more rows — Token cost scales with actual data volume processed.
+            Every operation deducts Tokens based on what it does and how much of your data it touches.
+            Check the <strong style={{ color: 'var(--text2)' }}>Billing → Usage</strong> tab to see a full breakdown of your activity.
           </div>
 
           <button
