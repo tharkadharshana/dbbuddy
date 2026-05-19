@@ -128,7 +128,7 @@ function CacheStatusCard({ dbIndex, isActive }) {
   )
 }
 
-export default function SettingsPage({ user, onLogout }) {
+export default function SettingsPage({ user, onLogout, onNavigate }) {
   const [settings, setSettings]   = useState(null)
   const [loading, setLoading]     = useState(true)
   const [saving, setSaving]       = useState(false)
@@ -265,11 +265,9 @@ export default function SettingsPage({ user, onLogout }) {
         </Card>
       </Section>
 
-      {/* ── LLM API Keys ─────────────────────────────────────────────────── */}
+      {/* ── LLM API Keys — hidden, re-enable when switching to BYOK model ──
       <Section title="LLM API Keys" subtitle="Your keys are stored per-account and never shared. Used for NL queries, report generation, and the one-time cache build.">
         <Card style={{ padding: '18px 20px' }}>
-
-          {/* Default LLM toggle */}
           <Field label="Default LLM">
             <div style={{ display: 'flex', gap: 8 }}>
               {['gemini', 'deepseek'].map(llm => (
@@ -285,7 +283,6 @@ export default function SettingsPage({ user, onLogout }) {
               ))}
             </div>
           </Field>
-
           <Field label="Gemini API Key" hint="Get yours free at aistudio.google.com → API Keys">
             <div style={{ display: 'flex', gap: 8 }}>
               {inp(geminiKey, setGeminiKey, geminiKey ? '••••••••••••••••' : 'AIza…', 'password', true)}
@@ -295,7 +292,6 @@ export default function SettingsPage({ user, onLogout }) {
               </a>
             </div>
           </Field>
-
           <Field label="DeepSeek API Key" hint="Get yours at platform.deepseek.com → API Keys">
             <div style={{ display: 'flex', gap: 8 }}>
               {inp(deepseekKey, setDeepseekKey, deepseekKey ? '••••••••••••••••' : 'sk-…', 'password', true)}
@@ -305,7 +301,6 @@ export default function SettingsPage({ user, onLogout }) {
               </a>
             </div>
           </Field>
-
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <Btn onClick={saveAPIKeys} disabled={saving}>
               {saving ? <><Spinner size={12} color="#fff" /> Saving…</> : 'Save API Keys'}
@@ -314,6 +309,7 @@ export default function SettingsPage({ user, onLogout }) {
           </div>
         </Card>
       </Section>
+      ── end LLM API Keys ── */}
 
       {/* ── Database Connections ──────────────────────────────────────────── */}
       <Section title="Database Connections"
@@ -427,6 +423,41 @@ export default function SettingsPage({ user, onLogout }) {
       </Section>
 
       {/* ── How caching works ─────────────────────────────────────────────── */}
+      {/* ── How Billing Works ────────────────────────────────────────────── */}
+      <Section title="How Billing Works" subtitle="Every operation — AI queries, analytics templates, forecasting, data syncs — consumes Tokens from your plan.">
+        <Card style={{ padding: '18px 20px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10, marginBottom: 16 }}>
+            {[
+              { icon: '🗄', label: 'Data volume',    desc: 'More rows = more Tokens' },
+              { icon: '⚙️', label: 'Operation type', desc: 'AI & ML ops cost more than SQL templates' },
+              { icon: '📅', label: 'Data history',   desc: 'Plan determines how far back you can query' },
+            ].map(({ icon, label, desc }) => (
+              <div key={label} style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 8, padding: '12px 14px' }}>
+                <div style={{ fontSize: 18, marginBottom: 6 }}>{icon}</div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 3 }}>{label}</div>
+                <div style={{ fontSize: 11, color: 'var(--text3)' }}>{desc}</div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 14 }}>
+            Every operation deducts Tokens based on what it does and how much of your data it touches.
+            Check the <strong style={{ color: 'var(--text2)' }}>Billing → Usage</strong> tab to see a full breakdown of your activity.
+          </div>
+
+          <button
+            onClick={() => onNavigate && onNavigate('docs')}
+            style={{
+              padding: '8px 18px', borderRadius: 7, border: '1px solid var(--blue)',
+              background: 'var(--blue-dim)', color: 'var(--blue)',
+              fontWeight: 600, fontSize: 12, cursor: 'pointer',
+            }}
+          >
+            View full billing docs →
+          </button>
+        </Card>
+      </Section>
+
       <Section title="How the Cache Works">
         <Card style={{ padding: '16px 18px' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>

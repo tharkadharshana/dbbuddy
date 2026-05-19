@@ -8,7 +8,7 @@ import {
 import { Card, Btn, Badge, Spinner, ErrorBox } from '../components/UI'
 
 // ── Provider card ─────────────────────────────────────────────────────────────
-function ProviderCard({ provider, onConnect }) {
+function ProviderCard({ provider, onConnect, canUseDB }) {
   return (
     <div style={{
       background:'var(--bg1)', border:'1px solid var(--border)', borderRadius:'var(--r-lg)',
@@ -27,7 +27,10 @@ function ProviderCard({ provider, onConnect }) {
       </div>
       <p style={{ fontSize:12, color:'var(--text3)', lineHeight:1.6 }}>{provider.description}</p>
       <div style={{ display:'flex', gap:8, marginTop:'auto' }}>
-        <Btn onClick={onConnect} style={{ flex:1, justifyContent:'center' }}>Connect</Btn>
+        <Btn onClick={onConnect} disabled={canUseDB === false} style={{ flex:1, justifyContent:'center' }}
+          title={canUseDB === false ? 'DB row limit reached — upgrade or purchase add-on rows to connect' : undefined}>
+          Connect
+        </Btn>
         <a href={provider.docs_url} target="_blank" rel="noreferrer" style={{ padding:'9px 14px', background:'var(--bg3)', border:'1px solid var(--border)', borderRadius:'var(--r-md)', fontSize:12, color:'var(--text3)', textDecoration:'none', display:'flex', alignItems:'center' }}>Docs ↗</a>
       </div>
     </div>
@@ -70,7 +73,7 @@ function SyncProgress({ progress }) {
 }
 
 // ── Connected row ─────────────────────────────────────────────────────────────
-function ConnectedRow({ conn, onDisconnect, onSync }) {
+function ConnectedRow({ conn, onDisconnect, onSync, canUseDB }) {
   const [status, setStatus]   = useState(null)
   const [syncingBtn, setSyncingBtn] = useState(false)
   const [pollKey, setPollKey] = useState(0)   // increment to restart poll loop
@@ -136,7 +139,9 @@ function ConnectedRow({ conn, onDisconnect, onSync }) {
           {isSyncing && <SyncProgress progress={status?.progress} />}
         </div>
         <div style={{ display:'flex', gap:6, flexShrink:0 }}>
-          <Btn size="sm" variant="ghost" onClick={handleSync} disabled={syncingBtn || isSyncing}>
+          <Btn size="sm" variant="ghost" onClick={handleSync}
+            disabled={syncingBtn || isSyncing || canUseDB === false}
+            title={canUseDB === false ? 'DB row limit reached — upgrade or purchase add-on rows to sync' : undefined}>
             {syncingBtn ? <><Spinner size={11} /> Starting…</> : '↺ Sync'}
           </Btn>
           <Btn size="sm" variant="danger" onClick={() => onDisconnect(conn.connection_id)}>Disconnect</Btn>
@@ -285,7 +290,7 @@ function BYODBModal({ onClose, onConnected }) {
 }
 
 // ── Main page ─────────────────────────────────────────────────────────────────
-export default function ConnectionsPage({ onConnectionChange }) {
+export default function ConnectionsPage({ onConnectionChange, sub }) {
   const [providers, setProviders]     = useState([])
   const [connected, setConnected]     = useState([])
   const [loading, setLoading]         = useState(true)
@@ -309,6 +314,7 @@ export default function ConnectionsPage({ onConnectionChange }) {
   }
 
   const availableProviders = providers.filter(p => !connected.some(c => c.provider_id === p.provider_id))
+  const canUseDB = sub ? sub.can_use_db : true  // default true while sub is loading
 
   return (
     <div style={{ maxWidth:820, padding:'24px 24px 60px' }}>
@@ -329,6 +335,11 @@ export default function ConnectionsPage({ onConnectionChange }) {
       {/* Connected tab */}
       {!loading && tab === 'connected' && (
         <>
+          {!canUseDB && connected.length > 0 && (
+            <div style={{ marginBottom:12, padding:'10px 14px', borderRadius:'var(--r-md)', fontSize:13, color:'var(--red)', background:'rgba(239,68,68,0.08)', border:'1px solid rgba(239,68,68,0.25)' }}>
+              DB row limit reached — syncing is paused. Purchase add-on rows or upgrade to resume.
+            </div>
+          )}
           {connected.length === 0 ? (
             <div style={{ textAlign:'center', padding:'48px 24px', color:'var(--text3)' }}>
               <div style={{ fontSize:40, marginBottom:12, opacity:.3 }}>🔌</div>
@@ -340,7 +351,7 @@ export default function ConnectionsPage({ onConnectionChange }) {
             <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
               {connected.map(c => (
                 <ConnectedRow key={c.connection_id} conn={c} onDisconnect={handleDisconnect}
-                  onSync={() => { load(); onConnectionChange?.() }} />
+                  onSync={() => { load(); onConnectionChange?.() }} canUseDB={canUseDB} />
               ))}
             </div>
           )}
@@ -350,6 +361,11 @@ export default function ConnectionsPage({ onConnectionChange }) {
       {/* Browse tab */}
       {!loading && tab === 'browse' && (
         <>
+          {!canUseDB && (
+            <div style={{ marginBottom:16, padding:'10px 14px', borderRadius:'var(--r-md)', fontSize:13, color:'var(--red)', background:'rgba(239,68,68,0.08)', border:'1px solid rgba(239,68,68,0.25)' }}>
+              You've reached your DB row limit. Connecting or syncing integrations is paused. You can still read and export your existing data. <strong>Purchase add-on rows or upgrade your plan</strong> to continue.
+            </div>
+          )}
           {/* BYODB option */}
           <div style={{ marginBottom:20, padding:'16px 18px', background:'var(--bg1)', border:'1px solid var(--border)', borderRadius:'var(--r-lg)', display:'flex', alignItems:'center', justifyContent:'space-between', gap:16 }}>
             <div style={{ display:'flex', alignItems:'center', gap:14 }}>
@@ -374,7 +390,7 @@ export default function ConnectionsPage({ onConnectionChange }) {
           ) : (
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
               {availableProviders.map(p => (
-                <ProviderCard key={p.provider_id} provider={p} onConnect={() => setModal(p)} />
+                <ProviderCard key={p.provider_id} provider={p} onConnect={() => setModal(p)} canUseDB={canUseDB} />
               ))}
             </div>
           )}

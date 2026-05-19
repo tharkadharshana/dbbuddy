@@ -41,8 +41,16 @@ from integrations import (
     get_user_total_rows, _get_internal_conn,
     list_integrations, delete_user_data,
 )
-from credits import get_user_credits, get_usage_history, bootstrap_credit_tables
+# credits.py / legacy credit tables removed — billing system supersedes them
 from providers import list_providers, get_provider
+from billing import (
+    bootstrap_billing_tables, start_trial, subscribe_to_plan,
+    get_user_subscription, get_subscription_plans, get_plan_by_id,
+    check_ai_limit, check_db_limit, purchase_addon, get_llm_usage_history,
+    get_addon_pricing, charge_ai_usage, get_ai_credit_rate, set_ai_credit_rate,
+    calculate_tokens, charge_tokens, get_token_usage_history,
+    check_plan_feature, get_plan_history_limit,
+)
 
 log = get_logger(__name__)
 
@@ -77,9 +85,9 @@ def startup_event():
     except Exception as _be:
         log.warning("Integration bootstrap skipped in startup", error=str(_be))
     try:
-        bootstrap_credit_tables()
+        bootstrap_billing_tables()
     except Exception as _be:
-        log.warning("Credit bootstrap skipped (configure DATAMIND_DB_* in .env)", error=str(_be))
+        log.warning("Billing bootstrap skipped", error=str(_be))
     start_scheduler()
     log.info("DataMind backend started")
 
@@ -211,6 +219,36 @@ def _run_sql(conn, sql: str, title: str) -> dict:
     return {"title": title, "columns": cols, "data": data, "row_count": len(data)}
 
 
+# Maps analytics template IDs to FEATURE_COST operation types.
+_ANALYTICS_OP = {
+    "customer_rfm":        "rfm_analysis",
+    "customer_cohort":     "cohort_analysis",
+    "basket_analysis":     "basket_analysis",
+    "growth_metrics":      "growth_metrics",
+    "cashier_performance": "employee_performance",
+    "product_velocity":    "product_velocity",
+    "payment_methods":     "payment_breakdown",
+    "location_comparison": "location_comparison",
+}
+
+
+def _charge_op(email: str, op_type: str, rows: int):
+    """Charge unified tokens for one analytics operation. Never raises."""
+    try:
+        tokens = calculate_tokens(op_type, rows_returned=rows)
+        charge_tokens(email, tokens, op_type, rows_returned=rows)
+    except Exception as _ce:
+        log.warning("_charge_op failed silently", op=op_type, error=str(_ce))
+
+
+def _apply_row_limit(result: dict, row_limit: int) -> dict:
+    """Truncate result rows to plan row_limit. Applied to analytics when no date filter ran."""
+    if result.get("data") and len(result["data"]) > row_limit:
+        result["data"]      = result["data"][:row_limit]
+        result["row_count"] = len(result["data"])
+    return result
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # REQUEST LOGGING MIDDLEWARE
 # ══════════════════════════════════════════════════════════════════════════════
@@ -327,6 +365,10 @@ def register(req: RegisterRequest):
     log.info("Register attempt", email=req.email)
     user = create_user(req.name, req.email, req.password)
     token = create_token(req.email)
+    try:
+        start_trial(req.email)
+    except Exception as _te:
+        log.warning("Trial start skipped", email=req.email, error=str(_te))
     log.info("User registered", email=req.email)
     return {"token": token, "user": {"name": user["name"], "email": user["email"]}}
 
@@ -856,21 +898,31 @@ class NLQueryRequest(BaseModel):
 
 @app.post("/query")
 def natural_language_query(req: NLQueryRequest, user: dict = Depends(current_user)):
+    ok, reason = check_ai_limit(user["email"])
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
     llm = _effective_llm(user, req.llm)
     log.info("NL query", user=user["email"], llm=llm, question=req.question[:80])
     api_key = _resolve_api_key(user, llm)
+    history = get_plan_history_limit(user["email"])
     try:
         conn = get_connection(_resolve_db(user))
         schemas = get_table_schemas(conn, None)
         fkeys = get_foreign_keys(conn)
-        sql = query_to_sql(req.question, schemas, llm, fkeys, api_key=api_key, user_email=user["email"])
+        sql = query_to_sql(req.question, schemas, llm, fkeys, api_key=api_key,
+                           user_email=user["email"], history_months=history["months"])
         cursor = conn.cursor()
         cursor.execute(sql)
         columns = [desc[0] for desc in cursor.description]
         rows = cursor.fetchall()
         conn.close()
         data = [{k: _safe(v) for k, v in dict(zip(columns, row)).items()} for row in rows]
+        # Enforce plan row limit as fallback (applies when no date column filtered by LLM)
+        row_limit = history["row_limit"]
+        if len(data) > row_limit:
+            data = data[:row_limit]
         log.info("NL query complete", user=user["email"], rows=len(data))
+        _charge_op(user["email"], "nl_query_rows", len(data))
         return {"sql": sql, "columns": columns, "data": data, "row_count": len(data)}
     except HTTPException:
         raise
@@ -892,6 +944,10 @@ class AnalyticsRunRequest(BaseModel):
 
 @app.post("/analytics/run")
 def run_analytics(req: AnalyticsRunRequest, user: dict = Depends(current_user)):
+    ok, reason = check_ai_limit(user["email"])
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
+    _row_limit = get_plan_history_limit(user["email"])["row_limit"]
     log.info("Run analytics", user=user["email"], template=req.template_id, provider=req.provider)
 
     # Route provider templates straight to the integration analytics handler.
@@ -919,6 +975,9 @@ def run_analytics(req: AnalyticsRunRequest, user: dict = Depends(current_user)):
             log.info("Run analytics: integration template served",
                      user=user["email"], provider=req.provider, template=req.template_id,
                      row_count=result.get("row_count"))
+            _apply_row_limit(result, _row_limit)
+            _charge_op(user["email"], _ANALYTICS_OP.get(req.template_id, "prebuilt_template"),
+                       result.get("row_count", 0))
             return result
         except HTTPException:
             raise
@@ -946,6 +1005,9 @@ def run_analytics(req: AnalyticsRunRequest, user: dict = Depends(current_user)):
                 result = _run_sql(conn, sql, title)
                 result["source"] = "cache"
                 log.info("Analytics served from cache", template=req.template_id)
+                _apply_row_limit(result, _row_limit)
+                _charge_op(user["email"], _ANALYTICS_OP.get(req.template_id, "prebuilt_template"),
+                           result.get("row_count", 0))
                 conn.close()
                 return result
             except Exception as sql_err:
@@ -956,6 +1018,9 @@ def run_analytics(req: AnalyticsRunRequest, user: dict = Depends(current_user)):
         r = _try_python(req.template_id, conn)
         if r:
             r["source"] = "python"
+            _apply_row_limit(r, _row_limit)
+            _charge_op(user["email"], _ANALYTICS_OP.get(req.template_id, "prebuilt_template"),
+                       r.get("row_count", 0))
             conn.close()
             return r
 
@@ -964,6 +1029,9 @@ def run_analytics(req: AnalyticsRunRequest, user: dict = Depends(current_user)):
         if r:
             r["source"] = "fallback"
             log.warning("Analytics using hardcoded fallback SQL", template=req.template_id)
+            _apply_row_limit(r, _row_limit)
+            _charge_op(user["email"], _ANALYTICS_OP.get(req.template_id, "prebuilt_template"),
+                       r.get("row_count", 0))
             conn.close()
             return r
 
@@ -1033,6 +1101,12 @@ class ForecastRequest(BaseModel):
 
 @app.post("/forecast")
 def forecast(req: ForecastRequest, user: dict = Depends(current_user)):
+    ok, reason = check_plan_feature(user["email"], "forecast")
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
+    ok, reason = check_ai_limit(user["email"])
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
     log.info("Forecast (manual)", user=user["email"],
              table=req.table, date_col=req.date_column, value_col=req.value_column)
     try:
@@ -1040,15 +1114,20 @@ def forecast(req: ForecastRequest, user: dict = Depends(current_user)):
         schemas = get_table_schemas(conn, None)
         _validate_table_column(schemas, req.table, req.date_column)
         _validate_table_column(schemas, req.table, req.value_column)
+        history = get_plan_history_limit(user["email"])
         cursor = conn.cursor()
         cursor.execute(
             f"SELECT DATE(`{req.date_column}`) as ds, SUM(`{req.value_column}`) as y "
-            f"FROM `{req.table}` WHERE `{req.date_column}` IS NOT NULL GROUP BY ds ORDER BY ds"
+            f"FROM `{req.table}` WHERE `{req.date_column}` IS NOT NULL "
+            f"AND `{req.date_column}` >= %s GROUP BY ds ORDER BY ds",
+            (history["cutoff_date"],)
         )
         rows = cursor.fetchall()
         conn.close()
-        log.info("Forecast data loaded", rows=len(rows))
-        return run_forecast(rows, req.periods)
+        log.info("Forecast data loaded", rows=len(rows), months=history["months"])
+        result = run_forecast(rows, req.periods)
+        _charge_op(user["email"], "forecast", len(rows))
+        return result
     except HTTPException:
         raise
     except Exception as e:
@@ -1058,6 +1137,12 @@ def forecast(req: ForecastRequest, user: dict = Depends(current_user)):
 
 @app.get("/forecast/auto")
 def auto_forecast(periods: int = 90, user: dict = Depends(current_user)):
+    ok, reason = check_plan_feature(user["email"], "forecast")
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
+    ok, reason = check_ai_limit(user["email"])
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
     s = user.get("settings", {})
 
     # Provider-only user: run forecast on their synced receipts table
@@ -1070,14 +1155,16 @@ def auto_forecast(periods: int = 90, user: dict = Depends(current_user)):
             raise HTTPException(status_code=422, detail="Integration tables not ready.")
         receipts_tbl = f"{prefix}receipts"
         log.info("Provider auto forecast", user=user["email"], table=receipts_tbl)
+        history = get_plan_history_limit(user["email"])
         try:
             iconn = _get_internal_conn()
             cursor = iconn.cursor()
             cursor.execute(
                 f"SELECT DATE(created_at) AS ds, SUM(total_money) AS y "
                 f"FROM `{receipts_tbl}` "
-                f"WHERE created_at IS NOT NULL AND total_money > 0 "
-                f"GROUP BY DATE(created_at) ORDER BY DATE(created_at)"
+                f"WHERE created_at IS NOT NULL AND total_money > 0 AND created_at >= %s "
+                f"GROUP BY DATE(created_at) ORDER BY DATE(created_at)",
+                (history["cutoff_date"],)
             )
             rows = cursor.fetchall()
             iconn.close()
@@ -1087,6 +1174,7 @@ def auto_forecast(periods: int = 90, user: dict = Depends(current_user)):
         result = run_forecast(rows, periods)
         result.update(used_table=receipts_tbl, used_date_col="created_at",
                       used_value_col="total_money", from_cache=False)
+        _charge_op(user["email"], "forecast", len(rows))
         return result
 
     # Own-DB user
@@ -1101,10 +1189,12 @@ def auto_forecast(periods: int = 90, user: dict = Depends(current_user)):
              from_cache=bool(cache and auto.get("forecast_table")))
     try:
         conn = get_connection(db_config)
+        history = get_plan_history_limit(user["email"])
         cursor = conn.cursor()
         cursor.execute(
             f"SELECT DATE(`{d_col}`) as ds, SUM(`{v_col}`) as y "
-            f"FROM `{table}` WHERE `{d_col}` IS NOT NULL GROUP BY ds ORDER BY ds"
+            f"FROM `{table}` WHERE `{d_col}` IS NOT NULL AND `{d_col}` >= %s GROUP BY ds ORDER BY ds",
+            (history["cutoff_date"],)
         )
         rows = cursor.fetchall()
         conn.close()
@@ -1113,6 +1203,7 @@ def auto_forecast(periods: int = 90, user: dict = Depends(current_user)):
         result["used_date_col"]  = d_col
         result["used_value_col"] = v_col
         result["from_cache"]     = bool(cache and auto.get("forecast_table"))
+        _charge_op(user["email"], "forecast", len(rows))
         return result
     except Exception as e:
         log.error("Auto forecast failed", error=str(e))
@@ -1131,6 +1222,12 @@ class AnomalyRequest(BaseModel):
 
 @app.post("/anomalies")
 def anomalies(req: AnomalyRequest, user: dict = Depends(current_user)):
+    ok, reason = check_plan_feature(user["email"], "anomaly_detection")
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
+    ok, reason = check_ai_limit(user["email"])
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
     log.info("Anomaly detection (manual)", user=user["email"], table=req.table)
     try:
         conn = get_connection(_resolve_db(user))
@@ -1138,18 +1235,25 @@ def anomalies(req: AnomalyRequest, user: dict = Depends(current_user)):
         _validate_table_column(schemas, req.table, req.value_column)
         if req.date_column:
             _validate_table_column(schemas, req.table, req.date_column)
+        history = get_plan_history_limit(user["email"])
         cursor = conn.cursor()
         if req.date_column:
             cursor.execute(
                 f"SELECT `{req.date_column}`, `{req.value_column}` "
                 f"FROM `{req.table}` WHERE `{req.date_column}` IS NOT NULL "
-                f"ORDER BY `{req.date_column}`"
+                f"AND `{req.date_column}` >= %s ORDER BY `{req.date_column}`",
+                (history["cutoff_date"],)
             )
         else:
-            cursor.execute(f"SELECT `{req.value_column}` FROM `{req.table}`")
+            cursor.execute(
+                f"SELECT `{req.value_column}` FROM `{req.table}` LIMIT %s",
+                (history["row_limit"],)
+            )
         rows = cursor.fetchall()
         conn.close()
-        return run_anomaly_detection(rows, has_date=bool(req.date_column))
+        result = run_anomaly_detection(rows, has_date=bool(req.date_column))
+        _charge_op(user["email"], "anomaly_detection", len(rows))
+        return result
     except Exception as e:
         log.error("Anomaly detection failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
@@ -1157,6 +1261,12 @@ def anomalies(req: AnomalyRequest, user: dict = Depends(current_user)):
 
 @app.get("/anomalies/auto")
 def auto_anomalies(user: dict = Depends(current_user)):
+    ok, reason = check_plan_feature(user["email"], "anomaly_detection")
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
+    ok, reason = check_ai_limit(user["email"])
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
     s = user.get("settings", {})
 
     # Provider-only user: run anomaly detection on their synced receipts table
@@ -1169,14 +1279,16 @@ def auto_anomalies(user: dict = Depends(current_user)):
             raise HTTPException(status_code=422, detail="Integration tables not ready.")
         receipts_tbl = f"{prefix}receipts"
         log.info("Provider auto anomaly", user=user["email"], table=receipts_tbl)
+        history = get_plan_history_limit(user["email"])
         try:
             iconn = _get_internal_conn()
             cursor = iconn.cursor()
             cursor.execute(
                 f"SELECT DATE(created_at), SUM(total_money) "
                 f"FROM `{receipts_tbl}` "
-                f"WHERE created_at IS NOT NULL AND total_money > 0 "
-                f"GROUP BY DATE(created_at) ORDER BY DATE(created_at)"
+                f"WHERE created_at IS NOT NULL AND total_money > 0 AND created_at >= %s "
+                f"GROUP BY DATE(created_at) ORDER BY DATE(created_at)",
+                (history["cutoff_date"],)
             )
             rows = cursor.fetchall()
             iconn.close()
@@ -1186,6 +1298,7 @@ def auto_anomalies(user: dict = Depends(current_user)):
         result = run_anomaly_detection(rows, has_date=True)
         result.update(used_table=receipts_tbl, used_date_col="created_at",
                       used_value_col="total_money", from_cache=False)
+        _charge_op(user["email"], "anomaly_detection", len(rows))
         return result
 
     # Own-DB user
@@ -1197,12 +1310,14 @@ def auto_anomalies(user: dict = Depends(current_user)):
     v_col  = auto.get("anomaly_value_col")or "invoiceTotal"
     log.info("Auto anomaly detection", user=user["email"],
              table=table, date_col=d_col, value_col=v_col)
+    history = get_plan_history_limit(user["email"])
     try:
         conn = get_connection(db_config)
         cursor = conn.cursor()
         cursor.execute(
             f"SELECT `{d_col}`, SUM(`{v_col}`) FROM `{table}` "
-            f"WHERE `{d_col}` IS NOT NULL GROUP BY `{d_col}` ORDER BY `{d_col}`"
+            f"WHERE `{d_col}` IS NOT NULL AND `{d_col}` >= %s GROUP BY `{d_col}` ORDER BY `{d_col}`",
+            (history["cutoff_date"],)
         )
         rows = cursor.fetchall()
         conn.close()
@@ -1211,6 +1326,7 @@ def auto_anomalies(user: dict = Depends(current_user)):
         result["used_date_col"]  = d_col
         result["used_value_col"] = v_col
         result["from_cache"]     = bool(cache and auto.get("anomaly_table"))
+        _charge_op(user["email"], "anomaly_detection", len(rows))
         return result
     except Exception as e:
         log.error("Auto anomaly detection failed", error=str(e))
@@ -1230,6 +1346,9 @@ class ReportRequest(BaseModel):
 
 @app.post("/report")
 def generate_report(req: ReportRequest, user: dict = Depends(current_user)):
+    ok, reason = check_ai_limit(user["email"])
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
     llm = _effective_llm(user, req.llm)
     log.info("Generate report", user=user["email"], llm=llm,
              title=req.title, sections=req.sections)
@@ -1411,6 +1530,12 @@ def connect_provider_route(req: ProviderConnectRequest,
     Connect a provider: validate, create tables, trigger full sync.
     Sync runs in background.
     """
+    ok, reason = check_plan_feature(user["email"], "external_api")
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
+    ok, reason = check_db_limit(user["email"], 0)
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
     log.info("Connecting provider", user=user["email"], provider=req.provider_id)
     try:
         connection_id = connect_provider(user["email"], req.provider_id, req.credentials)
@@ -1467,6 +1592,9 @@ def delete_account(user: dict = Depends(current_user)):
 def manual_sync(connection_id: str, background_tasks: BackgroundTasks,
                 user: dict = Depends(current_user)):
     """Manually trigger a delta sync for a connection."""
+    ok, reason = check_db_limit(user["email"], 0)
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
     log.info("Manual sync triggered", user=user["email"], connection_id=connection_id)
     background_tasks.add_task(trigger_sync, user["email"], connection_id, full=False)
     return {"ok": True, "message": "Sync started in background"}
@@ -1491,31 +1619,6 @@ def provider_history(connection_id: str, user: dict = Depends(current_user)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# ══════════════════════════════════════════════════════════════════════════════
-# CREDITS AND USAGE TRACKING
-# ══════════════════════════════════════════════════════════════════════════════
-
-@app.get("/credits")
-def get_credits(user: dict = Depends(current_user)):
-    """Get user's credit balance and usage statistics."""
-    try:
-        return get_user_credits(user["email"])
-    except Exception as e:
-        log.error("Get credits failed", user=user["email"], error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/credits/history")
-def get_credit_history(
-    limit: int = 50,
-    user: dict = Depends(current_user)
-):
-    """Get user's credit usage history."""
-    try:
-        return {"history": get_usage_history(user["email"], limit)}
-    except Exception as e:
-        log.error("Get credit history failed", user=user["email"], error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1578,21 +1681,22 @@ def run_integration_analytics(
     user: dict = Depends(current_user)
 ):
     """Run analytics on integration data."""
+    ok, reason = check_ai_limit(user["email"])
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
+
     from integrations import get_integration, _get_internal_conn
-    
+    _row_limit = get_plan_history_limit(user["email"])["row_limit"]
+
     try:
-        # Get integration record
         integration = get_integration(user["email"], provider_id)
         if not integration:
             raise HTTPException(status_code=404, detail="Integration not connected")
-        
+
         table_prefix = integration["table_prefix"]
-        
-        # Connect to DataMind's internal DB
         conn = _get_internal_conn()
-        
+
         try:
-            # Import provider-specific analytics
             if provider_id == "salesplay":
                 from providers.salesplay.analytics import run_salesplay_analytics
                 result = run_salesplay_analytics(conn, table_prefix, req.template_id)
@@ -1600,26 +1704,23 @@ def run_integration_analytics(
                 from providers.loyverse.analytics import run_loyverse_analytics
                 result = run_loyverse_analytics(conn, table_prefix, req.template_id)
             else:
-                raise HTTPException(
-                    status_code=404, 
-                    detail=f"No analytics available for {provider_id}"
-                )
-            
-            result["source"] = "integration"
+                raise HTTPException(status_code=404, detail=f"No analytics available for {provider_id}")
+
+            result["source"]   = "integration"
             result["provider"] = provider_id
+            _apply_row_limit(result, _row_limit)
+            _charge_op(user["email"], _ANALYTICS_OP.get(req.template_id, "prebuilt_template"),
+                       result.get("row_count", 0))
             return result
-            
+
         finally:
             conn.close()
-            
+
     except HTTPException:
         raise
     except Exception as e:
-        log.error("Integration analytics failed", 
-                  provider=provider_id, 
-                  template=req.template_id, 
-                  user=user["email"],
-                  error=str(e))
+        log.error("Integration analytics failed", provider=provider_id,
+                  template=req.template_id, user=user["email"], error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1637,50 +1738,117 @@ def forecast_integration(
     user: dict = Depends(current_user)
 ):
     """Run forecast on integration data."""
+    ok, reason = check_plan_feature(user["email"], "forecast")
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
+    ok, reason = check_ai_limit(user["email"])
+    if not ok:
+        raise HTTPException(status_code=402, detail=reason)
+
     from integrations import get_integration, _get_internal_conn
-    
+    history = get_plan_history_limit(user["email"])
+
     try:
         integration = get_integration(user["email"], provider_id)
         if not integration:
             raise HTTPException(status_code=404, detail="Integration not connected")
-        
+
         conn = _get_internal_conn()
         table_prefix = integration["table_prefix"]
-        
+
         try:
-            # Build SQL for forecast query
-            sql = f"""
-                SELECT DATE({req.date_column}) as date, 
-                       SUM({req.value_column}) as value
-                FROM {table_prefix}_{req.table}
-                WHERE {req.date_column} IS NOT NULL
-                GROUP BY DATE({req.date_column})
-                ORDER BY date
-            """
-            
             cursor = conn.cursor()
-            cursor.execute(sql)
+            cursor.execute(
+                f"SELECT DATE({req.date_column}) as date, SUM({req.value_column}) as value "
+                f"FROM {table_prefix}_{req.table} "
+                f"WHERE {req.date_column} IS NOT NULL AND {req.date_column} >= %s "
+                f"GROUP BY DATE({req.date_column}) ORDER BY date",
+                (history["cutoff_date"],)
+            )
             rows = cursor.fetchall()
-            
+
             if len(rows) < 10:
-                raise HTTPException(
-                    status_code=400, 
-                    detail="Need at least 10 data points for forecasting"
-                )
-            
+                raise HTTPException(status_code=400, detail="Need at least 10 data points for forecasting")
+
             result = run_forecast(rows, req.periods)
-            result["source"] = "integration"
+            result["source"]   = "integration"
             result["provider"] = provider_id
+            _charge_op(user["email"], "forecast", len(rows))
             return result
-            
+
         finally:
             conn.close()
-            
+
     except HTTPException:
         raise
     except Exception as e:
-        log.error("Integration forecast failed", 
-                  provider=provider_id,
-                  user=user["email"],
-                  error=str(e))
+        log.error("Integration forecast failed", provider=provider_id,
+                  user=user["email"], error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── BILLING ───────────────────────────────────────────────────────────────────
+
+@app.get("/billing/plans")
+def billing_plans():
+    try:
+        return {"plans": get_subscription_plans()}
+    except Exception as e:
+        log.error("Get billing plans failed", error=str(e))
+        return {"plans": []}
+
+
+@app.get("/billing/subscription")
+def billing_subscription(user: dict = Depends(current_user)):
+    try:
+        return get_user_subscription(user["email"])
+    except Exception as e:
+        log.error("Get subscription failed", user=user["email"], error=str(e))
+        return {"status": "no_subscription"}
+
+
+class SubscribeRequest(BaseModel):
+    plan_id: int
+
+@app.post("/billing/subscribe")
+def billing_subscribe(req: SubscribeRequest, user: dict = Depends(current_user)):
+    plan = get_plan_by_id(req.plan_id)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    subscribe_to_plan(user["email"], req.plan_id)
+    return {"ok": True}
+
+
+class AddonRequest(BaseModel):
+    addon_type: str
+    quantity: int = 1
+
+@app.post("/billing/addon")
+def billing_addon(req: AddonRequest, user: dict = Depends(current_user)):
+    purchase_addon(user["email"], req.addon_type, req.quantity)
+    return {"ok": True}
+
+
+@app.get("/billing/usage")
+def billing_usage(user: dict = Depends(current_user)):
+    return {
+        "history":     get_token_usage_history(user["email"]),
+        "llm_history": get_llm_usage_history(user["email"]),
+        "pricing":     get_addon_pricing(),
+    }
+
+
+@app.get("/billing/config")
+def billing_config_get(_user: dict = Depends(current_user)):
+    return {"ai_credit_rate": get_ai_credit_rate()}
+
+
+class BillingConfigRequest(BaseModel):
+    ai_credit_rate: float
+
+@app.post("/billing/config")
+def billing_config_set(req: BillingConfigRequest, _user: dict = Depends(current_user)):
+    if req.ai_credit_rate <= 0:
+        raise HTTPException(status_code=400, detail="ai_credit_rate must be positive")
+    set_ai_credit_rate(req.ai_credit_rate)
+    return {"ok": True, "ai_credit_rate": req.ai_credit_rate}

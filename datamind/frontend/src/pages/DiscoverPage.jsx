@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { fetchDiscover, runAnalytics, fetchCacheProgress, rebuildCache,
          fetchConnectedProviders, fetchIntegrationTemplates, runIntegrationAnalytics } from '../utils/api'
 import { Card, Badge, Spinner, Spinner2, ErrorBox, KPICard, ChartCard, DataTable,
-         BarChartSimple, LineChartSimple, PieChartSimple, UsageMeter, COLORS, Btn } from '../components/UI'
+         BarChartSimple, LineChartSimple, PieChartSimple, UsageMeter, COLORS, Btn, AIQuotaWall } from '../components/UI'
 import { ComposedChart, Bar, Line, Area, XAxis, YAxis, CartesianGrid, Tooltip,
          ResponsiveContainer } from 'recharts'
 
@@ -221,7 +221,7 @@ function ResultPanel({ result, templateId }) {
 }
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
-export default function DiscoverPage({ llm, setLlm }) {
+export default function DiscoverPage({ llm, setLlm, sub, onNavigate }) {
   const [catalogue, setCatalogue]   = useState([])
   const [loading, setLoading]       = useState(true)
   const [building, setBuilding]     = useState(false)
@@ -300,6 +300,8 @@ export default function DiscoverPage({ llm, setLlm }) {
   const categories = ['All', ...new Set(catalogue.map(c => c.category))]
   const visible = filter === 'All' ? catalogue : catalogue.filter(c => c.category === filter)
 
+  if (sub && !sub.can_use_ai) return <AIQuotaWall sub={sub} onNavigate={onNavigate} />
+
   // Show build progress screen
   if (building) return <BuildProgress onDone={() => { setBuilding(false); load() }} />
 
@@ -333,7 +335,7 @@ export default function DiscoverPage({ llm, setLlm }) {
               <button onClick={handleRebuild} title="Rebuild cache" style={{ padding:'5px 10px', background:'var(--bg3)', border:'1px solid var(--border)', borderRadius:'var(--r-sm)', fontSize:11, color:'var(--text3)', cursor:'pointer' }}>↺ Rebuild</button>
             </div>
           </div>
-          <div style={{ marginBottom:12 }}><UsageMeter /></div>
+          <div style={{ marginBottom:12 }}><UsageMeter sub={sub} /></div>
           <div style={{ display:'flex', gap:4, flexWrap:'wrap', marginBottom:10 }}>
             {categories.map(cat => (
               <button key={cat} onClick={() => setFilter(cat)} style={{

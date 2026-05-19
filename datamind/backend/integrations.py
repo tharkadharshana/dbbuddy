@@ -357,7 +357,20 @@ def _run_sync(integration_id: int, user_email: str, provider_id: str,
     row = cursor.fetchone()
     creds = _decrypt(row["credentials_enc"])
     table_prefix = row["table_prefix"]
-    since = row["last_sync_at"] if sync_type == "delta" and row["last_sync_at"] else None
+    if sync_type == "delta" and row["last_sync_at"]:
+        since = row["last_sync_at"]          # delta: continue from last sync
+    else:
+        # Full sync: limit to plan's data-history window so we don't import
+        # years of data for users on restricted plans.
+        try:
+            from billing import get_plan_history_limit
+            history = get_plan_history_limit(user_email)
+            since = datetime.combine(history["cutoff_date"], datetime.min.time())
+            log.info("Full sync history cutoff applied",
+                     user=user_email, months=history["months"], since=str(since))
+        except Exception as _he:
+            log.warning("Could not get plan history limit — syncing all data", error=str(_he))
+            since = None
     conn.close()
 
     provider = get_provider(provider_id)
@@ -399,6 +412,18 @@ def _run_sync(integration_id: int, user_email: str, provider_id: str,
         "rows_synced": 0, "elapsed_s": 0,
     }
 
+    # Calculate how many rows this user can still receive before hitting their plan limit
+    row_budget = None
+    try:
+        from billing import get_user_subscription
+        sub = get_user_subscription(user_email)
+        db_total = sub.get("db_total_available")
+        db_used  = sub.get("db_base_used", 0)
+        if db_total is not None:
+            row_budget = max(0, int(db_total) - int(db_used))
+    except Exception as _be:
+        log.warning("Could not calculate row budget — syncing without limit", error=str(_be))
+
     sync_conn = _get_internal_conn()
     try:
         result: SyncResult = provider.sync(
@@ -407,12 +432,20 @@ def _run_sync(integration_id: int, user_email: str, provider_id: str,
             table_prefix=table_prefix,
             since=since,
             progress_callback=_progress,
+            row_budget=row_budget,
         )
     finally:
         sync_conn.close()
 
     # Update status
     status = "success" if result.ok else "error"
+    limit_msg = (
+        f"Row limit reached — {result.rows_skipped:,} rows skipped. "
+        "Upgrade your plan or purchase add-on rows to sync the rest."
+        if result.limit_hit else None
+    )
+    error_msg = limit_msg or result.error or None
+
     conn2 = _get_internal_conn()
     c2 = conn2.cursor()
     c2.execute("""
@@ -422,7 +455,7 @@ def _run_sync(integration_id: int, user_email: str, provider_id: str,
           error_message=%s
         WHERE id=%s
     """, (status, result.rows_fetched, result.rows_inserted,
-          result.rows_updated, result.error or None, log_id))
+          result.rows_updated, error_msg, log_id))
     c2.execute("""
         UPDATE user_integrations SET
           status=%s, last_sync_at=IF(%s='success', NOW(), last_sync_at),
@@ -430,8 +463,8 @@ def _run_sync(integration_id: int, user_email: str, provider_id: str,
         WHERE id=%s
     """, (
         "active" if result.ok else "error",
-        status, result.rows_fetched,
-        result.error or None,
+        status, result.rows_inserted,
+        error_msg,
         integration_id,
     ))
     conn2.commit()

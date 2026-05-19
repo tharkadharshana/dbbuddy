@@ -64,7 +64,11 @@ class SalesPlayProvider(BaseProvider):
         table_prefix: str,
         since: Optional[datetime] = None,
         progress_callback=None,
+        row_budget: Optional[int] = None,
     ) -> SyncResult:
+        from providers.base import RowBudget
+        budget = RowBudget(row_budget)
+
         api_token = creds.get("api_token", "").strip()
         client    = SalesPlayAPIClient(api_token)
         cursor    = conn.cursor()
@@ -78,7 +82,6 @@ class SalesPlayProvider(BaseProvider):
         mode = "Delta" if since else "Full"
         progress(f"{mode} sync started (since={since})")
 
-        # Order matters: lookups (shops/categories/payment_types) before referencing tables
         steps = [
             ("Shops",         sync_shops),
             ("Categories",    sync_categories),
@@ -90,14 +93,27 @@ class SalesPlayProvider(BaseProvider):
 
         try:
             for label, fn in steps:
+                if budget.exhausted:
+                    progress(f"  ⚠ Skipping {label} — row limit reached")
+                    break
                 progress(f"  Syncing {label}…")
-                count = fn(client, cursor, table_prefix, since=since)
+                count = fn(client, cursor, table_prefix, since=since, budget=budget)
                 total += count
-                conn.commit()   # commit after each table so partial progress is saved
+                conn.commit()
                 progress(f"  ✓ {label}: {count} rows")
 
-            progress(f"✅ Sync complete — {total} total rows")
-            return SyncResult(ok=True, rows_fetched=total, rows_inserted=total)
+            if budget.skipped > 0:
+                progress(f"⚠ Row limit reached — {budget.skipped:,} rows skipped")
+            else:
+                progress(f"✅ Sync complete — {total} total rows")
+
+            return SyncResult(
+                ok=True,
+                rows_fetched=total + budget.skipped,
+                rows_inserted=total,
+                rows_skipped=budget.skipped,
+                limit_hit=budget.skipped > 0,
+            )
 
         except Exception as exc:
             conn.rollback()

@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { runNLQuery } from '../utils/api'
-import { Spinner, UsageMeter } from '../components/UI'
+import { Spinner, UsageMeter, AIQuotaWall } from '../components/UI'
 
 const TT = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)', borderRadius:8, fontSize:12, color:'#f0f1fa' }
 
@@ -151,7 +151,7 @@ function Message({ msg, llm }) {
   )
 }
 
-export default function ChatPage({ llm, setLlm, connection }) {
+export default function ChatPage({ llm, setLlm, connection, sub, onNavigate }) {
   const [messages, setMessages]   = useState([])
   const [input, setInput]         = useState('')
   const [loading, setLoading]     = useState(false)
@@ -192,12 +192,14 @@ export default function ChatPage({ llm, setLlm, connection }) {
 
   const hasMessages = messages.length > 0
 
+  if (sub && !sub.can_use_ai) return <AIQuotaWall sub={sub} onNavigate={onNavigate} />
+
   return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%', overflow:'hidden' }}>
 
       {/* LLM selector with token meter */}
       <div style={{ display:'flex', justifyContent:'flex-end', padding:'10px 20px 0', flexShrink:0 }}>
-        <UsageMeter />
+        <UsageMeter sub={sub} />
       </div>
 
       {/* Messages area */}

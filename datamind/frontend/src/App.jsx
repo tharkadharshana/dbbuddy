@@ -8,8 +8,12 @@ import AnomalyPage       from './pages/AnomalyPage'
 import ReportsPage       from './pages/ReportsPage'
 import SettingsPage      from './pages/SettingsPage'
 import ConnectionsPage   from './pages/ConnectionsPage'
+import BillingPage       from './pages/BillingPage'
+import UsagePage         from './pages/UsagePage'
+import DocsPage          from './pages/DocsPage'
 import Sidebar           from './components/Sidebar'
-import { fetchTables, fetchCacheStatus, fetchSettings, fetchConnectedProviders, fetchProviderStats } from './utils/api'
+import UsageLimitBanner  from './components/UsageLimitBanner'
+import { fetchTables, fetchCacheStatus, fetchSettings, fetchConnectedProviders, fetchProviderStats, fetchSubscription } from './utils/api'
 
 export default function App() {
   const [user, setUser]       = useState(() => {
@@ -22,6 +26,8 @@ export default function App() {
   const [showOnboarding, setShowOnboarding] = useState(false)
   const [theme, setTheme]       = useState(() => localStorage.getItem('dm_theme') || 'dark')
   const [totalRows, setTotalRows] = useState(0)
+  const [sub, setSub]             = useState(null)
+  const subIntervalRef = useRef(null)
   const pollRef = useRef(null)
 
   // Apply theme to document root
@@ -34,7 +40,14 @@ export default function App() {
     if (!user) return
     checkSetup()
     pollCacheStatus()
+    loadSub()
+    subIntervalRef.current = setInterval(loadSub, 5 * 60 * 1000)
+    return () => clearInterval(subIntervalRef.current)
   }, [user])
+
+  async function loadSub() {
+    try { setSub(await fetchSubscription()) } catch { /* silent */ }
+  }
 
   async function checkSetup({ suppressOnboarding = false } = {}) {
     try {
@@ -107,13 +120,15 @@ export default function App() {
   const noScroll = ['chat', 'discover', 'reports'].includes(page)
 
   const pageEl = {
-    chat:        <ChatPage llm={llm} setLlm={setLlm} connection={connection} />,
-    discover:    <DiscoverPage llm={llm} setLlm={setLlm} />,
-    forecast:    <ForecastPage />,
-    anomaly:     <AnomalyPage />,
-    reports:     <ReportsPage llm={llm} setLlm={setLlm} />,
-    connections: <ConnectionsPage onConnectionChange={checkSetup} />,
-    settings:    <SettingsPage user={user} onLogout={handleLogout} />,
+    chat:        <ChatPage llm={llm} setLlm={setLlm} connection={connection} sub={sub} onNavigate={setPage} />,
+    discover:    <DiscoverPage llm={llm} setLlm={setLlm} sub={sub} onNavigate={setPage} />,
+    forecast:    <ForecastPage sub={sub} onNavigate={setPage} />,
+    anomaly:     <AnomalyPage sub={sub} onNavigate={setPage} />,
+    reports:     <ReportsPage llm={llm} setLlm={setLlm} sub={sub} onNavigate={setPage} />,
+    connections: <ConnectionsPage onConnectionChange={checkSetup} sub={sub} />,
+    settings:    <SettingsPage user={user} onLogout={handleLogout} onNavigate={setPage} />,
+    billing:     <BillingPage onSubChange={loadSub} />,
+    docs:        <DocsPage />,
   }[page] ?? <ChatPage llm={llm} setLlm={setLlm} connection={connection} />
 
   return (
@@ -128,6 +143,7 @@ export default function App() {
         setTheme={setTheme}
       />
       <main style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', minWidth:0 }}>
+        <UsageLimitBanner sub={sub} onNavigate={setPage} />
         <div style={{ flex:1, overflow: noScroll ? 'hidden' : 'auto' }}>
           {pageEl}
         </div>

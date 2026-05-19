@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { onboardingValidateKey, onboardingTestDB, onboardingConnectDB, patchSettings, fetchProviders, validateProviderCreds, connectProvider, fetchProviderStatus, fetchConnectedProviders } from '../utils/api'
+import { onboardingValidateKey, onboardingTestDB, onboardingConnectDB, patchSettings, fetchProviders, validateProviderCreds, connectProvider, fetchProviderStatus, fetchConnectedProviders, fetchBillingPlans, subscribeToPlan } from '../utils/api'
 import { Spinner } from '../components/UI'
 
 // ── Step indicator ────────────────────────────────────────────────────────────
@@ -37,7 +37,13 @@ function StatusBox({ ok, message }) {
   )
 }
 
-const TOTAL_STEPS = 3
+const TOTAL_STEPS = 4
+
+const PLAN_HIGHLIGHTS = {
+  Starter: { tokens: '500 Tokens / mo',    price: '$5' },
+  Growth:  { tokens: '1,500 Tokens / mo',  price: '$10' },
+  Pro:     { tokens: '10,000 Tokens / mo', price: '$25' },
+}
 
 export default function OnboardingWizard({ onComplete, theme, setTheme }) {
   const [step, setStep]           = useState(0)
@@ -71,6 +77,21 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
   const [syncProgress, setSyncProgress] = useState(null)
 
   const [error, setError]         = useState('')
+
+  // Step 3 — plan selection
+  const [plans, setPlans]           = useState([])
+  const [planSubscribing, setPlanSubscribing] = useState(null)
+
+  useEffect(() => {
+    fetchBillingPlans().then(d => setPlans(d.plans || [])).catch(() => {})
+  }, [])
+
+  async function handleSelectPlan(plan) {
+    setPlanSubscribing(plan.id)
+    try { await subscribeToPlan(plan.id) } catch { /* already on trial, that's fine */ }
+    setPlanSubscribing(null)
+    onComplete()
+  }
 
   // Poll sync status after provider connect
   useEffect(() => {
@@ -566,14 +587,70 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
                 ].map((t,i) => <div key={i} style={{ fontSize:12, color:'var(--text2)', padding:'4px 0' }}>{t}</div>)}
               </div>
 
-              <button onClick={onComplete} style={{
+              <button onClick={() => setStep(4)} style={{
                 width:'100%', padding:'13px', borderRadius:10, fontSize:15, fontWeight:700,
                 background:'linear-gradient(135deg,#4f8ef7,#a78bfa)', color:'#fff', border:'none',
                 cursor:'pointer', boxShadow:'0 6px 20px rgba(79,142,247,0.35)',
               }}>
-                Open Analytics Hub →
+                Choose Your Plan →
               </button>
             </div>
+          </Card>
+        )}
+
+        {/* ── STEP 4: Plan selection ─────────────────────────────────────── */}
+        {step === 4 && (
+          <Card>
+            <div style={{ textAlign:'center', marginBottom:20 }}>
+              <div style={{ fontSize:13, fontWeight:600, color:'var(--green)', background:'rgba(52,209,122,0.1)', border:'1px solid rgba(52,209,122,0.2)', borderRadius:8, padding:'6px 14px', display:'inline-block', marginBottom:14 }}>
+                ✓ Your 14-day free trial has started
+              </div>
+              <div style={{ fontSize:20, fontWeight:700, color:'var(--text)', marginBottom:6 }}>Choose a plan</div>
+              <div style={{ fontSize:13, color:'var(--text2)' }}>Lock in your plan now or continue exploring with your trial.</div>
+            </div>
+
+            <div style={{ display:'flex', flexDirection:'column', gap:10, marginBottom:20 }}>
+              {plans.map(plan => {
+                const h = PLAN_HIGHLIGHTS[plan.name] || {}
+                const isBusy = planSubscribing === plan.id
+                return (
+                  <div key={plan.id} style={{
+                    display:'flex', alignItems:'center', gap:14,
+                    background:'var(--bg2)', border:'1px solid var(--border)',
+                    borderRadius:10, padding:'12px 16px',
+                  }}>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontWeight:700, fontSize:14, marginBottom:2 }}>{plan.name}</div>
+                      <div style={{ fontSize:12, color:'var(--text3)' }}>{h.tokens}</div>
+                    </div>
+                    <div style={{ fontWeight:800, fontSize:16, color:'var(--text)', minWidth:36, textAlign:'right' }}>{h.price}<span style={{ fontSize:11, fontWeight:400, color:'var(--text3)' }}>/mo</span></div>
+                    <button
+                      onClick={() => handleSelectPlan(plan)}
+                      disabled={!!planSubscribing}
+                      style={{
+                        padding:'7px 16px', borderRadius:8, border:'none', cursor: planSubscribing ? 'wait' : 'pointer',
+                        background:'var(--blue)', color:'#fff', fontWeight:600, fontSize:13,
+                        opacity: planSubscribing ? 0.6 : 1, flexShrink:0,
+                      }}
+                    >
+                      {isBusy ? <Spinner /> : 'Select'}
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+
+            <button
+              onClick={onComplete}
+              disabled={!!planSubscribing}
+              style={{
+                width:'100%', padding:'11px', borderRadius:10, fontSize:14,
+                background:'transparent', color:'var(--text3)', border:'1px solid var(--border)',
+                cursor:'pointer',
+              }}
+            >
+              Continue with free trial →
+            </button>
           </Card>
         )}
       </div>
