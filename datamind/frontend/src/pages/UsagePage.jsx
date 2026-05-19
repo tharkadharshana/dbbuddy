@@ -2,8 +2,24 @@ import React, { useState, useEffect } from 'react'
 import { fetchBillingUsage } from '../utils/api'
 import { Card, Spinner, Badge } from '../components/UI'
 
-function UsageBar({ label, used, limit, pct, decimals = 0 }) {
-  const color = pct >= 100 ? 'var(--red)' : pct >= 80 ? 'var(--amber)' : 'var(--blue)'
+const OP_LABELS = {
+  llm:                 'AI Query',
+  nl_query_rows:       'Query Results',
+  prebuilt_template:   'Analytics Template',
+  forecast:            'Forecasting',
+  anomaly_detection:   'Anomaly Detection',
+  rfm_analysis:        'RFM Analysis',
+  cohort_analysis:     'Cohort Analysis',
+  basket_analysis:     'Basket Analysis',
+  growth_metrics:      'Growth Metrics',
+  employee_performance:'Employee Performance',
+  product_velocity:    'Product Velocity',
+  payment_breakdown:   'Payment Analysis',
+  location_comparison: 'Location Comparison',
+}
+
+function UsageBar({ label, used, limit, pct, decimals = 2, color }) {
+  const barColor = color || (pct >= 100 ? 'var(--red)' : pct >= 80 ? 'var(--amber)' : 'var(--blue)')
   const fmt = (n) => Number(n).toLocaleString(undefined, { maximumFractionDigits: decimals })
   return (
     <div style={{ flex: 1, minWidth: 200 }}>
@@ -14,16 +30,16 @@ function UsageBar({ label, used, limit, pct, decimals = 0 }) {
       <div style={{ height: 8, borderRadius: 4, background: 'var(--bg3)', overflow: 'hidden' }}>
         <div style={{
           height: '100%', width: `${Math.min(pct, 100)}%`,
-          background: color, borderRadius: 4, transition: 'width .3s',
+          background: barColor, borderRadius: 4, transition: 'width .3s',
         }} />
       </div>
-      <div style={{ fontSize: 11, color, marginTop: 4 }}>{pct}% used</div>
+      <div style={{ fontSize: 11, color: barColor, marginTop: 4 }}>{pct}% used</div>
     </div>
   )
 }
 
 export default function UsagePage({ sub }) {
-  const [usage, setUsage]         = useState(null)
+  const [usage, setUsage]               = useState(null)
   const [usageLoading, setUsageLoading] = useState(true)
 
   useEffect(() => {
@@ -46,11 +62,11 @@ export default function UsagePage({ sub }) {
       <div style={{ marginBottom: 28 }}>
         <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>Usage</div>
         <div style={{ fontSize: 13, color: 'var(--text3)' }}>
-          Current billing period usage and recent AI activity
+          Token usage for the current billing period
         </div>
       </div>
 
-      {/* Subscription summary */}
+      {/* Unified token bar */}
       {sub && sub.status !== 'no_subscription' && (
         <Card style={{ padding: 20, marginBottom: 20 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18, flexWrap: 'wrap' }}>
@@ -67,28 +83,27 @@ export default function UsagePage({ sub }) {
             </span>
           </div>
 
-          <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap' }}>
-            <UsageBar
-              label="AI Credits"
-              used={sub.ai_base_used}
-              limit={sub.ai_total_available}
-              pct={sub.usage_pct_ai}
-              decimals={1}
-            />
-            <UsageBar
-              label="DB Rows"
-              used={sub.db_base_used}
-              limit={sub.db_total_available}
-              pct={sub.usage_pct_db}
-            />
-          </div>
+          <UsageBar
+            label="Tokens"
+            used={sub.tokens_used ?? 0}
+            limit={sub.tokens_total_available ?? sub.tokens_limit ?? 0}
+            pct={sub.tokens_pct ?? 0}
+          />
 
-          {(sub.ai_addon_balance > 0 || sub.db_addon_balance > 0) && (
-            <div style={{ marginTop: 16, padding: '10px 14px', background: 'var(--bg3)', borderRadius: 8, fontSize: 12, color: 'var(--text2)' }}>
-              Add-on balance: {sub.ai_addon_balance > 0 && <span style={{ marginRight: 12 }}>⚡ {sub.ai_addon_balance.toLocaleString()} AI credits</span>}
-              {sub.db_addon_balance > 0 && <span>🗄 {sub.db_addon_balance.toLocaleString()} DB rows</span>}
+          {/* Breakdown detail */}
+          <div style={{ marginTop: 16, padding: '12px 14px', background: 'var(--bg3)', borderRadius: 8, fontSize: 12 }}>
+            <div style={{ fontWeight: 600, color: 'var(--text2)', marginBottom: 8 }}>Token breakdown</div>
+            <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', color: 'var(--text3)' }}>
+              <span>Plan limit: <b style={{ color: 'var(--text)' }}>{(sub.tokens_limit ?? 0).toLocaleString()}</b></span>
+              {(sub.tokens_addon_balance ?? 0) > 0 && (
+                <span>Add-on balance: <b style={{ color: 'var(--green)' }}>+{(sub.tokens_addon_balance).toLocaleString(undefined, { maximumFractionDigits: 1 })}</b></span>
+              )}
+              <span>Tokens used: <b style={{ color: 'var(--blue)' }}>{(sub.tokens_used ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</b></span>
+              <span>Remaining: <b style={{ color: 'var(--green)' }}>
+                {Math.max(0, (sub.tokens_total_available ?? 0) - (sub.tokens_used ?? 0)).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+              </b></span>
             </div>
-          )}
+          </div>
         </Card>
       )}
 
@@ -98,23 +113,23 @@ export default function UsagePage({ sub }) {
         </Card>
       )}
 
-      {/* AI usage history */}
+      {/* Token usage history */}
       <Card style={{ padding: 20 }}>
-        <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 16 }}>Recent AI Usage</div>
+        <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 16 }}>Recent Activity</div>
         {usageLoading ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text3)', fontSize: 13 }}>
             <Spinner /> Loading…
           </div>
         ) : history.length === 0 ? (
-          <div style={{ fontSize: 13, color: 'var(--text3)' }}>No AI usage recorded yet.</div>
+          <div style={{ fontSize: 13, color: 'var(--text3)' }}>No usage recorded yet.</div>
         ) : (
           <div style={{ overflow: 'auto' }}>
             <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                  {['Date', 'Model', 'Tokens', 'Credits Charged'].map(h => (
+                  {['Date', 'Operation', 'Tokens', 'AI Tokens', 'Rows'].map(h => (
                     <th key={h} style={{
-                      textAlign: h === 'Tokens' || h === 'Credits Charged' ? 'right' : 'left',
+                      textAlign: ['Tokens', 'AI Tokens', 'Rows'].includes(h) ? 'right' : 'left',
                       padding: '8px 12px', fontWeight: 600, color: 'var(--text2)',
                     }}>{h}</th>
                   ))}
@@ -127,13 +142,16 @@ export default function UsagePage({ sub }) {
                       {item.created_at}
                     </td>
                     <td style={{ padding: '10px 12px' }}>
-                      <Badge color="blue">{item.model || '—'}</Badge>
+                      <Badge color="blue">{OP_LABELS[item.operation_type] || item.operation_type}</Badge>
                     </td>
-                    <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'var(--mono)' }}>
-                      {(item.tokens || 0).toLocaleString()}
+                    <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'var(--mono)', color: 'var(--blue)', fontWeight: 600 }}>
+                      {Number(item.tokens || 0).toFixed(4)}
                     </td>
-                    <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'var(--mono)', color: 'var(--blue)' }}>
-                      {(item.credits_charged || 0).toFixed(4)}
+                    <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'var(--mono)', color: 'var(--text3)' }}>
+                      {(item.llm_tokens || 0).toLocaleString()}
+                    </td>
+                    <td style={{ padding: '10px 12px', textAlign: 'right', fontFamily: 'var(--mono)', color: 'var(--text3)' }}>
+                      {(item.rows_charged || 0).toLocaleString()}
                     </td>
                   </tr>
                 ))}

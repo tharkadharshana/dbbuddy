@@ -17,6 +17,46 @@ ADDON_PACKAGES = {
     "db_rows":    {"units_per_pack": 100_000,   "price_cents": 100, "label": "100K DB Rows"},
 }
 
+# Flat Token cost per operation type (feature compute component).
+# T_total = (llm_tokens / 1000) + (rows_returned / 1000) + FEATURE_COST[op]
+# Minimum charge per operation: 0.1 Tokens.
+FEATURE_COST: dict = {
+    "nl_query_rows":        0.0,   # data component only; LLM charged separately
+    "prebuilt_template":    1.0,   # SQL template run — no LLM, flat compute cost
+    "forecast":             2.0,   # Prophet ML fit + predict
+    "anomaly_detection":    2.0,   # IsolationForest on full dataset
+    "rfm_analysis":         1.5,
+    "cohort_analysis":      1.5,
+    "basket_analysis":      2.0,
+    "growth_metrics":       1.0,
+    "employee_performance": 1.0,
+    "product_velocity":     1.0,
+    "payment_breakdown":    0.5,
+    "location_comparison":  0.5,
+    "llm":                  0.0,   # LLM operations — token cost is T_llm only
+}
+
+
+def calculate_tokens(operation_type: str, llm_tokens: int = 0, rows_returned: int = 0) -> float:
+    """Unified Token cost formula.
+
+    T = (llm_tokens / 1000) + (rows_returned / 1000) + FEATURE_COST[operation_type]
+
+    Examples:
+      NL query returning 1 200 rows after 800 LLM tokens:
+        T = 0.8 + 1.2 + 0.0 = 2.0 Tokens
+
+      Prebuilt template returning 50 000 rows (no LLM):
+        T = 0.0 + 50.0 + 1.0 = 51.0 Tokens
+
+      Forecast on 10 000 rows:
+        T = 0.0 + 10.0 + 2.0 = 12.0 Tokens
+    """
+    T_llm  = llm_tokens  / 1000
+    T_db   = rows_returned / 1000
+    T_feat = FEATURE_COST.get(operation_type, 0.5)
+    return max(round(T_llm + T_db + T_feat, 4), 0.1)
+
 
 # ── DB connection ─────────────────────────────────────────────────────────────
 
@@ -118,6 +158,42 @@ def bootstrap_billing_tables():
             MODIFY COLUMN credits_charged DECIMAL(10,4) NOT NULL DEFAULT 0
         """)
 
+        # ── Unified token columns (idempotent — silently skipped if present) ──
+        for _stmt in [
+            "ALTER TABLE subscription_usage ADD COLUMN tokens_used DECIMAL(12,4) NOT NULL DEFAULT 0",
+            "ALTER TABLE subscription_plans  ADD COLUMN tokens_limit DECIMAL(12,4) NOT NULL DEFAULT 0",
+        ]:
+            try:
+                cur.execute(_stmt)
+            except Exception:
+                pass  # column already exists
+
+        # ── Drop stale columns that were never meaningfully written ────────────
+        for _stmt in [
+            "ALTER TABLE subscription_usage DROP COLUMN db_base_used",
+            "ALTER TABLE subscription_usage DROP COLUMN db_addon_used",
+            "ALTER TABLE llm_usage_log      DROP COLUMN actual_cost",
+        ]:
+            try:
+                cur.execute(_stmt)
+            except Exception:
+                pass  # already removed or column never existed
+
+        # ── Unified usage_log — one row per chargeable operation ──────────────
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS usage_log (
+                id             INT AUTO_INCREMENT PRIMARY KEY,
+                user_email     VARCHAR(255)  NOT NULL,
+                tokens         DECIMAL(12,4) NOT NULL DEFAULT 0,
+                operation_type VARCHAR(50)   NOT NULL,
+                llm_tokens     INT           NOT NULL DEFAULT 0,
+                rows_charged   INT           NOT NULL DEFAULT 0,
+                created_at     TIMESTAMP     DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_ulog_email   (user_email),
+                INDEX idx_ulog_created (created_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """)
+
         # Config table — stores system-wide settings like the AI credit rate
         cur.execute("""
             CREATE TABLE IF NOT EXISTS billing_config (
@@ -158,6 +234,14 @@ def bootstrap_billing_tables():
                     VALUES (%s,%s,'monthly',%s,%s,%s,14,30,1,%s)
                 """, (name, price_usd, price_cents, ai_credits, db_rows, sort_order))
 
+        # Seed unified token limits (ai_credits + db_rows/1000)
+        _TOKEN_LIMITS = {"Starter": 800.0, "Growth": 2750.0, "Pro": 12000.0}
+        for _pname, _tlimit in _TOKEN_LIMITS.items():
+            cur.execute(
+                "UPDATE subscription_plans SET tokens_limit=%s WHERE name=%s",
+                (_tlimit, _pname),
+            )
+
         conn.commit()
         log.info("Billing tables bootstrapped")
     except Exception as e:
@@ -196,14 +280,14 @@ def _get_addon_balance(cur, user_email: str, addon_type: str) -> int:
 
 def _get_period_usage(cur, user_email: str, period_start) -> dict:
     cur.execute("""
-        SELECT ai_base_used, ai_addon_used, db_base_used, db_addon_used
+        SELECT ai_base_used, ai_addon_used, tokens_used
         FROM subscription_usage
         WHERE user_email = %s AND period_start = %s
     """, (user_email, period_start))
     row = cur.fetchone()
     if row:
         return row
-    return {"ai_base_used": 0, "ai_addon_used": 0, "db_base_used": 0, "db_addon_used": 0}
+    return {"ai_base_used": 0, "ai_addon_used": 0, "tokens_used": 0}
 
 
 # ── Public functions ──────────────────────────────────────────────────────────
@@ -314,7 +398,7 @@ def get_user_subscription(user_email: str) -> Dict:
             SELECT us.id, us.status, us.period_start, us.period_end,
                    sp.name AS plan_name, sp.id AS plan_id, sp.price_cents,
                    sp.ai_credits AS ai_base_limit, sp.db_rows AS db_base_limit,
-                   sp.trial_days
+                   sp.tokens_limit, sp.trial_days
             FROM user_subscriptions us
             JOIN subscription_plans sp ON sp.id = us.plan_id
             WHERE us.user_email = %s AND us.status IN ('trial', 'active')
@@ -330,6 +414,8 @@ def get_user_subscription(user_email: str) -> Dict:
                 "ai_base_used": 0, "ai_base_limit": 0, "ai_addon_balance": 0, "ai_total_available": 0,
                 "db_base_used": 0, "db_base_limit": 0, "db_addon_balance": 0, "db_total_available": 0,
                 "usage_pct_ai": 0, "usage_pct_db": 0,
+                "tokens_used": 0, "tokens_limit": 0, "tokens_pct": 0,
+                "tokens_addon_balance": 0, "tokens_total_available": 0,
                 "trial_days_remaining": 0, "period_start": None, "period_end": None,
                 "can_use_ai": False, "can_use_db": False,
             }
@@ -341,43 +427,55 @@ def get_user_subscription(user_email: str) -> Dict:
         ai_base_used  = usage["ai_base_used"]
         ai_base_limit = sub["ai_base_limit"]
         db_base_limit = int(sub["db_base_limit"])
+        tokens_limit  = float(sub.get("tokens_limit") or 0)
 
-        # DB rows: count actual synced rows live — subscription_usage.db_base_used is never written
+        # DB rows: count actual synced rows live
         try:
             from integrations import get_user_total_rows
             db_base_used = get_user_total_rows(user_email)
         except Exception:
-            db_base_used = usage["db_base_used"]
+            db_base_used = 0
 
         ai_total = ai_base_limit + ai_addon_bal
         db_total = db_base_limit + db_addon_bal
 
-        usage_pct_ai = round((ai_base_used / ai_total * 100) if ai_total > 0 else 0, 1)
-        usage_pct_db = round((db_base_used / db_total * 100) if db_total > 0 else 0, 1)
+        # Unified token accounting
+        tokens_used          = float(usage.get("tokens_used") or 0)
+        tokens_addon_balance = ai_addon_bal + (db_addon_bal / 1000)
+        tokens_total         = tokens_limit + tokens_addon_balance
+
+        usage_pct_ai     = round((ai_base_used  / ai_total    * 100) if ai_total    > 0 else 0, 1)
+        usage_pct_db     = round((db_base_used  / db_total    * 100) if db_total    > 0 else 0, 1)
+        tokens_pct       = round((tokens_used   / tokens_total * 100) if tokens_total > 0 else 0, 1)
 
         today = date.today()
         trial_days_remaining = max(0, (sub["period_end"] - today).days) if sub["status"] == "trial" else 0
 
         return {
-            "status":              sub["status"],
-            "plan_name":           sub["plan_name"],
-            "plan_id":             sub["plan_id"],
-            "price_cents":         sub["price_cents"],
-            "ai_base_used":        round(float(ai_base_used), 1),
-            "ai_base_limit":       ai_base_limit,
-            "ai_addon_balance":    ai_addon_bal,
-            "ai_total_available":  ai_total,
-            "db_base_used":        db_base_used,
-            "db_base_limit":       db_base_limit,
-            "db_addon_balance":    db_addon_bal,
-            "db_total_available":  db_total,
-            "usage_pct_ai":        usage_pct_ai,
-            "usage_pct_db":        usage_pct_db,
-            "trial_days_remaining": trial_days_remaining,
-            "period_start":        str(sub["period_start"]),
-            "period_end":          str(sub["period_end"]),
-            "can_use_ai":          ai_base_used < ai_total,
-            "can_use_db":          db_base_used < db_total,
+            "status":                sub["status"],
+            "plan_name":             sub["plan_name"],
+            "plan_id":               sub["plan_id"],
+            "price_cents":           sub["price_cents"],
+            "ai_base_used":          round(float(ai_base_used), 1),
+            "ai_base_limit":         ai_base_limit,
+            "ai_addon_balance":      ai_addon_bal,
+            "ai_total_available":    ai_total,
+            "db_base_used":          db_base_used,
+            "db_base_limit":         db_base_limit,
+            "db_addon_balance":      db_addon_bal,
+            "db_total_available":    db_total,
+            "usage_pct_ai":          usage_pct_ai,
+            "usage_pct_db":          usage_pct_db,
+            "tokens_used":           round(tokens_used, 2),
+            "tokens_limit":          tokens_limit,
+            "tokens_addon_balance":  round(tokens_addon_balance, 2),
+            "tokens_total_available": round(tokens_total, 2),
+            "tokens_pct":            tokens_pct,
+            "trial_days_remaining":  trial_days_remaining,
+            "period_start":          str(sub["period_start"]),
+            "period_end":            str(sub["period_end"]),
+            "can_use_ai":            tokens_total == 0 or tokens_used < tokens_total,
+            "can_use_db":            db_base_used < db_total,
         }
     finally:
         cur.close()
@@ -385,14 +483,16 @@ def get_user_subscription(user_email: str) -> Dict:
 
 
 def check_ai_limit(user_email: str) -> Tuple[bool, str]:
-    """Returns (True, '') if user can use AI, (False, reason) otherwise. Fails open on errors."""
+    """Returns (True, '') if user has tokens remaining, (False, reason) otherwise. Fails open on errors."""
     try:
         sub = get_user_subscription(user_email)
         status = sub.get("status")
         if status in ("expired", "cancelled", "no_subscription"):
             return False, "Your subscription has expired or is inactive."
-        if not sub.get("can_use_ai", True):
-            return False, "You've used all your AI credits for this billing period."
+        tokens_limit = sub.get("tokens_limit", 0)
+        tokens_used  = sub.get("tokens_used",  0)
+        if tokens_limit > 0 and tokens_used >= tokens_limit:
+            return False, "You've used all your tokens for this billing period."
         return True, ""
     except Exception as e:
         log.warning("check_ai_limit failed open", email=user_email, error=str(e))
@@ -440,30 +540,31 @@ def set_ai_credit_rate(rate: float):
     cur.close(); conn.close()
 
 
-def charge_ai_usage(user_email: str, tokens: int, model: str, endpoint: str, api_key_cost: float = 0.0):
-    """Log an AI call and increment billing credits by (tokens / 1000 * ai_credit_rate).
-    The log insert and credit update are intentionally separate transactions so one
-    failing never silently drops the other."""
-    rate = get_ai_credit_rate()
-    credits_charged = round(tokens / 1000 * rate, 4)
+def charge_tokens(user_email: str, tokens: float, operation_type: str,
+                  llm_tokens: int = 0, rows_returned: int = 0):
+    """Write one row to usage_log and increment tokens_used for the active billing period.
 
-    # 1. Write to audit log (independent — never rolled back by the credit step)
+    Called by charge_ai_usage (for LLM ops) and directly by each analytics endpoint
+    (for non-LLM ops).  Both paths funnel here so tokens_used is always the
+    single source of truth for the unified Token balance.
+    """
+    # 1. Append to unified audit log
     try:
         conn = _get_conn()
-        cur = conn.cursor()
+        cur  = conn.cursor()
         cur.execute("""
-            INSERT INTO llm_usage_log (user_email, tokens, model, endpoint, credits_charged, actual_cost)
-            VALUES (%s, %s, %s, %s, %s, %s)
-        """, (user_email, tokens, model, endpoint, credits_charged, api_key_cost))
+            INSERT INTO usage_log (user_email, tokens, operation_type, llm_tokens, rows_charged)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (user_email, tokens, operation_type, llm_tokens, rows_returned))
         conn.commit()
         cur.close(); conn.close()
     except Exception as e:
-        log.warning("charge_ai_usage: log insert failed", email=user_email, error=str(e))
+        log.warning("charge_tokens: log insert failed", email=user_email, error=str(e))
 
-    # 2. Increment the user-visible credit counter for the active period
+    # 2. Increment tokens_used for the active subscription period
     try:
         conn = _get_conn()
-        cur = conn.cursor(dictionary=True)
+        cur  = conn.cursor(dictionary=True)
         cur.execute("""
             SELECT period_start FROM user_subscriptions
             WHERE user_email = %s AND status IN ('trial', 'active')
@@ -472,14 +573,39 @@ def charge_ai_usage(user_email: str, tokens: int, model: str, endpoint: str, api
         sub = cur.fetchone()
         if sub:
             cur.execute("""
-                INSERT INTO subscription_usage (user_email, period_start, ai_base_used)
-                VALUES (%s, %s, %s)
-                ON DUPLICATE KEY UPDATE ai_base_used = ai_base_used + %s
-            """, (user_email, sub["period_start"], credits_charged, credits_charged))
+                INSERT INTO subscription_usage (user_email, period_start, tokens_used, ai_base_used)
+                VALUES (%s, %s, %s, 0)
+                ON DUPLICATE KEY UPDATE tokens_used = tokens_used + %s
+            """, (user_email, sub["period_start"], tokens, tokens))
             conn.commit()
         cur.close(); conn.close()
     except Exception as e:
-        log.warning("charge_ai_usage: credit update failed", email=user_email, error=str(e))
+        log.warning("charge_tokens: usage update failed", email=user_email, error=str(e))
+
+
+def charge_ai_usage(user_email: str, tokens: int, model: str, endpoint: str, api_key_cost: float = 0.0):
+    """Log an LLM call to llm_usage_log (historical) and forward to charge_tokens for unified tracking."""
+    rate = get_ai_credit_rate()
+    credits_charged = round(tokens / 1000 * rate, 4)
+
+    # 1. LLM-specific audit log (historical — kept for LLM call detail)
+    try:
+        conn = _get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO llm_usage_log (user_email, tokens, model, endpoint, credits_charged)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (user_email, tokens, model, endpoint, credits_charged))
+        conn.commit()
+        cur.close(); conn.close()
+    except Exception as e:
+        log.warning("charge_ai_usage: log insert failed", email=user_email, error=str(e))
+
+    # 2. Unified token tracking (tokens_used counter + usage_log)
+    try:
+        charge_tokens(user_email, credits_charged, "llm", llm_tokens=tokens)
+    except Exception as e:
+        log.warning("charge_ai_usage: unified charge failed", email=user_email, error=str(e))
 
 
 def purchase_addon(user_email: str, addon_type: str, quantity: int):
@@ -515,9 +641,28 @@ def get_llm_usage_history(user_email: str, limit: int = 50) -> List[Dict]:
     cur = conn.cursor(dictionary=True)
     try:
         cur.execute("""
-            SELECT id, tokens, model, endpoint, credits_charged, actual_cost,
+            SELECT id, tokens, model, endpoint, credits_charged,
                    DATE_FORMAT(created_at, '%%Y-%%m-%%dT%%H:%%i:%%s') AS created_at
             FROM llm_usage_log
+            WHERE user_email = %s
+            ORDER BY created_at DESC
+            LIMIT %s
+        """, (user_email, limit))
+        return cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_token_usage_history(user_email: str, limit: int = 50) -> List[Dict]:
+    """Return recent entries from the unified usage_log table."""
+    conn = _get_conn()
+    cur = conn.cursor(dictionary=True)
+    try:
+        cur.execute("""
+            SELECT id, tokens, operation_type, llm_tokens, rows_charged,
+                   DATE_FORMAT(created_at, '%%Y-%%m-%%dT%%H:%%i:%%s') AS created_at
+            FROM usage_log
             WHERE user_email = %s
             ORDER BY created_at DESC
             LIMIT %s

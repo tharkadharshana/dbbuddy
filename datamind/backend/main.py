@@ -48,6 +48,7 @@ from billing import (
     get_user_subscription, get_subscription_plans, get_plan_by_id,
     check_ai_limit, check_db_limit, purchase_addon, get_llm_usage_history,
     get_addon_pricing, charge_ai_usage, get_ai_credit_rate, set_ai_credit_rate,
+    calculate_tokens, charge_tokens, get_token_usage_history,
 )
 
 log = get_logger(__name__)
@@ -219,6 +220,28 @@ def _run_sql(conn, sql: str, title: str) -> dict:
     data = [{c: _safe(v) for c, v in zip(cols, row)} for row in rows]
     log.debug("SQL result", title=title, rows=len(data))
     return {"title": title, "columns": cols, "data": data, "row_count": len(data)}
+
+
+# Maps analytics template IDs to FEATURE_COST operation types.
+_ANALYTICS_OP = {
+    "customer_rfm":        "rfm_analysis",
+    "customer_cohort":     "cohort_analysis",
+    "basket_analysis":     "basket_analysis",
+    "growth_metrics":      "growth_metrics",
+    "cashier_performance": "employee_performance",
+    "product_velocity":    "product_velocity",
+    "payment_methods":     "payment_breakdown",
+    "location_comparison": "location_comparison",
+}
+
+
+def _charge_op(email: str, op_type: str, rows: int):
+    """Charge unified tokens for one analytics operation. Never raises."""
+    try:
+        tokens = calculate_tokens(op_type, rows_returned=rows)
+        charge_tokens(email, tokens, op_type, rows_returned=rows)
+    except Exception as _ce:
+        log.warning("_charge_op failed silently", op=op_type, error=str(_ce))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -888,6 +911,7 @@ def natural_language_query(req: NLQueryRequest, user: dict = Depends(current_use
         conn.close()
         data = [{k: _safe(v) for k, v in dict(zip(columns, row)).items()} for row in rows]
         log.info("NL query complete", user=user["email"], rows=len(data))
+        _charge_op(user["email"], "nl_query_rows", len(data))
         return {"sql": sql, "columns": columns, "data": data, "row_count": len(data)}
     except HTTPException:
         raise
@@ -939,6 +963,8 @@ def run_analytics(req: AnalyticsRunRequest, user: dict = Depends(current_user)):
             log.info("Run analytics: integration template served",
                      user=user["email"], provider=req.provider, template=req.template_id,
                      row_count=result.get("row_count"))
+            _charge_op(user["email"], _ANALYTICS_OP.get(req.template_id, "prebuilt_template"),
+                       result.get("row_count", 0))
             return result
         except HTTPException:
             raise
@@ -966,6 +992,8 @@ def run_analytics(req: AnalyticsRunRequest, user: dict = Depends(current_user)):
                 result = _run_sql(conn, sql, title)
                 result["source"] = "cache"
                 log.info("Analytics served from cache", template=req.template_id)
+                _charge_op(user["email"], _ANALYTICS_OP.get(req.template_id, "prebuilt_template"),
+                           result.get("row_count", 0))
                 conn.close()
                 return result
             except Exception as sql_err:
@@ -976,6 +1004,8 @@ def run_analytics(req: AnalyticsRunRequest, user: dict = Depends(current_user)):
         r = _try_python(req.template_id, conn)
         if r:
             r["source"] = "python"
+            _charge_op(user["email"], _ANALYTICS_OP.get(req.template_id, "prebuilt_template"),
+                       r.get("row_count", 0))
             conn.close()
             return r
 
@@ -984,6 +1014,8 @@ def run_analytics(req: AnalyticsRunRequest, user: dict = Depends(current_user)):
         if r:
             r["source"] = "fallback"
             log.warning("Analytics using hardcoded fallback SQL", template=req.template_id)
+            _charge_op(user["email"], _ANALYTICS_OP.get(req.template_id, "prebuilt_template"),
+                       r.get("row_count", 0))
             conn.close()
             return r
 
@@ -1071,7 +1103,9 @@ def forecast(req: ForecastRequest, user: dict = Depends(current_user)):
         rows = cursor.fetchall()
         conn.close()
         log.info("Forecast data loaded", rows=len(rows))
-        return run_forecast(rows, req.periods)
+        result = run_forecast(rows, req.periods)
+        _charge_op(user["email"], "forecast", len(rows))
+        return result
     except HTTPException:
         raise
     except Exception as e:
@@ -1113,6 +1147,7 @@ def auto_forecast(periods: int = 90, user: dict = Depends(current_user)):
         result = run_forecast(rows, periods)
         result.update(used_table=receipts_tbl, used_date_col="created_at",
                       used_value_col="total_money", from_cache=False)
+        _charge_op(user["email"], "forecast", len(rows))
         return result
 
     # Own-DB user
@@ -1139,6 +1174,7 @@ def auto_forecast(periods: int = 90, user: dict = Depends(current_user)):
         result["used_date_col"]  = d_col
         result["used_value_col"] = v_col
         result["from_cache"]     = bool(cache and auto.get("forecast_table"))
+        _charge_op(user["email"], "forecast", len(rows))
         return result
     except Exception as e:
         log.error("Auto forecast failed", error=str(e))
@@ -1178,7 +1214,9 @@ def anomalies(req: AnomalyRequest, user: dict = Depends(current_user)):
             cursor.execute(f"SELECT `{req.value_column}` FROM `{req.table}`")
         rows = cursor.fetchall()
         conn.close()
-        return run_anomaly_detection(rows, has_date=bool(req.date_column))
+        result = run_anomaly_detection(rows, has_date=bool(req.date_column))
+        _charge_op(user["email"], "anomaly_detection", len(rows))
+        return result
     except Exception as e:
         log.error("Anomaly detection failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
@@ -1218,6 +1256,7 @@ def auto_anomalies(user: dict = Depends(current_user)):
         result = run_anomaly_detection(rows, has_date=True)
         result.update(used_table=receipts_tbl, used_date_col="created_at",
                       used_value_col="total_money", from_cache=False)
+        _charge_op(user["email"], "anomaly_detection", len(rows))
         return result
 
     # Own-DB user
@@ -1243,6 +1282,7 @@ def auto_anomalies(user: dict = Depends(current_user)):
         result["used_date_col"]  = d_col
         result["used_value_col"] = v_col
         result["from_cache"]     = bool(cache and auto.get("anomaly_table"))
+        _charge_op(user["email"], "anomaly_detection", len(rows))
         return result
     except Exception as e:
         log.error("Auto anomaly detection failed", error=str(e))
@@ -1772,8 +1812,9 @@ def billing_addon(req: AddonRequest, user: dict = Depends(current_user)):
 @app.get("/billing/usage")
 def billing_usage(user: dict = Depends(current_user)):
     return {
-        "history": get_llm_usage_history(user["email"]),
-        "pricing": get_addon_pricing(),
+        "history":     get_token_usage_history(user["email"]),
+        "llm_history": get_llm_usage_history(user["email"]),
+        "pricing":     get_addon_pricing(),
     }
 
 

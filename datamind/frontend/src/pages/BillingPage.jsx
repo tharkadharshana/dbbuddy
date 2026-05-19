@@ -5,24 +5,21 @@ import { Spinner } from '../components/UI'
 // ── Plan feature definitions ──────────────────────────────────────────────────
 const PLAN_FEATURES = {
   Starter: [
-    { text: '300 AI Credits / month',   ok: true  },
-    { text: '500K DB Rows / month',     ok: true  },
+    { text: '800 Tokens / month',       ok: true  },
     { text: 'Natural language queries', ok: true  },
     { text: 'Basic analytics',          ok: true  },
     { text: 'Forecasting & anomalies',  ok: false },
     { text: 'Priority support',         ok: false },
   ],
   Growth: [
-    { text: '750 AI Credits / month',   ok: true  },
-    { text: '2M DB Rows / month',       ok: true  },
+    { text: '2,750 Tokens / month',     ok: true  },
     { text: 'Natural language queries', ok: true  },
     { text: 'Advanced analytics',       ok: true  },
     { text: 'Forecasting & anomalies',  ok: true  },
     { text: 'Priority support',         ok: false },
   ],
   Pro: [
-    { text: '2,000 AI Credits / month', ok: true  },
-    { text: '10M DB Rows / month',      ok: true  },
+    { text: '12,000 Tokens / month',    ok: true  },
     { text: 'Natural language queries', ok: true  },
     { text: 'Advanced analytics',       ok: true  },
     { text: 'Forecasting & anomalies',  ok: true  },
@@ -216,21 +213,14 @@ export default function BillingPage({ onSubChange }) {
           <div style={{ fontSize: 12, color: 'var(--text3)', marginLeft: 'auto' }}>
             Renews {sub.period_end}
           </div>
-          <div style={{ width: '100%', display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+          <div style={{ width: '100%' }}>
             <UsageBar
-              label="AI Credits"
-              used={sub.ai_base_used}
-              limit={sub.ai_base_limit}
-              pct={sub.usage_pct_ai}
-              addon={sub.ai_addon_balance}
-              decimals={1}
-            />
-            <UsageBar
-              label="DB Rows"
-              used={sub.db_base_used}
-              limit={sub.db_base_limit}
-              pct={sub.usage_pct_db}
-              addon={sub.db_addon_balance}
+              label="Tokens"
+              used={sub.tokens_used ?? 0}
+              limit={sub.tokens_total_available ?? sub.tokens_limit ?? 0}
+              pct={sub.tokens_pct ?? 0}
+              addon={sub.tokens_addon_balance ?? 0}
+              decimals={2}
             />
           </div>
         </div>

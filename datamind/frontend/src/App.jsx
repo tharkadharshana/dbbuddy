@@ -10,6 +10,7 @@ import SettingsPage      from './pages/SettingsPage'
 import ConnectionsPage   from './pages/ConnectionsPage'
 import BillingPage       from './pages/BillingPage'
 import UsagePage         from './pages/UsagePage'
+import DocsPage          from './pages/DocsPage'
 import Sidebar           from './components/Sidebar'
 import UsageLimitBanner  from './components/UsageLimitBanner'
 import { fetchTables, fetchCacheStatus, fetchSettings, fetchConnectedProviders, fetchProviderStats, fetchSubscription } from './utils/api'
@@ -128,6 +129,7 @@ export default function App() {
     settings:    <SettingsPage user={user} onLogout={handleLogout} />,
     billing:     <BillingPage onSubChange={loadSub} />,
     usage:       <UsagePage sub={sub} />,
+    docs:        <DocsPage />,
   }[page] ?? <ChatPage llm={llm} setLlm={setLlm} connection={connection} />
 
   return (
