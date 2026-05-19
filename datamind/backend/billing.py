@@ -168,16 +168,37 @@ def bootstrap_billing_tables():
             except Exception:
                 pass  # column already exists
 
-        # ── Drop stale columns that were never meaningfully written ────────────
+        # ── Drop stale columns (idempotent — already-gone columns are silently skipped) ──
         for _stmt in [
+            # subscription_usage: only tokens_used is meaningful now
             "ALTER TABLE subscription_usage DROP COLUMN db_base_used",
             "ALTER TABLE subscription_usage DROP COLUMN db_addon_used",
-            "ALTER TABLE llm_usage_log      DROP COLUMN actual_cost",
+            "ALTER TABLE subscription_usage DROP COLUMN ai_base_used",
+            "ALTER TABLE subscription_usage DROP COLUMN ai_addon_used",
+            # subscription_plans: billing_period is always 'monthly', never queried
+            "ALTER TABLE subscription_plans  DROP COLUMN billing_period",
+            # addon_purchases: units is written but never read; units_remaining is the live balance
+            "ALTER TABLE addon_purchases      DROP COLUMN units",
+            # billing_config: description is seeded but never read
+            "ALTER TABLE billing_config       DROP COLUMN description",
+            # llm_usage_log: actual_cost was always 0
+            "ALTER TABLE llm_usage_log        DROP COLUMN actual_cost",
         ]:
             try:
                 cur.execute(_stmt)
             except Exception:
                 pass  # already removed or column never existed
+
+        # ── Drop legacy credits tables (superseded by the billing system) ─────
+        for _stmt in [
+            "DROP TABLE IF EXISTS pricing_config",
+            "DROP TABLE IF EXISTS credit_usage_log",
+            "DROP TABLE IF EXISTS user_credits",
+        ]:
+            try:
+                cur.execute(_stmt)
+            except Exception:
+                pass
 
         # ── Unified usage_log — one row per chargeable operation ──────────────
         cur.execute("""
@@ -280,14 +301,14 @@ def _get_addon_balance(cur, user_email: str, addon_type: str) -> int:
 
 def _get_period_usage(cur, user_email: str, period_start) -> dict:
     cur.execute("""
-        SELECT ai_base_used, ai_addon_used, tokens_used
+        SELECT tokens_used
         FROM subscription_usage
         WHERE user_email = %s AND period_start = %s
     """, (user_email, period_start))
     row = cur.fetchone()
     if row:
         return row
-    return {"ai_base_used": 0, "ai_addon_used": 0, "tokens_used": 0}
+    return {"tokens_used": 0}
 
 
 # ── Public functions ──────────────────────────────────────────────────────────
@@ -424,7 +445,6 @@ def get_user_subscription(user_email: str) -> Dict:
         ai_addon_bal = _get_addon_balance(cur, user_email, "ai_credits")
         db_addon_bal = _get_addon_balance(cur, user_email, "db_rows")
 
-        ai_base_used  = usage["ai_base_used"]
         ai_base_limit = sub["ai_base_limit"]
         db_base_limit = int(sub["db_base_limit"])
         tokens_limit  = float(sub.get("tokens_limit") or 0)
@@ -444,9 +464,8 @@ def get_user_subscription(user_email: str) -> Dict:
         tokens_addon_balance = ai_addon_bal + (db_addon_bal / 1000)
         tokens_total         = tokens_limit + tokens_addon_balance
 
-        usage_pct_ai     = round((ai_base_used  / ai_total    * 100) if ai_total    > 0 else 0, 1)
-        usage_pct_db     = round((db_base_used  / db_total    * 100) if db_total    > 0 else 0, 1)
-        tokens_pct       = round((tokens_used   / tokens_total * 100) if tokens_total > 0 else 0, 1)
+        usage_pct_db = round((db_base_used / db_total * 100) if db_total > 0 else 0, 1)
+        tokens_pct   = round((tokens_used / tokens_total * 100) if tokens_total > 0 else 0, 1)
 
         today = date.today()
         trial_days_remaining = max(0, (sub["period_end"] - today).days) if sub["status"] == "trial" else 0
@@ -456,7 +475,6 @@ def get_user_subscription(user_email: str) -> Dict:
             "plan_name":             sub["plan_name"],
             "plan_id":               sub["plan_id"],
             "price_cents":           sub["price_cents"],
-            "ai_base_used":          round(float(ai_base_used), 1),
             "ai_base_limit":         ai_base_limit,
             "ai_addon_balance":      ai_addon_bal,
             "ai_total_available":    ai_total,
@@ -464,7 +482,6 @@ def get_user_subscription(user_email: str) -> Dict:
             "db_base_limit":         db_base_limit,
             "db_addon_balance":      db_addon_bal,
             "db_total_available":    db_total,
-            "usage_pct_ai":          usage_pct_ai,
             "usage_pct_db":          usage_pct_db,
             "tokens_used":           round(tokens_used, 2),
             "tokens_limit":          tokens_limit,
@@ -645,8 +662,8 @@ def charge_tokens(user_email: str, tokens: float, operation_type: str,
         sub = cur.fetchone()
         if sub:
             cur.execute("""
-                INSERT INTO subscription_usage (user_email, period_start, tokens_used, ai_base_used)
-                VALUES (%s, %s, %s, 0)
+                INSERT INTO subscription_usage (user_email, period_start, tokens_used)
+                VALUES (%s, %s, %s)
                 ON DUPLICATE KEY UPDATE tokens_used = tokens_used + %s
             """, (user_email, sub["period_start"], tokens, tokens))
             conn.commit()
@@ -691,9 +708,9 @@ def purchase_addon(user_email: str, addon_type: str, quantity: int):
     cur = conn.cursor()
     try:
         cur.execute("""
-            INSERT INTO addon_purchases (user_email, addon_type, units, units_remaining)
-            VALUES (%s, %s, %s, %s)
-        """, (user_email, addon_type, units, units))
+            INSERT INTO addon_purchases (user_email, addon_type, units_remaining)
+            VALUES (%s, %s, %s)
+        """, (user_email, addon_type, units))
         conn.commit()
         log.info("Addon purchased", email=user_email, type=addon_type, units=units)
     except Exception as e:
