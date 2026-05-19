@@ -71,7 +71,11 @@ class LoyverseProvider(BaseProvider):
         table_prefix: str,
         since: Optional[datetime] = None,
         progress_callback=None,
+        row_budget: Optional[int] = None,
     ) -> SyncResult:
+        from providers.base import RowBudget
+        budget = RowBudget(row_budget)
+
         api_token = creds.get("api_token", "").strip()
         client = LoyverseAPIClient(api_token)
         cursor = conn.cursor()
@@ -98,21 +102,31 @@ class LoyverseProvider(BaseProvider):
 
         try:
             for label, fn in steps:
+                if budget.exhausted:
+                    log_progress(f"  ⚠ Skipping {label} — row limit reached")
+                    break
                 log_progress(f"  Syncing {label}…")
-                count = fn(client, cursor, table_prefix, since=since)
+                count = fn(client, cursor, table_prefix, since=since, budget=budget)
                 total_inserted += count
                 log_progress(f"  ✓ {label}: {count} rows")
 
             conn.commit()
-            log_progress(f"✅ Sync complete — {total_inserted} rows synced")
+
+            if budget.skipped > 0:
+                log_progress(f"⚠ Row limit reached — {budget.skipped:,} rows skipped")
+            else:
+                log_progress(f"✅ Sync complete — {total_inserted} rows synced")
+
             log.info("Loyverse sync complete",
-                     prefix=table_prefix, total=total_inserted)
+                     prefix=table_prefix, total=total_inserted, skipped=budget.skipped)
 
             return SyncResult(
                 ok=True,
-                rows_fetched=total_inserted,
+                rows_fetched=total_inserted + budget.skipped,
                 rows_inserted=total_inserted,
                 rows_updated=total_updated,
+                rows_skipped=budget.skipped,
+                limit_hit=budget.skipped > 0,
             )
 
         except Exception as e:

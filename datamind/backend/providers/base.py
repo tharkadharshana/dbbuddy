@@ -36,8 +36,34 @@ class SyncResult:
     rows_fetched: int = 0
     rows_inserted: int = 0
     rows_updated: int = 0
+    rows_skipped: int = 0
+    limit_hit: bool = False
     error: str = ""
     details: Dict[str, Any] = field(default_factory=dict)
+
+
+class RowBudget:
+    """Tracks how many rows may still be inserted during a sync.
+    Pass to every entity-sync function; call request() before each INSERT.
+    If the budget is None the insert is always allowed (no plan limit)."""
+
+    def __init__(self, limit: Optional[int]):
+        self._remaining = limit  # None = unlimited
+        self.skipped = 0
+
+    @property
+    def exhausted(self) -> bool:
+        return self._remaining is not None and self._remaining <= 0
+
+    def request(self) -> bool:
+        """Return True if this row is within budget, False if it must be skipped."""
+        if self._remaining is None:
+            return True
+        if self._remaining > 0:
+            self._remaining -= 1
+            return True
+        self.skipped += 1
+        return False
 
 
 @dataclass
@@ -100,6 +126,7 @@ class BaseProvider(ABC):
         table_prefix: str,             # e.g. "dm_u42_loyverse"
         since: Optional[datetime],     # None = full sync, datetime = delta sync
         progress_callback=None,        # optional callable(str) for live progress
+        row_budget: Optional[int] = None,  # max new rows allowed; None = unlimited
     ) -> SyncResult:
         """
         Fetch data from the external API and upsert into our tables.

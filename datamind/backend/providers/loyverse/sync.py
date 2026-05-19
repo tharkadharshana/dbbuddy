@@ -101,10 +101,12 @@ def _str(val, maxlen=None) -> Optional[str]:
 
 # ── Individual entity sync functions ──────────────────────────────────────────
 
-def sync_stores(client: LoyverseAPIClient, cursor, prefix: str, since=None) -> int:
+def sync_stores(client: LoyverseAPIClient, cursor, prefix: str, since=None, budget=None) -> int:
     rows = client.paginate("/stores", "stores", since=since)
     count = 0
     for r in rows:
+        if budget is not None and not budget.request():
+            break
         cursor.execute(f"""
             INSERT INTO `{prefix}_stores`
               (id, name, address, phone_number, description, default_tax_id, created_at, updated_at)
@@ -121,10 +123,12 @@ def sync_stores(client: LoyverseAPIClient, cursor, prefix: str, since=None) -> i
     return count
 
 
-def sync_employees(client: LoyverseAPIClient, cursor, prefix: str, since=None) -> int:
+def sync_employees(client: LoyverseAPIClient, cursor, prefix: str, since=None, budget=None) -> int:
     rows = client.paginate("/employees", "employees", since=since)
     count = 0
     for r in rows:
+        if budget is not None and not budget.request():
+            break
         cursor.execute(f"""
             INSERT INTO `{prefix}_employees`
               (id, name, email, phone_number, role, store_id, created_at, updated_at)
@@ -141,10 +145,12 @@ def sync_employees(client: LoyverseAPIClient, cursor, prefix: str, since=None) -
     return count
 
 
-def sync_categories(client: LoyverseAPIClient, cursor, prefix: str, since=None) -> int:
+def sync_categories(client: LoyverseAPIClient, cursor, prefix: str, since=None, budget=None) -> int:
     rows = client.paginate("/categories", "categories", since=since)
     count = 0
     for r in rows:
+        if budget is not None and not budget.request():
+            break
         cursor.execute(f"""
             INSERT INTO `{prefix}_categories` (id, name, color)
             VALUES (%s,%s,%s)
@@ -154,10 +160,12 @@ def sync_categories(client: LoyverseAPIClient, cursor, prefix: str, since=None) 
     return count
 
 
-def sync_products(client: LoyverseAPIClient, cursor, prefix: str, since=None) -> int:
+def sync_products(client: LoyverseAPIClient, cursor, prefix: str, since=None, budget=None) -> int:
     rows = client.paginate("/items", "items", since=since)
     count = 0
     for r in rows:
+        if budget is not None and not budget.request():
+            break
         cursor.execute(f"""
             INSERT INTO `{prefix}_products`
               (id, handle, item_name, description, category_id,
@@ -197,10 +205,12 @@ def sync_products(client: LoyverseAPIClient, cursor, prefix: str, since=None) ->
     return count
 
 
-def sync_customers(client: LoyverseAPIClient, cursor, prefix: str, since=None) -> int:
+def sync_customers(client: LoyverseAPIClient, cursor, prefix: str, since=None, budget=None) -> int:
     rows = client.paginate("/customers", "customers", since=since)
     count = 0
     for r in rows:
+        if budget is not None and not budget.request():
+            break
         cursor.execute(f"""
             INSERT INTO `{prefix}_customers`
               (id, name, email, phone_number, address, city, region,
@@ -226,13 +236,15 @@ def sync_customers(client: LoyverseAPIClient, cursor, prefix: str, since=None) -
     return count
 
 
-def sync_receipts(client: LoyverseAPIClient, cursor, prefix: str, since=None) -> int:
+def sync_receipts(client: LoyverseAPIClient, cursor, prefix: str, since=None, budget=None) -> int:
     params = {}
     if since:
         params["updated_at_min"] = since.strftime("%Y-%m-%dT%H:%M:%SZ")
     rows = client.paginate("/receipts", "receipts", params=params)
     inserted = 0
     for r in rows:
+        if budget is not None and not budget.request():
+            break
         cursor.execute(f"""
             INSERT INTO `{prefix}_receipts`
               (receipt_number, receipt_date, order_type, store_id, cashier_id,

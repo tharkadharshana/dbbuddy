@@ -262,7 +262,7 @@ def _lookup_table(cursor, table: str, id_col: str, name_col: str) -> Dict[str, s
 # ── Sync functions ────────────────────────────────────────────────────────────
 
 def sync_shops(client: SalesPlayAPIClient, cursor, prefix: str,
-               since: Optional[datetime] = None) -> int:
+               since: Optional[datetime] = None, budget=None) -> int:
     """
     GET /shops
     Filters : shop_ids, updated_at_min, updated_at_max, limit, cursor
@@ -279,6 +279,8 @@ def sync_shops(client: SalesPlayAPIClient, cursor, prefix: str,
 
     count = 0
     for s in shops:
+        if budget is not None and not budget.request():
+            break
         sid = _str(s.get("id"), 64)
         if not sid:
             continue
@@ -315,7 +317,7 @@ def sync_shops(client: SalesPlayAPIClient, cursor, prefix: str,
 
 
 def sync_categories(client: SalesPlayAPIClient, cursor, prefix: str,
-                    since: Optional[datetime] = None) -> int:
+                    since: Optional[datetime] = None, budget=None) -> int:
     """
     GET /category  (singular endpoint, plural response key)
     Filters : category_ids, created_at_min, created_at_max, limit, cursor
@@ -329,6 +331,8 @@ def sync_categories(client: SalesPlayAPIClient, cursor, prefix: str,
 
     count = 0
     for c in items:
+        if budget is not None and not budget.request():
+            break
         cid = _str(c.get("id"), 64)
         if not cid:
             continue
@@ -444,7 +448,7 @@ def sync_taxes(client: SalesPlayAPIClient, cursor, prefix: str,
 
 
 def sync_payment_types(client: SalesPlayAPIClient, cursor, prefix: str,
-                       since: Optional[datetime] = None) -> int:
+                       since: Optional[datetime] = None, budget=None) -> int:
     """
     GET /payment_types
     Filters : payment_type_ids, created_at_min, created_at_max,
@@ -463,6 +467,8 @@ def sync_payment_types(client: SalesPlayAPIClient, cursor, prefix: str,
         ptid = _str(pt.get("id"), 64)
         if not ptid:
             continue
+        if budget is not None and not budget.request():
+            break
         cursor.execute(f"""
             INSERT INTO `{prefix}payment_types`
                 (id, payment_name, payment_type, is_active, shop_id,
@@ -488,7 +494,7 @@ def sync_payment_types(client: SalesPlayAPIClient, cursor, prefix: str,
 
 
 def sync_customers(client: SalesPlayAPIClient, cursor, prefix: str,
-                   since: Optional[datetime] = None) -> int:
+                   since: Optional[datetime] = None, budget=None) -> int:
     """
     GET /customers
     Filters : customer_ids, email, created_at_min, created_at_max, limit, cursor
@@ -506,6 +512,8 @@ def sync_customers(client: SalesPlayAPIClient, cursor, prefix: str,
 
     count = 0
     for c in items:
+        if budget is not None and not budget.request():
+            break
         cid = _str(c.get("id"), 64)
         if not cid:
             continue
@@ -549,7 +557,7 @@ def sync_customers(client: SalesPlayAPIClient, cursor, prefix: str,
 
 
 def sync_products(client: SalesPlayAPIClient, cursor, prefix: str,
-                  since: Optional[datetime] = None) -> int:
+                  since: Optional[datetime] = None, budget=None) -> int:
     """
     GET /products
     Filters : product_ids, created_at_min, created_at_max, limit, cursor
@@ -566,6 +574,8 @@ def sync_products(client: SalesPlayAPIClient, cursor, prefix: str,
 
     count = 0
     for p in items:
+        if budget is not None and not budget.request():
+            break
         pid = _str(p.get("id"), 64)
         if not pid:
             continue
@@ -623,7 +633,7 @@ def sync_products(client: SalesPlayAPIClient, cursor, prefix: str,
 
 
 def sync_receipts(client: SalesPlayAPIClient, cursor, prefix: str,
-                  since: Optional[datetime] = None) -> int:
+                  since: Optional[datetime] = None, budget=None) -> int:
     """
     GET /receipts
     Filters : receipt_numbers, shop_id, created_at_min, created_at_max, limit, cursor
@@ -665,6 +675,8 @@ def sync_receipts(client: SalesPlayAPIClient, cursor, prefix: str,
     line_count    = 0
 
     for r in receipts:
+        if budget is not None and not budget.request():
+            break
         r_id = _str(r.get("receipt_number"), 64)   # receipt_number IS the PK
         if not r_id:
             continue
