@@ -358,8 +358,8 @@ export default function BillingPage({ onSubChange }) {
                 <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
                   <thead>
                     <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--bg3)' }}>
-                      {['Date', 'Operation', 'Tokens', 'AI Tokens', 'Rows'].map(h => (
-                        <th key={h} style={{ textAlign: ['Tokens', 'AI Tokens', 'Rows'].includes(h) ? 'right' : 'left', padding: '8px 14px', fontWeight: 600, color: 'var(--text2)' }}>{h}</th>
+                      {['Date', 'Operation', 'Tokens'].map(h => (
+                        <th key={h} style={{ textAlign: h === 'Tokens' ? 'right' : 'left', padding: '8px 14px', fontWeight: 600, color: 'var(--text2)' }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
@@ -368,9 +368,7 @@ export default function BillingPage({ onSubChange }) {
                       <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
                         <td style={{ padding: '10px 14px', color: 'var(--text3)', fontFamily: 'var(--mono)', fontSize: 11 }}>{item.created_at}</td>
                         <td style={{ padding: '10px 14px', fontWeight: 500 }}>{OP_LABELS[item.operation_type] || item.operation_type}</td>
-                        <td style={{ padding: '10px 14px', textAlign: 'right', fontFamily: 'var(--mono)', color: 'var(--blue)', fontWeight: 600 }}>{Number(item.tokens || 0).toFixed(4)}</td>
-                        <td style={{ padding: '10px 14px', textAlign: 'right', fontFamily: 'var(--mono)', color: 'var(--text3)' }}>{(item.llm_tokens || 0).toLocaleString()}</td>
-                        <td style={{ padding: '10px 14px', textAlign: 'right', fontFamily: 'var(--mono)', color: 'var(--text3)' }}>{(item.rows_charged || 0).toLocaleString()}</td>
+                        <td style={{ padding: '10px 14px', textAlign: 'right', fontFamily: 'var(--mono)', color: 'var(--blue)', fontWeight: 600 }}>{Number(item.tokens || 0).toFixed(2)}</td>
                       </tr>
                     ))}
                   </tbody>

@@ -40,9 +40,9 @@ function StatusBox({ ok, message }) {
 const TOTAL_STEPS = 4
 
 const PLAN_HIGHLIGHTS = {
-  Starter: { credits: '300 AI Credits', rows: '500K DB Rows', price: '$9' },
-  Growth:  { credits: '750 AI Credits', rows: '2M DB Rows',   price: '$29' },
-  Pro:     { credits: '2,000 AI Credits', rows: '10M DB Rows', price: '$79' },
+  Starter: { tokens: '500 Tokens / mo',    price: '$5' },
+  Growth:  { tokens: '1,500 Tokens / mo',  price: '$10' },
+  Pro:     { tokens: '10,000 Tokens / mo', price: '$25' },
 }
 
 export default function OnboardingWizard({ onComplete, theme, setTheme }) {
@@ -621,7 +621,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
                   }}>
                     <div style={{ flex:1 }}>
                       <div style={{ fontWeight:700, fontSize:14, marginBottom:2 }}>{plan.name}</div>
-                      <div style={{ fontSize:12, color:'var(--text3)' }}>{h.credits} · {h.rows}</div>
+                      <div style={{ fontSize:12, color:'var(--text3)' }}>{h.tokens}</div>
                     </div>
                     <div style={{ fontWeight:800, fontSize:16, color:'var(--text)', minWidth:36, textAlign:'right' }}>{h.price}<span style={{ fontSize:11, fontWeight:400, color:'var(--text3)' }}>/mo</span></div>
                     <button
