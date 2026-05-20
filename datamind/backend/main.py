@@ -86,6 +86,25 @@ app.add_middleware(
 
 app.include_router(embed_router)
 
+# SEC-08: standard error envelope — all 4xx/5xx responses use {"ok": false, "error": "..."}
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request, exc):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"ok": False, "error": exc.detail},
+    )
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc):
+    return JSONResponse(
+        status_code=422,
+        content={"ok": False, "error": "Invalid request parameters.", "details": str(exc)},
+    )
+
+
 @app.on_event("startup")
 def startup_event():
     # Initialise connection pool first — all bootstraps below depend on DB access
