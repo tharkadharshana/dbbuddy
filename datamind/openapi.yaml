@@ -1,24 +1,26 @@
 openapi: 3.0.3
 info:
-  title: DataMind AI — Partner API v1
+  title: DataMind AI API
   version: "1.0"
   description: |
-    Server-to-server API for embed partners. Authenticate every request with
-    `X-API-Key: <partner_key>` and supply `user_email` to identify the end-user.
+    ## URL structure
 
-    **Access:** Pro plan only. Partners on Starter or Growth will receive `402`.
+    | Prefix | Who uses it | Auth |
+    |---|---|---|
+    | `/v1/*` | End-users (React app / mobile) | `Authorization: Bearer <jwt>` |
+    | `/v1/partner/*` | Partner backends (server-to-server) | `X-API-Key: <partner_key>` |
+    | `/embed/*` | Iframe embed flow | `pk` query param |
+    | `/health` | Load balancers / uptime monitors | None |
 
-    **Base URL:** `https://api.datamind.ai`
+    This spec documents the **Partner API** (`/v1/partner/*`).
+    The full user API is visible at `/docs` when the server is running.
 
-    **Interactive docs:** `GET /docs` (Swagger UI) · `GET /redoc` (ReDoc)
+    **Partner API access:** Pro plan only. Starter or Growth users receive `402`.
 
   x-ratelimit-note: |
-    All endpoints enforce per-IP rate limits configurable via `.env`.
-    When a limit is exceeded the server returns **429 Too Many Requests**.
-    Every response includes:
-      - `X-Request-ID` — UUID for tracing (echo the header from your request to correlate logs)
-    Every 429 response includes:
-      - `Retry-After` — seconds until the window resets
+    Rate limits are per-key (Partner API) or per-IP (User API), configurable via .env.
+    Exceeded limits return 429. Every response includes X-Request-ID for tracing.
+    Every 429 includes Retry-After (seconds until window resets).
 
 servers:
   - url: https://api.datamind.ai
@@ -116,7 +118,7 @@ components:
 
 paths:
 
-  /v1/integrations:
+  /v1/partner/integrations:
     get:
       operationId: listIntegrations
       summary: List user integrations
@@ -142,7 +144,7 @@ paths:
         "422": { $ref: '#/components/responses/ValidationError' }
         "429": { $ref: '#/components/responses/RateLimited' }
 
-  /v1/sync/{provider}:
+  /v1/partner/sync/{provider}:
     post:
       operationId: triggerSync
       summary: Trigger a manual sync
@@ -180,7 +182,7 @@ paths:
         "404": { $ref: '#/components/responses/NotFound' }
         "429": { $ref: '#/components/responses/RateLimited' }
 
-  /v1/records/{provider}/{record_type}:
+  /v1/partner/records/{provider}/{record_type}:
     get:
       operationId: getRecords
       summary: Fetch synced records
@@ -237,7 +239,7 @@ paths:
         "422": { $ref: '#/components/responses/ValidationError' }
         "429": { $ref: '#/components/responses/RateLimited' }
 
-  /v1/analytics/{template_id}:
+  /v1/partner/analytics/{template_id}:
     get:
       operationId: runAnalytics
       summary: Run an analytics template
@@ -276,7 +278,7 @@ paths:
         "404": { $ref: '#/components/responses/NotFound' }
         "429": { $ref: '#/components/responses/RateLimited' }
 
-  /v1/usage:
+  /v1/partner/usage:
     get:
       operationId: getUsage
       summary: Get token usage
