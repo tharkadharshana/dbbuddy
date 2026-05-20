@@ -171,7 +171,7 @@ def embed_validate_token(request: Request, req: EmbedValidateTokenRequest):
         return {"ok": result.ok, "error": result.error, "details": result.details}
     except Exception as e:
         log.warning("Embed: provider token validation failed", error=str(e))
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": "Token validation failed. Check your API key and try again."}
 
 
 class EmbedInitRequest(BaseModel):
@@ -240,10 +240,11 @@ def embed_init(request: Request, req: EmbedInitRequest):
         log.info("Embed: provider connected",
                  email=req.email, provider=partner["provider_id"])
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        log.warning("Embed: provider connect validation error", email=req.email, error=str(e))
+        raise HTTPException(status_code=422, detail="Invalid credentials or account details.")
     except Exception as e:
         log.error("Embed: provider connect failed", email=req.email, error=str(e))
-        raise HTTPException(status_code=500, detail=f"Failed to connect: {e}")
+        raise HTTPException(status_code=500, detail="Failed to connect provider. Please try again.")
 
     # 5. Return JWT
     token = create_token(req.email.strip().lower())
