@@ -694,45 +694,45 @@ def _run_sync_inner(integration_id: int, user_email: str, provider_id: str,
                     sync_type: str, progress_callback=None):
     """Inner sync logic — separated so _run_sync can guarantee cleanup."""
     conn = _get_internal_conn()
-    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor = conn.cursor(dictionary=True)
 
-    # Mark as syncing
-    cursor.execute(
-        "UPDATE user_integrations SET status='syncing' WHERE id=%s",
-        (integration_id,)
-    )
-    # Create sync log entry
-    cursor.execute(
-        "INSERT INTO sync_logs (integration_id, sync_type, started_at, status) "
-        "VALUES (%s,%s,NOW(),'running')",
-        (integration_id, sync_type)
-    )
-    conn.commit()
-    log_id = cursor.lastrowid
+        # Mark as syncing
+        cursor.execute(
+            "UPDATE user_integrations SET status='syncing' WHERE id=%s",
+            (integration_id,)
+        )
+        # Create sync log entry
+        cursor.execute(
+            "INSERT INTO sync_logs (integration_id, sync_type, started_at, status) "
+            "VALUES (%s,%s,NOW(),'running')",
+            (integration_id, sync_type)
+        )
+        conn.commit()
+        log_id = cursor.lastrowid
 
-    # Get credentials + table prefix
-    cursor.execute(
-        "SELECT credentials_enc, table_prefix, last_sync_at FROM user_integrations WHERE id=%s",
-        (integration_id,)
-    )
-    row = cursor.fetchone()
-    creds = _decrypt(row["credentials_enc"])
-    table_prefix = row["table_prefix"]
-    if sync_type == "delta" and row["last_sync_at"]:
-        since = row["last_sync_at"]          # delta: continue from last sync
-    else:
-        # Full sync: limit to plan's data-history window so we don't import
-        # years of data for users on restricted plans.
-        try:
-            from billing import get_plan_history_limit
-            history = get_plan_history_limit(user_email)
-            since = datetime.combine(history["cutoff_date"], datetime.min.time())
-            log.info("Full sync history cutoff applied",
-                     user=user_email, months=history["months"], since=str(since))
-        except Exception as _he:
-            log.warning("Could not get plan history limit — syncing all data", error=str(_he))
-            since = None
-    conn.close()
+        # Get credentials + table prefix
+        cursor.execute(
+            "SELECT credentials_enc, table_prefix, last_sync_at FROM user_integrations WHERE id=%s",
+            (integration_id,)
+        )
+        row = cursor.fetchone()
+        creds = _decrypt(row["credentials_enc"])
+        table_prefix = row["table_prefix"]
+        if sync_type == "delta" and row["last_sync_at"]:
+            since = row["last_sync_at"]
+        else:
+            try:
+                from billing import get_plan_history_limit
+                history = get_plan_history_limit(user_email)
+                since = datetime.combine(history["cutoff_date"], datetime.min.time())
+                log.info("Full sync history cutoff applied",
+                         user=user_email, months=history["months"], since=str(since))
+            except Exception as _he:
+                log.warning("Could not get plan history limit — syncing all data", error=str(_he))
+                since = None
+    finally:
+        conn.close()
 
     provider = get_provider(provider_id)
     log.info("Sync worker starting", user=user_email, provider=provider_id,
@@ -809,28 +809,30 @@ def _run_sync_inner(integration_id: int, user_email: str, provider_id: str,
     error_msg = limit_msg or result.error or None
 
     conn2 = _get_internal_conn()
-    c2 = conn2.cursor()
-    c2.execute("""
-        UPDATE sync_logs SET
-          finished_at=NOW(), status=%s,
-          rows_fetched=%s, rows_inserted=%s, rows_updated=%s,
-          error_message=%s
-        WHERE id=%s
-    """, (status, result.rows_fetched, result.rows_inserted,
-          result.rows_updated, error_msg, log_id))
-    c2.execute("""
-        UPDATE user_integrations SET
-          status=%s, last_sync_at=IF(%s='success', NOW(), last_sync_at),
-          last_sync_rows=%s, last_error=%s
-        WHERE id=%s
-    """, (
-        "active" if result.ok else "error",
-        status, result.rows_inserted,
-        error_msg,
-        integration_id,
-    ))
-    conn2.commit()
-    conn2.close()
+    try:
+        c2 = conn2.cursor()
+        c2.execute("""
+            UPDATE sync_logs SET
+              finished_at=NOW(), status=%s,
+              rows_fetched=%s, rows_inserted=%s, rows_updated=%s,
+              error_message=%s
+            WHERE id=%s
+        """, (status, result.rows_fetched, result.rows_inserted,
+              result.rows_updated, error_msg, log_id))
+        c2.execute("""
+            UPDATE user_integrations SET
+              status=%s, last_sync_at=IF(%s='success', NOW(), last_sync_at),
+              last_sync_rows=%s, last_error=%s
+            WHERE id=%s
+        """, (
+            "active" if result.ok else "error",
+            status, result.rows_inserted,
+            error_msg,
+            integration_id,
+        ))
+        conn2.commit()
+    finally:
+        conn2.close()
 
     log.info("Sync worker finished", user=user_email, provider=provider_id,
              status=status, rows=result.rows_fetched)
