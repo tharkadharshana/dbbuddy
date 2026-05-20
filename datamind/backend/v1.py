@@ -43,7 +43,7 @@ from billing import (
 
 log = get_logger(__name__)
 
-router = APIRouter(prefix="/v1", tags=["Partner API v1"])
+router = APIRouter(prefix="/v1/partner", tags=["Partner API v1"])
 
 # ── Analytics op → billing op type mapping ────────────────────────────────────
 _ANALYTICS_OP = {
