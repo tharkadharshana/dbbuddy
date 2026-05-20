@@ -69,6 +69,24 @@ from auth import (
 
 app = FastAPI(title="DataMind AI", version="3.0.0")
 
+# SEC-10: rate limiting — honours X-Forwarded-For so it works behind nginx/ALB
+from slowapi import Limiter
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+
+def _rate_limit_key(request: Request) -> str:
+    forwarded = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+    return forwarded or (request.client.host if request.client else "unknown")
+
+_limiter = Limiter(key_func=_rate_limit_key)
+app.state.limiter = _limiter
+
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(status_code=429, content={"ok": False, "error": "Too many requests. Please slow down."})
+
+app.add_middleware(SlowAPIMiddleware)
+
 # CORS — allow all origins in dev; lock down to registered embed origins in prod
 # Set EMBED_ALLOWED_ORIGINS=https://app.salesplay.io,... in production .env
 _embed_origins_raw = os.getenv("EMBED_ALLOWED_ORIGINS", "")
@@ -479,7 +497,8 @@ class LoginRequest(BaseModel):
 
 
 @app.post("/auth/register")
-def register(req: RegisterRequest):
+@_limiter.limit("5/minute")
+def register(request: Request, req: RegisterRequest):
     log.info("Register attempt", email=req.email)
     user = create_user(req.name, req.email, req.password)
     token = create_token(req.email)
@@ -492,7 +511,8 @@ def register(req: RegisterRequest):
 
 
 @app.post("/auth/login")
-def login(req: LoginRequest):
+@_limiter.limit("10/minute")
+def login(request: Request, req: LoginRequest):
     log.info("Login attempt", email=req.email)
     user = authenticate_user(req.email, req.password)
     token = create_token(req.email)
