@@ -166,6 +166,30 @@ def _guard_sql(sql: str):
         )
 
 
+# SEC-06: encrypt DB passwords at rest using same Fernet key as integrations
+def _get_pw_fernet():
+    from cryptography.fernet import Fernet
+    import base64, hashlib
+    raw = os.getenv("ENCRYPTION_KEY") or os.getenv("SECRET_KEY", "fallback-key")
+    key = base64.urlsafe_b64encode(hashlib.sha256(raw.encode()).digest())
+    return Fernet(key)
+
+def _encrypt_db_password(pw: str) -> str:
+    if not pw:
+        return pw
+    return _get_pw_fernet().encrypt(pw.encode()).decode()
+
+def _decrypt_db_password(token: str) -> str:
+    """Decrypt a password token. Falls back to original value for plaintext migration."""
+    if not token:
+        return token
+    try:
+        return _get_pw_fernet().decrypt(token.encode()).decode()
+    except Exception:
+        # Plaintext password (pre-encryption migration) — return as-is
+        return token
+
+
 def _resolve_db(user: dict) -> dict:
     """
     Return the active DB config from user settings.
@@ -176,7 +200,9 @@ def _resolve_db(user: dict) -> dict:
     configs = s.get("db_configs", [])
     idx = int(s.get("active_db_index", 0))
     if configs and 0 <= idx < len(configs):
-        cfg = configs[idx]
+        cfg = dict(configs[idx])
+        if cfg.get("password"):
+            cfg["password"] = _decrypt_db_password(cfg["password"])  # SEC-06
         log.debug("Using user DB config",
                   user=user.get("email"), config_name=cfg.get("name"),
                   host=cfg.get("host"), database=cfg.get("database"))
@@ -536,7 +562,8 @@ def onboarding_connect_db(req: OnboardingDBRequest,
     configs = s.get("db_configs", [])
     db_dict = {
         "name": req.name, "host": req.host, "port": req.port,
-        "database": req.database, "user": req.user, "password": req.password,
+        "database": req.database, "user": req.user,
+        "password": _encrypt_db_password(req.password),  # SEC-06
     }
     configs.append(db_dict)
     new_idx = len(configs) - 1
@@ -555,7 +582,9 @@ def onboarding_connect_db(req: OnboardingDBRequest,
 
     log.info("Onboarding: triggering background cache build",
              user=user["email"], llm=llm)
-    background_tasks.add_task(_background_build, user["email"], db_dict, llm, api_key)
+    # Pass plaintext config for cache build (encrypted version already persisted above)
+    plaintext_dict = {**db_dict, "password": req.password}
+    background_tasks.add_task(_background_build, user["email"], plaintext_dict, llm, api_key)
     return {"ok": True, "building_cache": True, "db_index": new_idx}
 
 
@@ -606,12 +635,15 @@ def add_db_config(cfg: DBConfig, background_tasks: BackgroundTasks,
     log.info("Add DB config", user=user["email"], db_name=cfg.name, host=cfg.host)
     s = get_user_settings(user["email"])
     configs = s.get("db_configs", [])
-    configs.append(cfg.dict())
+    cfg_dict = cfg.dict()
+    cfg_dict["password"] = _encrypt_db_password(cfg_dict["password"])  # SEC-06
+    configs.append(cfg_dict)
     new_idx = len(configs) - 1
     update_user_settings(user["email"], {"db_configs": configs, "active_db_index": new_idx})
     llm = _get_llm(user)
     try:
         api_key = _resolve_api_key(user, llm)
+        # Pass plaintext config for cache build (encrypted version already persisted above)
         background_tasks.add_task(_background_build, user["email"], cfg.dict(), llm, api_key)
         return {"ok": True, "building_cache": True}
     except HTTPException:
@@ -628,11 +660,14 @@ def update_db_config(index: int, cfg: DBConfig,
     if index < 0 or index >= len(configs):
         raise HTTPException(status_code=404, detail="Index out of range")
     invalidate_cache(user["email"], configs[index])
-    configs[index] = cfg.dict()
+    cfg_dict = cfg.dict()
+    cfg_dict["password"] = _encrypt_db_password(cfg_dict["password"])  # SEC-06
+    configs[index] = cfg_dict
     update_user_settings(user["email"], {"db_configs": configs})
     llm = _get_llm(user)
     try:
         api_key = _resolve_api_key(user, llm)
+        # Pass plaintext config for cache build (encrypted version already persisted above)
         background_tasks.add_task(_background_build, user["email"], cfg.dict(), llm, api_key)
     except HTTPException:
         pass
@@ -660,7 +695,9 @@ def activate_db(index: int, background_tasks: BackgroundTasks,
     if index < 0 or index >= len(configs):
         raise HTTPException(status_code=404, detail="Index out of range")
     update_user_settings(user["email"], {"active_db_index": index})
-    db_config = configs[index]
+    db_config = dict(configs[index])
+    if db_config.get("password"):
+        db_config["password"] = _decrypt_db_password(db_config["password"])  # SEC-06
     if not get_cache(user["email"], db_config):
         llm = _get_llm(user)
         try:
