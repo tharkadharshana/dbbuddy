@@ -22,7 +22,7 @@ from typing import Optional
 
 import mysql.connector
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from logger import get_logger
 from auth import create_user, authenticate_user, create_token
@@ -95,7 +95,7 @@ def _get_partner(partner_key: str) -> Optional[dict]:
 def get_embed_context(pk: str):
     """
     Called by the iframe on load to validate the partner key.
-    Returns partner name, provider_id, and optional branding config.
+    Returns partner name, provider_id, branding config, and allowed origins.
     Returns 404 if key is invalid or inactive — iframe shows an error screen.
     """
     partner = _get_partner(pk)
@@ -109,12 +109,17 @@ def get_embed_context(pk: str):
         except Exception:
             branding = {}
 
+    # Parse comma-separated origins for use in postMessage security checks
+    raw_origins = partner.get("allowed_origins", "")
+    allowed_origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
+
     log.info("Embed context requested", partner=partner["partner_name"])
     return {
-        "partner_name": partner["partner_name"],
-        "provider_id":  partner["provider_id"],
-        "partner_key":  pk,
-        "branding":     branding,
+        "partner_name":    partner["partner_name"],
+        "provider_id":     partner["provider_id"],
+        "partner_key":     pk,
+        "branding":        branding,
+        "allowed_origins": allowed_origins,
     }
 
 
@@ -124,12 +129,17 @@ class EmbedValidateTokenRequest(BaseModel):
 
 
 @router.post("/validate-token")
-def embed_validate_token(req: EmbedValidateTokenRequest):
+def embed_validate_token(request: Request, req: EmbedValidateTokenRequest):
     """
     Validate a provider API token without requiring a DataMind account.
     Called in Step 0 of the onboarding wizard — before the user has created
     an account or received a JWT. The partner_key acts as the only gate.
+    Rate-limited to prevent brute-forcing provider tokens and abusing the
+    external provider API at our cost.
     """
+    client_ip = request.client.host if request.client else "unknown"
+    _check_rate(client_ip)
+
     partner = _get_partner(req.partner_key)
     if not partner:
         raise HTTPException(status_code=404, detail="Invalid partner key.")
@@ -148,10 +158,10 @@ def embed_validate_token(req: EmbedValidateTokenRequest):
 
 class EmbedInitRequest(BaseModel):
     partner_key: str
-    api_token:   str   # Salesplay API token
-    name:        str   # Full name for DataMind account
+    api_token:   str              # Salesplay API token
+    name:        str              # Full name for DataMind account
     email:       str
-    password:    str
+    password:    str = Field(min_length=8)
 
 
 @router.post("/init")

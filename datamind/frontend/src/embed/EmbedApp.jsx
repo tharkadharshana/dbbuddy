@@ -15,9 +15,26 @@ import EmbedOnboarding from './EmbedOnboarding'
 import EmbedChat from './EmbedChat'
 
 // ── postMessage helper ────────────────────────────────────────────────────────
+// Populated once /embed/context loads; used to validate incoming messages and
+// scope outgoing ones. '*' is only used before context is available.
+let _allowedOrigins = []
+
+export function setAllowedOrigins(origins) {
+  _allowedOrigins = Array.isArray(origins) ? origins : []
+}
+
 export function notifyParent(type, payload = {}) {
   try {
-    window.parent.postMessage({ type, ...payload }, '*')
+    const msg = { type, ...payload }
+    if (_allowedOrigins.length > 0) {
+      // Send only to known-good origins
+      _allowedOrigins.forEach(origin => {
+        try { window.parent.postMessage(msg, origin) } catch { /* cross-origin block */ }
+      })
+    } else {
+      // Context not yet loaded (e.g. dm:ready itself) — use '*' for this one call only
+      window.parent.postMessage(msg, '*')
+    }
   } catch {
     // No parent frame — running standalone, ignore
   }
@@ -44,6 +61,8 @@ function EmbedApp() {
     embedValidateContext(partnerKey)
       .then(ctx => {
         setContext(ctx)
+        // Register allowed origins for all subsequent postMessage calls
+        setAllowedOrigins(ctx.allowed_origins || [])
         notifyParent('dm:ready', { partner_name: ctx.partner_name })
 
         if (existingToken) {
@@ -60,8 +79,10 @@ function EmbedApp() {
         setState('error')
       })
 
-    // Listen for incoming commands from the parent window
+    // Listen for incoming commands from the parent window.
+    // Only accept messages from origins registered for this partner key.
     function handleIncoming(event) {
+      if (_allowedOrigins.length > 0 && !_allowedOrigins.includes(event.origin)) return
       if (event.data?.type === 'dm:logout') handleLogout()
     }
     window.addEventListener('message', handleIncoming)
