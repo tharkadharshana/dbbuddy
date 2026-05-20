@@ -51,6 +51,7 @@ from billing import (
     calculate_tokens, charge_tokens, get_token_usage_history,
     check_plan_feature, get_plan_history_limit,
 )
+from embed import router as embed_router, bootstrap_embed_tables
 
 log = get_logger(__name__)
 
@@ -66,13 +67,25 @@ from auth import (
 )
 
 app = FastAPI(title="DataMind AI", version="3.0.0")
+
+# CORS — allow all origins in dev; lock down to registered embed origins in prod
+# Set EMBED_ALLOWED_ORIGINS=https://app.salesplay.io,... in production .env
+_embed_origins_raw = os.getenv("EMBED_ALLOWED_ORIGINS", "")
+_embed_origins = [o.strip() for o in _embed_origins_raw.split(",") if o.strip()]
+_cors_origins = (
+    ["http://localhost:5173", "http://localhost:3000"] + _embed_origins
+    if _embed_origins else ["*"]
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
 )
+
+app.include_router(embed_router)
 
 @app.on_event("startup")
 def startup_event():
@@ -88,6 +101,10 @@ def startup_event():
         bootstrap_billing_tables()
     except Exception as _be:
         log.warning("Billing bootstrap skipped", error=str(_be))
+    try:
+        bootstrap_embed_tables()
+    except Exception as _be:
+        log.warning("Embed bootstrap skipped", error=str(_be))
     start_scheduler()
     log.info("DataMind backend started")
 
@@ -270,6 +287,20 @@ async def log_requests(request: Request, call_next):
                   method=request.method, path=request.url.path,
                   error=str(e), duration_ms=round(duration, 1))
         raise
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# EMBED SECURITY HEADERS
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.middleware("http")
+async def embed_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/embed"):
+        origins = os.getenv("EMBED_ALLOWED_ORIGINS", "*")
+        response.headers["Content-Security-Policy"] = f"frame-ancestors {origins}"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
 
 
 # ══════════════════════════════════════════════════════════════════════════════
