@@ -819,14 +819,16 @@ def _run_sync_inner(integration_id: int, user_email: str, provider_id: str,
             WHERE id=%s
         """, (status, result.rows_fetched, result.rows_inserted,
               result.rows_updated, error_msg, log_id))
-        c2.execute("""
+        # Always update last_sync_at — even on failure — so the scheduler
+    # applies backoff instead of retrying on every tick.
+    c2.execute("""
             UPDATE user_integrations SET
-              status=%s, last_sync_at=IF(%s='success', NOW(), last_sync_at),
+              status=%s, last_sync_at=NOW(),
               last_sync_rows=%s, last_error=%s
             WHERE id=%s
         """, (
             "active" if result.ok else "error",
-            status, result.rows_inserted,
+            result.rows_inserted,
             error_msg,
             integration_id,
         ))
@@ -928,17 +930,22 @@ def _launch_scheduler_thread():
     threading.Thread(target=_watchdog, daemon=True, name="datamind-scheduler-watchdog").start()
 
 
+_SYNC_ERROR_BACKOFF_MULTIPLIER = 5  # failed integrations wait 5× the normal interval
+
+
 def _scheduler_tick():
-    """Check all active integrations and sync if due."""
+    """Check all active and errored integrations and sync if due."""
     conn = _get_internal_conn()
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute("""
-        SELECT ui.id, ui.user_email, ui.provider_id, ui.last_sync_at
-        FROM user_integrations ui
-        WHERE ui.status='active'
-    """)
-    rows = cursor.fetchall()
-    conn.close()
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT ui.id, ui.user_email, ui.provider_id, ui.last_sync_at, ui.status
+            FROM user_integrations ui
+            WHERE ui.status IN ('active', 'error')
+        """)
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
 
     from providers import REGISTRY
     now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -954,10 +961,15 @@ def _scheduler_tick():
         if last is None:
             continue  # not yet synced (connect flow handles first sync)
         elapsed = (now - last).total_seconds() / 60
-        if elapsed >= interval:
+        # Apply backoff multiplier for integrations in error state
+        effective_interval = (
+            interval * _SYNC_ERROR_BACKOFF_MULTIPLIER
+            if row["status"] == "error" else interval
+        )
+        if elapsed >= effective_interval:
             log.info("Scheduler triggering delta sync",
                      user=row["user_email"], provider=row["provider_id"],
-                     elapsed_minutes=round(elapsed, 1))
+                     elapsed_minutes=round(elapsed, 1), status=row["status"])
             _start_sync_thread(row["id"], row["user_email"],
                                row["provider_id"], sync_type="delta")
 
