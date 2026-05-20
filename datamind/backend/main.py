@@ -87,6 +87,26 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
 
 app.add_middleware(SlowAPIMiddleware)
 
+# SEC-14: HTTPS enforcement — only active when FORCE_HTTPS=true (production).
+# In local dev (Windows) this env var is unset so redirects never fire.
+# On Red Hat: set FORCE_HTTPS=true in the systemd environment file.
+_FORCE_HTTPS = os.getenv("FORCE_HTTPS", "").lower() == "true"
+
+if _FORCE_HTTPS:
+    from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
+    app.add_middleware(HTTPSRedirectMiddleware)
+
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    response = await call_next(request)
+    if _FORCE_HTTPS:
+        # HSTS: tell browsers to only use HTTPS for 1 year, include subdomains
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
 # CORS — allow all origins in dev; lock down to registered embed origins in prod
 # Set EMBED_ALLOWED_ORIGINS=https://app.salesplay.io,... in production .env
 _embed_origins_raw = os.getenv("EMBED_ALLOWED_ORIGINS", "")
