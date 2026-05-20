@@ -6,7 +6,7 @@
  * Step 2: Connect + sync               (POST /embed/init → polls /providers/{id}/status)
  */
 import React, { useState } from 'react'
-import { embedValidateProviderCreds, embedInit, embedLogin, embedConnectProvider, embedGetProviderStatus } from './embedApi'
+import { embedValidateToken, embedInit, embedLogin, embedConnectProvider, embedGetProviderStatus } from './embedApi'
 import { notifyParent } from './EmbedApp'
 
 // ── Shared styles ─────────────────────────────────────────────────────────────
@@ -93,10 +93,7 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete }) {
     setValidating(true)
     setTokenResult(null)
     try {
-      const r = await embedValidateProviderCreds(
-        context.provider_id,
-        { api_token: apiToken.trim() }
-      )
+      const r = await embedValidateToken(partnerKey, apiToken.trim())
       setTokenResult(r)
     } catch (e) {
       setTokenResult({ ok: false, error: e.response?.data?.detail || e.message })

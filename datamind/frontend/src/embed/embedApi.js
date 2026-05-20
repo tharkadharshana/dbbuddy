@@ -34,6 +34,11 @@ api.interceptors.response.use(
 export const embedValidateContext = (pk) =>
   api.get(`/embed/context?pk=${encodeURIComponent(pk)}`).then(r => r.data)
 
+// Public token validation — no DataMind account or JWT needed.
+// Used in Step 0 of the onboarding wizard before the user has an account.
+export const embedValidateToken = (partnerKey, apiToken) =>
+  api.post('/embed/validate-token', { partner_key: partnerKey, api_token: apiToken }).then(r => r.data)
+
 export const embedInit = (data) =>
   api.post('/embed/init', data).then(r => r.data)
 

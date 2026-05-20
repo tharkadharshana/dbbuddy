@@ -118,6 +118,34 @@ def get_embed_context(pk: str):
     }
 
 
+class EmbedValidateTokenRequest(BaseModel):
+    partner_key: str
+    api_token:   str
+
+
+@router.post("/validate-token")
+def embed_validate_token(req: EmbedValidateTokenRequest):
+    """
+    Validate a provider API token without requiring a DataMind account.
+    Called in Step 0 of the onboarding wizard — before the user has created
+    an account or received a JWT. The partner_key acts as the only gate.
+    """
+    partner = _get_partner(req.partner_key)
+    if not partner:
+        raise HTTPException(status_code=404, detail="Invalid partner key.")
+
+    from providers import get_provider
+    try:
+        provider = get_provider(partner["provider_id"])
+        result = provider.validate_credentials({"api_token": req.api_token.strip()})
+        log.info("Embed: provider token validated",
+                 partner=partner["partner_name"], ok=result.ok)
+        return {"ok": result.ok, "error": result.error, "details": result.details}
+    except Exception as e:
+        log.warning("Embed: provider token validation failed", error=str(e))
+        return {"ok": False, "error": str(e)}
+
+
 class EmbedInitRequest(BaseModel):
     partner_key: str
     api_token:   str   # Salesplay API token
