@@ -13,7 +13,7 @@ import os
 import decimal
 import datetime
 import traceback
-from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Request
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -52,7 +52,7 @@ from billing import (
     check_plan_feature, get_plan_history_limit,
 )
 from embed import router as embed_router, bootstrap_embed_tables
-from v1 import router as v1_router
+from v1 import router as partner_router
 from pool import get_pool
 
 log = get_logger(__name__)
@@ -136,8 +136,10 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "X-Requested-With", "X-API-Key"],
 )
 
-app.include_router(embed_router)
-app.include_router(v1_router)
+app.include_router(embed_router)   # /embed/* — kept unversioned (live in partner iframes)
+app.include_router(partner_router)  # /v1/partner/* — Partner API
+# All user-facing routes are registered on this router and included under /v1
+v1 = APIRouter(prefix="/v1", tags=["v1"])
 
 # SEC-08: standard error envelope — all 4xx/5xx responses use {"ok": false, "error": "..."}
 from fastapi.exceptions import RequestValidationError
@@ -512,7 +514,7 @@ def _background_build(email: str, db_config: dict, llm: str, api_key: str):
 # HEALTH
 # ══════════════════════════════════════════════════════════════════════════════
 
-@app.get("/health")
+@app.get("/health")  # kept at root — load balancers and monitoring expect /health not /v1/health
 @_limiter.limit(RL_READ)
 def health(request: Request):
     log.debug("Health check")
@@ -520,7 +522,7 @@ def health(request: Request):
 
 
 
-@app.get("/llm/models")
+@v1.get("/llm/models")
 @_limiter.limit(RL_READ)
 def llm_models(request: Request, user: dict = Depends(current_user)):
     """Return all Gemini models available for this API key. Useful for debugging."""
@@ -544,7 +546,7 @@ class LoginRequest(BaseModel):
     password: str
 
 
-@app.post("/auth/register")
+@v1.post("/auth/register")
 @_limiter.limit(RL_AUTH)
 def register(request: Request, req: RegisterRequest):
     log.info("Register attempt", email=req.email)
@@ -558,7 +560,7 @@ def register(request: Request, req: RegisterRequest):
     return {"token": token, "user": {"name": user["name"], "email": user["email"]}}
 
 
-@app.post("/auth/login")
+@v1.post("/auth/login")
 @_limiter.limit(RL_AUTH_LOGIN)
 def login(request: Request, req: LoginRequest):
     log.info("Login attempt", email=req.email)
@@ -568,7 +570,7 @@ def login(request: Request, req: LoginRequest):
     return {"token": token, "user": {"name": user["name"], "email": user["email"]}}
 
 
-@app.get("/auth/me")
+@v1.get("/auth/me")
 @_limiter.limit(RL_READ)
 def me(request: Request, user: dict = Depends(current_user)):
     return {"name": user["name"], "email": user["email"]}
@@ -592,7 +594,7 @@ class OnboardingDBRequest(BaseModel):
     llm: str = "gemini"   # which LLM to use for the cache build
 
 
-@app.post("/onboarding/validate-key")
+@v1.post("/onboarding/validate-key")
 @_limiter.limit(RL_WRITE)
 def onboarding_validate_key(request: Request, req: ValidateKeyRequest,
                              user: dict = Depends(current_user)):
@@ -612,7 +614,7 @@ def onboarding_validate_key(request: Request, req: ValidateKeyRequest,
     return result
 
 
-@app.post("/onboarding/test-db")
+@v1.post("/onboarding/test-db")
 @_limiter.limit(RL_WRITE)
 def onboarding_test_db(request: Request, req: OnboardingDBRequest,
                        user: dict = Depends(current_user)):
@@ -636,7 +638,7 @@ def onboarding_test_db(request: Request, req: OnboardingDBRequest,
         return {"ok": False, "error": "Failed to connect. Check your credentials and try again."}
 
 
-@app.post("/onboarding/connect-db")
+@v1.post("/onboarding/connect-db")
 @_limiter.limit(RL_WRITE)
 def onboarding_connect_db(request: Request, req: OnboardingDBRequest,
                            background_tasks: BackgroundTasks,
@@ -697,7 +699,7 @@ class DBConfig(BaseModel):
     password: str
 
 
-@app.get("/settings")
+@v1.get("/settings")
 @_limiter.limit(RL_READ)
 def get_settings(request: Request, user: dict = Depends(current_user)):
     log.debug("Get settings", user=user["email"])
@@ -711,7 +713,7 @@ def get_settings(request: Request, user: dict = Depends(current_user)):
     return {**s, "db_configs": safe_configs}
 
 
-@app.patch("/settings")
+@v1.patch("/settings")
 @_limiter.limit(RL_WRITE)
 def patch_settings(request: Request, req: SettingsPatch, user: dict = Depends(current_user)):
     patch = {k: v for k, v in req.dict().items() if v is not None}
@@ -720,7 +722,7 @@ def patch_settings(request: Request, req: SettingsPatch, user: dict = Depends(cu
     return {"ok": True}
 
 
-@app.post("/settings/db")
+@v1.post("/settings/db")
 @_limiter.limit(RL_WRITE)
 def add_db_config(request: Request, cfg: DBConfig, background_tasks: BackgroundTasks,
                   user: dict = Depends(current_user)):
@@ -743,7 +745,7 @@ def add_db_config(request: Request, cfg: DBConfig, background_tasks: BackgroundT
         return {"ok": True, "building_cache": False, "warning": "Add an API key in Settings to build the analytics cache."}
 
 
-@app.put("/settings/db/{index}")
+@v1.put("/settings/db/{index}")
 @_limiter.limit(RL_WRITE)
 def update_db_config(request: Request, index: int, cfg: DBConfig,
                      background_tasks: BackgroundTasks,
@@ -767,7 +769,7 @@ def update_db_config(request: Request, index: int, cfg: DBConfig,
     return {"ok": True}
 
 
-@app.delete("/settings/db/{index}")
+@v1.delete("/settings/db/{index}")
 @_limiter.limit(RL_WRITE)
 def delete_db_config(request: Request, index: int, user: dict = Depends(current_user)):
     s = get_user_settings(user["email"])
@@ -781,7 +783,7 @@ def delete_db_config(request: Request, index: int, user: dict = Depends(current_
     return {"ok": True}
 
 
-@app.post("/settings/db/{index}/activate")
+@v1.post("/settings/db/{index}/activate")
 @_limiter.limit(RL_WRITE)
 def activate_db(request: Request, index: int, background_tasks: BackgroundTasks,
                 user: dict = Depends(current_user)):
@@ -804,7 +806,7 @@ def activate_db(request: Request, index: int, background_tasks: BackgroundTasks,
     return {"ok": True, "active": index, "building_cache": False}
 
 
-@app.post("/settings/db/test")
+@v1.post("/settings/db/test")
 @_limiter.limit(RL_WRITE)
 def test_db_connection(request: Request, cfg: DBConfig, user: dict = Depends(current_user)):
     log.info("Test DB connection", user=user["email"], host=cfg.host, database=cfg.database)
@@ -825,7 +827,7 @@ def test_db_connection(request: Request, cfg: DBConfig, user: dict = Depends(cur
 # CACHE
 # ══════════════════════════════════════════════════════════════════════════════
 
-@app.get("/cache/status")
+@v1.get("/cache/status")
 @_limiter.limit(RL_READ)
 def cache_status(request: Request, user: dict = Depends(current_user)):
     db_config = _resolve_db(user)
@@ -835,7 +837,7 @@ def cache_status(request: Request, user: dict = Depends(current_user)):
     return {**cache_info, "build": build_info}
 
 
-@app.get("/cache/progress")
+@v1.get("/cache/progress")
 @_limiter.limit(RL_READ)
 def cache_progress(request: Request, user: dict = Depends(current_user)):
     db_config = _resolve_db(user)
@@ -843,7 +845,7 @@ def cache_progress(request: Request, user: dict = Depends(current_user)):
     return _build_status.get(sk, {"status": "unknown"})
 
 
-@app.post("/cache/rebuild")
+@v1.post("/cache/rebuild")
 @_limiter.limit(RL_WRITE)
 def rebuild_cache(request: Request, background_tasks: BackgroundTasks,
                   user: dict = Depends(current_user)):
@@ -867,7 +869,7 @@ def rebuild_cache(request: Request, background_tasks: BackgroundTasks,
 # TABLES
 # ══════════════════════════════════════════════════════════════════════════════
 
-@app.get("/tables")
+@v1.get("/tables")
 @_limiter.limit(RL_READ)
 def list_tables(request: Request, user: dict = Depends(current_user)):
     s = user.get("settings", {})
@@ -917,7 +919,7 @@ def list_tables(request: Request, user: dict = Depends(current_user)):
         raise _server_error("Failed to load integration tables.")
 
 
-@app.get("/tables/{table_name}/columns")
+@v1.get("/tables/{table_name}/columns")
 @_limiter.limit(RL_READ)
 def get_table_columns(request: Request, table_name: str, user: dict = Depends(current_user)):
     """Return column names and types for a table the user owns."""
@@ -1061,7 +1063,7 @@ def _get_integration_catalogue(user_email: str) -> List[Dict]:
     return items
 
 
-@app.get("/discover")
+@v1.get("/discover")
 @_limiter.limit(RL_READ)
 def discover(request: Request, user: dict = Depends(current_user)):
     db_config = _resolve_db(user)
@@ -1110,7 +1112,7 @@ class NLQueryRequest(BaseModel):
     llm: str = "gemini"
 
 
-@app.post("/query")
+@v1.post("/query")
 @_limiter.limit(RL_COMPUTE)
 def natural_language_query(request: Request, req: NLQueryRequest, user: dict = Depends(current_user)):
     ok, reason = check_ai_limit(user["email"])
@@ -1213,7 +1215,7 @@ class AnalyticsRunRequest(BaseModel):
     provider: Optional[str] = None
 
 
-@app.post("/analytics/run")
+@v1.post("/analytics/run")
 @_limiter.limit(RL_COMPUTE)
 def run_analytics(request: Request, req: AnalyticsRunRequest, user: dict = Depends(current_user)):
     ok, reason = check_ai_limit(user["email"])
@@ -1371,7 +1373,7 @@ class ForecastRequest(BaseModel):
     periods: int = 90
 
 
-@app.post("/forecast")
+@v1.post("/forecast")
 @_limiter.limit(RL_COMPUTE)
 def forecast(request: Request, req: ForecastRequest, user: dict = Depends(current_user)):
     ok, reason = check_plan_feature(user["email"], "forecast")
@@ -1408,7 +1410,7 @@ def forecast(request: Request, req: ForecastRequest, user: dict = Depends(curren
         raise _server_error("Forecast failed. Ensure your table has enough historical data.")
 
 
-@app.get("/forecast/auto")
+@v1.get("/forecast/auto")
 @_limiter.limit(RL_COMPUTE)
 def auto_forecast(request: Request, periods: int = 90, user: dict = Depends(current_user)):
     ok, reason = check_plan_feature(user["email"], "forecast")
@@ -1498,7 +1500,7 @@ class AnomalyRequest(BaseModel):
     date_column: Optional[str] = None
 
 
-@app.post("/anomalies")
+@v1.post("/anomalies")
 @_limiter.limit(RL_COMPUTE)
 def anomalies(request: Request, req: AnomalyRequest, user: dict = Depends(current_user)):
     ok, reason = check_plan_feature(user["email"], "anomaly_detection")
@@ -1538,7 +1540,7 @@ def anomalies(request: Request, req: AnomalyRequest, user: dict = Depends(curren
         raise _server_error("Anomaly detection failed. Ensure your table has enough data.")
 
 
-@app.get("/anomalies/auto")
+@v1.get("/anomalies/auto")
 @_limiter.limit(RL_COMPUTE)
 def auto_anomalies(request: Request, user: dict = Depends(current_user)):
     ok, reason = check_plan_feature(user["email"], "anomaly_detection")
@@ -1628,7 +1630,7 @@ class ReportRequest(BaseModel):
     format: str = "full"
 
 
-@app.post("/report")
+@v1.post("/report")
 @_limiter.limit(RL_COMPUTE)
 def generate_report(request: Request, req: ReportRequest, user: dict = Depends(current_user)):
     ok, reason = check_ai_limit(user["email"])
@@ -1768,7 +1770,7 @@ class ProviderConnectRequest(BaseModel):
     credentials: Dict[str, str]
 
 
-@app.get("/providers")
+@v1.get("/providers")
 @_limiter.limit(RL_READ)
 def get_providers(request: Request):
     """List all available external API providers with their manifests."""
@@ -1781,7 +1783,7 @@ def get_providers(request: Request):
         raise _server_error("Failed to load providers.")
 
 
-@app.get("/providers/connected")
+@v1.get("/providers/connected")
 @_limiter.limit(RL_READ)
 def get_connected_providers(request: Request, user: dict = Depends(current_user)):
     """List all providers this user has connected. Returns empty list if DB not configured."""
@@ -1795,7 +1797,7 @@ def get_connected_providers(request: Request, user: dict = Depends(current_user)
         return {"connections": []}  # safe fallback — never break the UI
 
 
-@app.post("/providers/validate")
+@v1.post("/providers/validate")
 @_limiter.limit(RL_WRITE)
 def validate_provider_credentials(request: Request, req: ProviderConnectRequest, user: dict = Depends(current_user)):
     """Test provider credentials before saving."""
@@ -1810,7 +1812,7 @@ def validate_provider_credentials(request: Request, req: ProviderConnectRequest,
         return {"ok": False, "error": "Failed to validate credentials. Check your API key and try again."}
 
 
-@app.post("/providers/connect")
+@v1.post("/providers/connect")
 @_limiter.limit(RL_WRITE)
 def connect_provider_route(request: Request, req: ProviderConnectRequest,
                            background_tasks: BackgroundTasks,
@@ -1835,7 +1837,7 @@ def connect_provider_route(request: Request, req: ProviderConnectRequest,
         raise _server_error("Failed to connect provider.")
 
 
-@app.get("/providers/stats")
+@v1.get("/providers/stats")
 @_limiter.limit(RL_READ)
 def provider_stats(request: Request, user: dict = Depends(current_user)):
     """Return aggregate stats across all user integrations (total rows across all providers)."""
@@ -1845,7 +1847,7 @@ def provider_stats(request: Request, user: dict = Depends(current_user)):
     return {"total_rows": count}
 
 
-@app.delete("/providers/{connection_id}")
+@v1.delete("/providers/{connection_id}")
 @_limiter.limit(RL_WRITE)
 def disconnect_provider_route(request: Request, connection_id: str, user: dict = Depends(current_user)):
     """Disconnect a provider and drop all its synced tables."""
@@ -1859,7 +1861,7 @@ def disconnect_provider_route(request: Request, connection_id: str, user: dict =
         raise _server_error("Failed to disconnect provider.")
 
 
-@app.delete("/auth/account")
+@v1.delete("/auth/account")
 @_limiter.limit(RL_WRITE)
 def delete_account(request: Request, user: dict = Depends(current_user)):
     """Permanently delete the current user and all their data."""
@@ -1880,7 +1882,7 @@ def delete_account(request: Request, user: dict = Depends(current_user)):
         raise _server_error("Account deletion failed.")
 
 
-@app.post("/providers/{connection_id}/sync")
+@v1.post("/providers/{connection_id}/sync")
 @_limiter.limit(RL_WRITE)
 def manual_sync(request: Request, connection_id: str, background_tasks: BackgroundTasks,
                 user: dict = Depends(current_user)):
@@ -1893,7 +1895,7 @@ def manual_sync(request: Request, connection_id: str, background_tasks: Backgrou
     return {"ok": True, "message": "Sync started in background"}
 
 
-@app.get("/providers/{connection_id}/status")
+@v1.get("/providers/{connection_id}/status")
 @_limiter.limit(RL_READ)
 def provider_status(request: Request, connection_id: str, user: dict = Depends(current_user)):
     """Get live sync status and stats for a connection."""
@@ -1905,7 +1907,7 @@ def provider_status(request: Request, connection_id: str, user: dict = Depends(c
         raise _server_error("Failed to get sync status.")
 
 
-@app.get("/providers/{connection_id}/history")
+@v1.get("/providers/{connection_id}/history")
 @_limiter.limit(RL_READ)
 def provider_history(request: Request, connection_id: str, user: dict = Depends(current_user)):
     """Get sync history for a connection."""
@@ -1922,7 +1924,7 @@ def provider_history(request: Request, connection_id: str, user: dict = Depends(
 # INTEGRATION-SPECIFIC ANALYTICS
 # ══════════════════════════════════════════════════════════════════════════════
 
-@app.get("/integrations/{provider_id}/analytics/templates")
+@v1.get("/integrations/{provider_id}/analytics/templates")
 @_limiter.limit(RL_READ)
 def list_integration_templates(
     request: Request,
@@ -1973,7 +1975,7 @@ class IntegrationAnalyticsRequest(BaseModel):
     template_id: str
 
 
-@app.post("/integrations/{provider_id}/analytics/run")
+@v1.post("/integrations/{provider_id}/analytics/run")
 @_limiter.limit(RL_COMPUTE)
 def run_integration_analytics(
     request: Request,
@@ -2032,7 +2034,7 @@ class IntegrationForecastRequest(BaseModel):
     periods: int = 90
 
 
-@app.post("/integrations/{provider_id}/forecast")
+@v1.post("/integrations/{provider_id}/forecast")
 @_limiter.limit(RL_COMPUTE)
 def forecast_integration(
     request: Request,
@@ -2098,7 +2100,7 @@ def forecast_integration(
 
 # ── BILLING ───────────────────────────────────────────────────────────────────
 
-@app.get("/billing/plans")
+@v1.get("/billing/plans")
 @_limiter.limit(RL_READ)
 def billing_plans(request: Request):
     try:
@@ -2108,7 +2110,7 @@ def billing_plans(request: Request):
         return {"plans": []}
 
 
-@app.get("/billing/subscription")
+@v1.get("/billing/subscription")
 @_limiter.limit(RL_READ)
 def billing_subscription(request: Request, user: dict = Depends(current_user)):
     try:
@@ -2121,7 +2123,7 @@ def billing_subscription(request: Request, user: dict = Depends(current_user)):
 class SubscribeRequest(BaseModel):
     plan_id: int
 
-@app.post("/billing/subscribe")
+@v1.post("/billing/subscribe")
 @_limiter.limit(RL_WRITE)
 def billing_subscribe(request: Request, req: SubscribeRequest, user: dict = Depends(current_user)):
     plan = get_plan_by_id(req.plan_id)
@@ -2135,14 +2137,14 @@ class AddonRequest(BaseModel):
     addon_type: str
     quantity: int = 1
 
-@app.post("/billing/addon")
+@v1.post("/billing/addon")
 @_limiter.limit(RL_WRITE)
 def billing_addon(request: Request, req: AddonRequest, user: dict = Depends(current_user)):
     purchase_addon(user["email"], req.addon_type, req.quantity)
     return {"ok": True}
 
 
-@app.get("/billing/usage")
+@v1.get("/billing/usage")
 @_limiter.limit(RL_READ)
 def billing_usage(request: Request, user: dict = Depends(current_user)):
     return {
@@ -2152,7 +2154,7 @@ def billing_usage(request: Request, user: dict = Depends(current_user)):
     }
 
 
-@app.get("/billing/config")
+@v1.get("/billing/config")
 @_limiter.limit(RL_READ)
 def billing_config_get(request: Request, _user: dict = Depends(current_user)):
     return {"ai_credit_rate": get_ai_credit_rate()}
@@ -2161,10 +2163,14 @@ def billing_config_get(request: Request, _user: dict = Depends(current_user)):
 class BillingConfigRequest(BaseModel):
     ai_credit_rate: float
 
-@app.post("/billing/config")
+@v1.post("/billing/config")
 @_limiter.limit(RL_WRITE)
 def billing_config_set(request: Request, req: BillingConfigRequest, _user: dict = Depends(current_user)):
     if req.ai_credit_rate <= 0:
         raise HTTPException(status_code=400, detail="ai_credit_rate must be positive")
     set_ai_credit_rate(req.ai_credit_rate)
     return {"ok": True, "ai_credit_rate": req.ai_credit_rate}
+
+
+# Register all user-facing v1 routes on the app
+app.include_router(v1)
