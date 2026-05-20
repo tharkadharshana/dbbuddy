@@ -89,9 +89,9 @@ class SalesPlayProvider(BaseProvider):
             ("Shops",         sync_shops),
             ("Categories",    sync_categories),
             ("Payment Types", sync_payment_types),
+            ("Products",      sync_products),   # always full — needed for analytics JOINs
         ]
         txn_steps = [
-            ("Products",  sync_products),
             ("Customers", sync_customers),
             ("Receipts",  sync_receipts),
         ]

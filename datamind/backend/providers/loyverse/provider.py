@@ -93,9 +93,9 @@ class LoyverseProvider(BaseProvider):
             ("Stores",     sync_stores),
             ("Employees",  sync_employees),
             ("Categories", sync_categories),
+            ("Products",   sync_products),   # always full — needed for analytics JOINs
         ]
         txn_steps = [
-            ("Products",  sync_products),
             ("Customers", sync_customers),
             ("Receipts",  sync_receipts),
         ]
