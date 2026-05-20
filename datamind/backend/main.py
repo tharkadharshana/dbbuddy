@@ -407,6 +407,17 @@ def _apply_row_limit(result: dict, row_limit: int) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 
 @app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    """Attach X-Request-ID to every response for tracing.
+    Honours an incoming header so clients can correlate their own IDs."""
+    import uuid
+    rid = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = rid
+    return response
+
+
+@app.middleware("http")
 async def log_requests(request: Request, call_next):
     start = datetime.datetime.utcnow()
     log.debug("Request started", method=request.method, path=request.url.path)
