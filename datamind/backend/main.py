@@ -942,51 +942,71 @@ def natural_language_query(req: NLQueryRequest, user: dict = Depends(current_use
     log.info("NL query", user=user["email"], llm=llm, question=req.question[:80])
     api_key = _resolve_api_key(user, llm)
     history = get_plan_history_limit(user["email"])
-    try:
-        s = user.get("settings", {})
-        if s.get("db_configs"):
-            # Own-DB user: connect to their database and use all its tables
-            conn = get_connection(_resolve_db(user))
-            tables_filter = None  # show all tables in their own DB
-        else:
-            # Integration user (embed or main app): connect to internal DB but
-            # only expose THIS user's own prefixed tables — never another user's.
-            conn = _get_internal_conn()
-            user_conns = get_user_connections(user["email"])
-            prefixes = [c.get("table_prefix", "") for c in user_conns if c.get("table_prefix")]
-            if not prefixes:
-                raise HTTPException(
-                    status_code=422,
-                    detail="No data source connected. Please connect a provider first."
-                )
-            # Resolve exact table names for this user's prefixes only
-            cursor = conn.cursor()
+    s = user.get("settings", {})
+    if s.get("db_configs"):
+        # Own-DB user — their database is exclusively theirs; show all tables.
+        conn = get_connection(_resolve_db(user))
+        tables_filter = None
+    else:
+        # Integration user (embed or main app).
+        # Resolve which tables belong to THIS user before opening the query conn.
+        user_conns = get_user_connections(user["email"])
+        prefixes = [c.get("table_prefix", "") for c in user_conns if c.get("table_prefix")]
+        if not prefixes:
+            raise HTTPException(
+                status_code=422,
+                detail="No data source connected. Please connect a provider first."
+            )
+        # Use a short-lived pool connection just to resolve table names, then
+        # release it before opening the query connection.
+        _meta_conn = _get_internal_conn()
+        try:
+            _meta_cur = _meta_conn.cursor()
             tables_filter = []
             for prefix in prefixes:
-                cursor.execute(
+                _meta_cur.execute(
                     "SELECT TABLE_NAME FROM information_schema.TABLES "
                     "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME LIKE %s "
                     "ORDER BY TABLE_NAME",
                     (f"{prefix}%",)
                 )
-                tables_filter.extend(r[0] for r in cursor.fetchall())
-            if not tables_filter:
-                raise HTTPException(
-                    status_code=422,
-                    detail="Data sync not complete yet. Please wait for sync to finish."
-                )
-            log.debug("NL query scoped to user tables",
-                      user=user["email"], table_count=len(tables_filter))
+                tables_filter.extend(r[0] for r in _meta_cur.fetchall())
+            _meta_cur.close()
+        finally:
+            _meta_conn.close()  # always returned to pool
 
+        if not tables_filter:
+            raise HTTPException(
+                status_code=422,
+                detail="Data sync not complete yet. Please wait for sync to finish."
+            )
+        log.debug("NL query scoped to user tables",
+                  user=user["email"], table_count=len(tables_filter))
+        conn = _get_internal_conn()
+
+    try:
         schemas = get_table_schemas(conn, tables_filter)
-        fkeys = get_foreign_keys(conn)
+        all_fkeys = get_foreign_keys(conn)
+
+        # For integration users, filter FK relationships to only this user's
+        # tables. get_foreign_keys() returns every FK in the entire database —
+        # without this filter, User A's LLM prompt would contain User B's
+        # table relationships.
+        if tables_filter is not None:
+            user_tables = set(tables_filter)
+            fkeys = [
+                fk for fk in all_fkeys
+                if fk["table"] in user_tables and fk["ref_table"] in user_tables
+            ]
+        else:
+            fkeys = all_fkeys
+
         sql = query_to_sql(req.question, schemas, llm, fkeys, api_key=api_key,
                            user_email=user["email"], history_months=history["months"])
         cursor = conn.cursor()
         cursor.execute(sql)
         columns = [desc[0] for desc in cursor.description]
         rows = cursor.fetchall()
-        conn.close()
         data = [{k: _safe(v) for k, v in dict(zip(columns, row)).items()} for row in rows]
         row_limit = history["row_limit"]
         if len(data) > row_limit:
@@ -999,6 +1019,8 @@ def natural_language_query(req: NLQueryRequest, user: dict = Depends(current_use
     except Exception as e:
         log.error("NL query failed", user=user["email"], error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()  # always returned to pool (or closed for own-DB users)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
