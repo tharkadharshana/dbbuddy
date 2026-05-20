@@ -1448,9 +1448,9 @@ def auto_forecast(request: Request, periods: int = 90, user: dict = Depends(curr
             )
             rows = cursor.fetchall()
             iconn.close()
-            if len(rows) < 10:
+            if len(rows) < 5:
                 raise HTTPException(status_code=422,
-                    detail=f"Not enough data for forecasting — got {len(rows)} daily data points, need at least 10. Sync more data or widen your plan's history window.")
+                    detail=f"Not enough data for forecasting — got {len(rows)} sale days, need at least 5. Your POS account may be too new or have no sales in the history window.")
             result = run_forecast(rows, periods)
             result.update(used_table=receipts_tbl, used_date_col="created_at",
                           used_value_col="total_money", from_cache=False)
