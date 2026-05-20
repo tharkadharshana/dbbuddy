@@ -1899,12 +1899,18 @@ def forecast_integration(
         table_prefix = integration["table_prefix"]
 
         try:
+            # SEC-03: validate table/column names against actual schema before use in SQL
+            full_table = f"{table_prefix}_{req.table}"
+            schemas = get_table_schemas(conn, [full_table])
+            _validate_table_column(schemas, full_table, req.date_column)
+            _validate_table_column(schemas, full_table, req.value_column)
+
             cursor = conn.cursor()
             cursor.execute(
-                f"SELECT DATE({req.date_column}) as date, SUM({req.value_column}) as value "
-                f"FROM {table_prefix}_{req.table} "
-                f"WHERE {req.date_column} IS NOT NULL AND {req.date_column} >= %s "
-                f"GROUP BY DATE({req.date_column}) ORDER BY date",
+                f"SELECT DATE(`{req.date_column}`) as date, SUM(`{req.value_column}`) as value "
+                f"FROM `{full_table}` "
+                f"WHERE `{req.date_column}` IS NOT NULL AND `{req.date_column}` >= %s "
+                f"GROUP BY DATE(`{req.date_column}`) ORDER BY date",
                 (history["cutoff_date"],)
             )
             rows = cursor.fetchall()
