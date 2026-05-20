@@ -30,13 +30,13 @@ class DataMindResource {
 
 class IntegrationsResource extends DataMindResource {
   list(userEmail) {
-    return this._get('/v1/integrations', { user_email: userEmail })
+    return this._get('/v1/partner/integrations', { user_email: userEmail })
   }
 }
 
 class SyncResource extends DataMindResource {
   trigger(provider, { userEmail, full = false } = {}) {
-    return this._post(`/v1/sync/${provider}`, { user_email: userEmail, full })
+    return this._post(`/v1/partner/sync/${provider}`, { user_email: userEmail, full })
   }
 }
 
@@ -45,19 +45,19 @@ class RecordsResource extends DataMindResource {
     const params = { user_email: userEmail, limit, offset }
     if (storeId) params.store_id = storeId
     if (fromDate) params.from = fromDate
-    return this._get(`/v1/records/${provider}/${recordType}`, params)
+    return this._get(`/v1/partner/records/${provider}/${recordType}`, params)
   }
 }
 
 class AnalyticsResource extends DataMindResource {
   run(templateId, { provider, userEmail } = {}) {
-    return this._get(`/v1/analytics/${templateId}`, { provider, user_email: userEmail })
+    return this._get(`/v1/partner/analytics/${templateId}`, { provider, user_email: userEmail })
   }
 }
 
 class UsageResource extends DataMindResource {
   get(userEmail) {
-    return this._get('/v1/usage', { user_email: userEmail })
+    return this._get('/v1/partner/usage', { user_email: userEmail })
   }
 }
 

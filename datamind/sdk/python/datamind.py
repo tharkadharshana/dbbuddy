@@ -31,12 +31,12 @@ class _Resource:
 
 class IntegrationsResource(_Resource):
     def list(self, user_email: str) -> dict:
-        return self._get("/v1/integrations", {"user_email": user_email})
+        return self._get("/v1/partner/integrations", {"user_email": user_email})
 
 
 class SyncResource(_Resource):
     def trigger(self, provider: str, user_email: str, full: bool = False) -> dict:
-        return self._post(f"/v1/sync/{provider}", {"user_email": user_email, "full": full})
+        return self._post(f"/v1/partner/sync/{provider}", {"user_email": user_email, "full": full})
 
 
 class RecordsResource(_Resource):
@@ -59,20 +59,20 @@ class RecordsResource(_Resource):
             params["store_id"] = store_id
         if from_date:
             params["from"] = from_date
-        return self._get(f"/v1/records/{provider}/{record_type}", params)
+        return self._get(f"/v1/partner/records/{provider}/{record_type}", params)
 
 
 class AnalyticsResource(_Resource):
     def run(self, template_id: str, provider: str, user_email: str) -> dict:
         return self._get(
-            f"/v1/analytics/{template_id}",
+            f"/v1/partner/analytics/{template_id}",
             {"provider": provider, "user_email": user_email},
         )
 
 
 class UsageResource(_Resource):
     def get(self, user_email: str) -> dict:
-        return self._get("/v1/usage", {"user_email": user_email})
+        return self._get("/v1/partner/usage", {"user_email": user_email})
 
 
 class Client:
