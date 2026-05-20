@@ -145,6 +145,11 @@ def _safe(v):
     return v
 
 
+# SEC-02: never expose raw exception strings to API clients
+def _server_error(msg: str) -> HTTPException:
+    return HTTPException(status_code=500, detail=msg)
+
+
 def _resolve_db(user: dict) -> dict:
     """
     Return the active DB config from user settings.
@@ -498,7 +503,7 @@ def onboarding_test_db(req: OnboardingDBRequest,
     except Exception as e:
         log.warning("Onboarding: DB connection failed",
                     user=user["email"], error=str(e))
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": "Failed to connect. Check your credentials and try again."}
 
 
 @app.post("/onboarding/connect-db")
@@ -664,7 +669,7 @@ def test_db_connection(cfg: DBConfig, user: dict = Depends(current_user)):
         return {"ok": True, "tables": tables, "table_count": len(tables)}
     except Exception as e:
         log.warning("DB test failed", user=user["email"], error=str(e))
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": "Connection failed. Check your host, port, credentials, and firewall settings."}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -730,7 +735,7 @@ def list_tables(user: dict = Depends(current_user)):
             return {"tables": tables, "schemas": schemas, "foreign_keys": fkeys}
         except Exception as e:
             log.error("Failed to list tables", user=user["email"], error=str(e))
-            raise HTTPException(status_code=500, detail=str(e))
+            raise _server_error("Failed to load tables.")
 
     # Provider-only user: return only their own integration tables
     conns = get_user_connections(user["email"])
@@ -756,7 +761,7 @@ def list_tables(user: dict = Depends(current_user)):
         return {"tables": tables, "schemas": {}, "foreign_keys": []}
     except Exception as e:
         log.error("Failed to list provider tables", user=user["email"], error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error("Failed to load integration tables.")
 
 
 @app.get("/tables/{table_name}/columns")
@@ -785,7 +790,7 @@ def get_table_columns(table_name: str, user: dict = Depends(current_user)):
         raise
     except Exception as e:
         log.error("Failed to describe table", table=table_name, error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error("Failed to load column information.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1035,7 +1040,7 @@ def natural_language_query(req: NLQueryRequest, user: dict = Depends(current_use
         raise
     except Exception as e:
         log.error("NL query failed", user=user["email"], error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error("Query execution failed. Please try rephrasing your question.")
     finally:
         conn.close()  # always returned to pool (or closed for own-DB users)
 
@@ -1094,7 +1099,7 @@ def run_analytics(req: AnalyticsRunRequest, user: dict = Depends(current_user)):
             log.error("Run analytics: integration template failed",
                       user=user["email"], provider=req.provider,
                       template=req.template_id, error=str(e))
-            raise HTTPException(status_code=500, detail=str(e))
+            raise _server_error("Analytics execution failed.")
         finally:
             conn.close()
 
@@ -1152,7 +1157,7 @@ def run_analytics(req: AnalyticsRunRequest, user: dict = Depends(current_user)):
     except Exception as e:
         conn.close()
         log.error("Analytics run failed", template=req.template_id, error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error("Analytics execution failed.")
 
 
 def _try_python(tid: str, conn) -> Optional[Dict]:
@@ -1241,7 +1246,7 @@ def forecast(req: ForecastRequest, user: dict = Depends(current_user)):
         raise
     except Exception as e:
         log.error("Forecast failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error("Forecast failed. Ensure your table has enough historical data.")
 
 
 @app.get("/forecast/auto")
@@ -1283,7 +1288,7 @@ def auto_forecast(periods: int = 90, user: dict = Depends(current_user)):
             iconn.close()
         except Exception as e:
             log.error("Provider forecast query failed", error=str(e))
-            raise HTTPException(status_code=500, detail=str(e))
+            raise _server_error("Forecast query failed.")
         result = run_forecast(rows, periods)
         result.update(used_table=receipts_tbl, used_date_col="created_at",
                       used_value_col="total_money", from_cache=False)
@@ -1320,7 +1325,7 @@ def auto_forecast(periods: int = 90, user: dict = Depends(current_user)):
         return result
     except Exception as e:
         log.error("Auto forecast failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error("Forecast failed. Ensure your data source has enough historical data.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1369,7 +1374,7 @@ def anomalies(req: AnomalyRequest, user: dict = Depends(current_user)):
         return result
     except Exception as e:
         log.error("Anomaly detection failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error("Anomaly detection failed. Ensure your table has enough data.")
 
 
 @app.get("/anomalies/auto")
@@ -1411,7 +1416,7 @@ def auto_anomalies(user: dict = Depends(current_user)):
             iconn.close()
         except Exception as e:
             log.error("Provider anomaly query failed", error=str(e))
-            raise HTTPException(status_code=500, detail=str(e))
+            raise _server_error("Anomaly detection query failed.")
         result = run_anomaly_detection(rows, has_date=True)
         result.update(used_table=receipts_tbl, used_date_col="created_at",
                       used_value_col="total_money", from_cache=False)
@@ -1447,7 +1452,7 @@ def auto_anomalies(user: dict = Depends(current_user)):
         return result
     except Exception as e:
         log.error("Auto anomaly detection failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error("Anomaly detection failed. Ensure your data source has enough data.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1564,7 +1569,7 @@ def generate_report(req: ReportRequest, user: dict = Depends(current_user)):
         raise
     except Exception as e:
         log.error("Report generation failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error("Report generation failed.")
 
 
 def _get_kpis(conn, cache) -> Dict:
@@ -1609,7 +1614,7 @@ def get_providers():
         return {"providers": providers}
     except Exception as e:
         log.error("Failed to list providers", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error("Failed to load providers.")
 
 
 @app.get("/providers/connected")
@@ -1636,7 +1641,7 @@ def validate_provider_credentials(req: ProviderConnectRequest, user: dict = Depe
         return {"ok": result.ok, "error": result.error, "details": result.details}
     except Exception as e:
         log.error("Provider validation error", provider=req.provider_id, error=str(e))
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": "Failed to validate credentials. Check your API key and try again."}
 
 
 @app.post("/providers/connect")
@@ -1660,7 +1665,7 @@ def connect_provider_route(req: ProviderConnectRequest,
         return {"ok": True, "connection_id": connection_id}
     except Exception as e:
         log.error("Provider connect failed", provider=req.provider_id, error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error("Failed to connect provider.")
 
 
 @app.get("/providers/stats")
@@ -1669,7 +1674,8 @@ def provider_stats(user: dict = Depends(current_user)):
     try:
         return {"total_rows": get_user_total_rows(user["email"])}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        log.error("Provider stats failed", user=user["email"], error=str(e))
+        raise _server_error("Failed to load provider stats.")
 
 
 @app.delete("/providers/{connection_id}")
@@ -1682,7 +1688,7 @@ def disconnect_provider_route(connection_id: str, user: dict = Depends(current_u
         return {"ok": True}
     except Exception as e:
         log.error("Disconnect provider failed", user=user["email"], connection_id=connection_id, error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error("Failed to disconnect provider.")
 
 
 @app.delete("/auth/account")
@@ -1702,7 +1708,7 @@ def delete_account(user: dict = Depends(current_user)):
         return {"ok": True}
     except Exception as e:
         log.error("Account deletion failed", user=email, error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error("Account deletion failed.")
 
 
 @app.post("/providers/{connection_id}/sync")
@@ -1724,7 +1730,8 @@ def provider_status(connection_id: str, user: dict = Depends(current_user)):
         status = get_connection_status(user["email"], connection_id)
         return status
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        log.error("Get sync status failed", user=user["email"], connection_id=connection_id, error=str(e))
+        raise _server_error("Failed to get sync status.")
 
 
 @app.get("/providers/{connection_id}/history")
@@ -1734,7 +1741,8 @@ def provider_history(connection_id: str, user: dict = Depends(current_user)):
         history = get_sync_history(user["email"], connection_id)
         return {"history": history}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        log.error("Get sync history failed", user=user["email"], connection_id=connection_id, error=str(e))
+        raise _server_error("Failed to get sync history.")
 
 
 
@@ -1781,10 +1789,10 @@ def list_integration_templates(
             ]
         }
     except Exception as e:
-        log.error("List integration templates failed", 
-                  provider=provider_id, 
+        log.error("List integration templates failed",
+                  provider=provider_id,
                   error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error("Failed to load integration templates.")
 
 
 class IntegrationAnalyticsRequest(BaseModel):
@@ -1838,7 +1846,7 @@ def run_integration_analytics(
     except Exception as e:
         log.error("Integration analytics failed", provider=provider_id,
                   template=req.template_id, user=user["email"], error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error("Integration analytics failed.")
 
 
 class IntegrationForecastRequest(BaseModel):
@@ -1901,7 +1909,7 @@ def forecast_integration(
     except Exception as e:
         log.error("Integration forecast failed", provider=provider_id,
                   user=user["email"], error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error("Integration forecast failed.")
 
 
 # ── BILLING ───────────────────────────────────────────────────────────────────
