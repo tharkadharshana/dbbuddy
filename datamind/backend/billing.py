@@ -500,7 +500,7 @@ def get_user_subscription(user_email: str) -> Dict:
 _PLAN_FEATURE_GATE: dict = {
     "forecast":          {"Growth", "Pro"},
     "anomaly_detection": {"Growth", "Pro"},
-    "external_api":      {"Pro"},
+    "external_api":      {"Starter", "Growth", "Pro"},
 }
 
 # Data-history window per plan: months to look back, and row fallback when no date column.

@@ -74,10 +74,12 @@ def lookup_map(conn, tenant_id: str, provider_id: str, record_type: str,
         shop_map = lookup_map(conn, prefix, 'salesplay', 'shop', 'id', 'shop_name')
         # → {'123': 'Main Store', '456': 'Branch'}
     """
+    # JSON_UNQUOTE(JSON_EXTRACT(...)) used for MariaDB 10.4 compatibility.
+    # ->>'$.x' shorthand requires MariaDB 10.5+.
     sql = f"""
         SELECT
-            JSON_UNQUOTE(data->>'$.{id_field}')   AS id,
-            JSON_UNQUOTE(data->>'$.{name_field}')  AS name
+            JSON_UNQUOTE(JSON_EXTRACT(data, '$.{id_field}'))   AS id,
+            JSON_UNQUOTE(JSON_EXTRACT(data, '$.{name_field}')) AS name
         FROM integration_records
         WHERE tenant_id = %s AND provider_id = %s AND record_type = %s
     """

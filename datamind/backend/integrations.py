@@ -159,241 +159,308 @@ def bootstrap_integration_tables():
 # (salesplay/analytics.py, loyverse/analytics.py) works unchanged.
 # Views are created once per integration at connect time.
 
+# MariaDB 10.4 compatible JSON extraction.
+# ->>'$.x' is MySQL 5.7.13+ / MariaDB 10.5+ only.
+# Use JSON_UNQUOTE(JSON_EXTRACT(col, '$.x')) for string fields,
+# and JSON_EXTRACT(col, '$.x') (no UNQUOTE) inside CAST for numeric fields.
+
+def _jstr(field: str) -> str:
+    """Extract a string JSON field — MariaDB 10.4 compatible."""
+    return f"JSON_UNQUOTE(JSON_EXTRACT(data, '$.{field}'))"
+
+def _jnum(field: str) -> str:
+    """Extract a numeric JSON field for use inside CAST."""
+    return f"JSON_EXTRACT(data, '$.{field}')"
+
+
 _SALESPLAY_VIEWS = {
     "{prefix}shops": """
         SELECT
-            JSON_UNQUOTE(data->>'$.id')        AS id,
-            JSON_UNQUOTE(data->>'$.shop_name') AS shop_name,
-            JSON_UNQUOTE(data->>'$.address')   AS address,
-            JSON_UNQUOTE(data->>'$.phone')     AS phone,
-            JSON_UNQUOTE(data->>'$.email')     AS email,
-            JSON_UNQUOTE(data->>'$.status')    AS status,
-            JSON_UNQUOTE(data->>'$.updated_at') AS updated_at,
+            {jid}                                          AS id,
+            {jshop_name}                                   AS shop_name,
+            {jaddress}                                     AS address,
+            {jphone}                                       AS phone,
+            {jemail}                                       AS email,
+            {jstatus}                                      AS status,
+            {jupdated_at}                                  AS updated_at,
             synced_at
         FROM integration_records
-        WHERE tenant_id='{prefix}' AND provider_id='salesplay' AND record_type='shop'
-    """,
+        WHERE tenant_id='{{prefix}}' AND provider_id='salesplay' AND record_type='shop'
+    """.format(
+        jid=_jstr("id"), jshop_name=_jstr("shop_name"), jaddress=_jstr("address"),
+        jphone=_jstr("phone"), jemail=_jstr("email"), jstatus=_jstr("status"),
+        jupdated_at=_jstr("updated_at"),
+    ),
     "{prefix}categories": """
         SELECT
-            JSON_UNQUOTE(data->>'$.id')            AS id,
-            JSON_UNQUOTE(data->>'$.category_name') AS category_name,
-            JSON_UNQUOTE(data->>'$.created_at')    AS created_at,
-            JSON_UNQUOTE(data->>'$.updated_at')    AS updated_at,
+            {jid}          AS id,
+            {jcat}         AS category_name,
+            {jcreated}     AS created_at,
+            {jupdated}     AS updated_at,
             synced_at
         FROM integration_records
-        WHERE tenant_id='{prefix}' AND provider_id='salesplay' AND record_type='category'
-    """,
+        WHERE tenant_id='{{prefix}}' AND provider_id='salesplay' AND record_type='category'
+    """.format(jid=_jstr("id"), jcat=_jstr("category_name"),
+               jcreated=_jstr("created_at"), jupdated=_jstr("updated_at")),
     "{prefix}payment_types": """
         SELECT
-            JSON_UNQUOTE(data->>'$.id')           AS id,
-            JSON_UNQUOTE(data->>'$.payment_name') AS payment_name,
-            JSON_UNQUOTE(data->>'$.created_at')   AS created_at,
-            JSON_UNQUOTE(data->>'$.updated_at')   AS updated_at,
+            {jid}      AS id,
+            {jname}    AS payment_name,
+            {jcreated} AS created_at,
+            {jupdated} AS updated_at,
             synced_at
         FROM integration_records
-        WHERE tenant_id='{prefix}' AND provider_id='salesplay' AND record_type='payment_type'
-    """,
+        WHERE tenant_id='{{prefix}}' AND provider_id='salesplay' AND record_type='payment_type'
+    """.format(jid=_jstr("id"), jname=_jstr("payment_name"),
+               jcreated=_jstr("created_at"), jupdated=_jstr("updated_at")),
     "{prefix}products": """
         SELECT
-            JSON_UNQUOTE(data->>'$.id')           AS id,
-            JSON_UNQUOTE(data->>'$.product_name') AS product_name,
-            JSON_UNQUOTE(data->>'$.category_id')  AS category_id,
-            JSON_UNQUOTE(data->>'$.sku')          AS sku,
-            CAST(data->>'$.price' AS DECIMAL(12,4)) AS price,
-            CAST(data->>'$.cost'  AS DECIMAL(12,4)) AS cost,
-            JSON_UNQUOTE(data->>'$.created_at')   AS created_at,
-            JSON_UNQUOTE(data->>'$.updated_at')   AS updated_at,
+            {jid}                                              AS id,
+            {jname}                                            AS product_name,
+            {jcat}                                             AS category_id,
+            {jsku}                                             AS sku,
+            CAST({jprice} AS DECIMAL(12,4))                    AS price,
+            CAST({jcost}  AS DECIMAL(12,4))                    AS cost,
+            {jcreated}                                         AS created_at,
+            {jupdated}                                         AS updated_at,
             synced_at
         FROM integration_records
-        WHERE tenant_id='{prefix}' AND provider_id='salesplay' AND record_type='product'
-    """,
+        WHERE tenant_id='{{prefix}}' AND provider_id='salesplay' AND record_type='product'
+    """.format(jid=_jstr("id"), jname=_jstr("product_name"), jcat=_jstr("category_id"),
+               jsku=_jstr("sku"), jprice=_jnum("price"), jcost=_jnum("cost"),
+               jcreated=_jstr("created_at"), jupdated=_jstr("updated_at")),
     "{prefix}customers": """
         SELECT
-            JSON_UNQUOTE(data->>'$.id')            AS id,
-            JSON_UNQUOTE(data->>'$.customer_name') AS customer_name,
-            JSON_UNQUOTE(data->>'$.email')         AS email,
-            JSON_UNQUOTE(data->>'$.phone_number')  AS phone_number,
-            CAST(data->>'$.total_spent'    AS DECIMAL(14,4)) AS total_spent,
-            CAST(data->>'$.total_visits'   AS UNSIGNED)      AS total_visits,
-            CAST(data->>'$.points_balance' AS DECIMAL(12,2)) AS points_balance,
-            JSON_UNQUOTE(data->>'$.created_at') AS created_at,
-            JSON_UNQUOTE(data->>'$.updated_at') AS updated_at,
+            {jid}                                              AS id,
+            {jname}                                            AS customer_name,
+            {jemail}                                           AS email,
+            {jphone}                                           AS phone_number,
+            CAST({jspent}   AS DECIMAL(14,4))                  AS total_spent,
+            CAST({jvisits}  AS UNSIGNED)                       AS total_visits,
+            CAST({jpoints}  AS DECIMAL(12,2))                  AS points_balance,
+            {jcreated}                                         AS created_at,
+            {jupdated}                                         AS updated_at,
             synced_at
         FROM integration_records
-        WHERE tenant_id='{prefix}' AND provider_id='salesplay' AND record_type='customer'
-    """,
+        WHERE tenant_id='{{prefix}}' AND provider_id='salesplay' AND record_type='customer'
+    """.format(jid=_jstr("id"), jname=_jstr("customer_name"), jemail=_jstr("email"),
+               jphone=_jstr("phone_number"), jspent=_jnum("total_spent"),
+               jvisits=_jnum("total_visits"), jpoints=_jnum("points_balance"),
+               jcreated=_jstr("created_at"), jupdated=_jstr("updated_at")),
     "{prefix}receipts": """
         SELECT
-            JSON_UNQUOTE(data->>'$.id')                AS id,
-            JSON_UNQUOTE(data->>'$.receipt_number')    AS receipt_number,
-            JSON_UNQUOTE(data->>'$.shop_id')           AS shop_id,
-            JSON_UNQUOTE(data->>'$.shop_name')         AS shop_name,
-            JSON_UNQUOTE(data->>'$.customer_id')       AS customer_id,
-            JSON_UNQUOTE(data->>'$.customer_name')     AS customer_name,
-            external_created_at                        AS created_at,
-            JSON_UNQUOTE(data->>'$.updated_at')        AS updated_at,
-            CAST(data->>'$.total_money'    AS DECIMAL(14,4)) AS total_money,
-            CAST(data->>'$.total_discount' AS DECIMAL(14,4)) AS total_discount,
-            CAST(data->>'$.total_tax'      AS DECIMAL(14,4)) AS total_tax,
-            JSON_UNQUOTE(data->>'$.receipt_type')      AS receipt_type,
-            JSON_UNQUOTE(data->>'$.status')            AS status,
-            JSON_UNQUOTE(data->>'$.payment_type_id')   AS payment_type_id,
-            JSON_UNQUOTE(data->>'$.payment_type_name') AS payment_type_name,
-            CAST(data->>'$.payment_amount' AS DECIMAL(14,4)) AS payment_amount,
+            {jid}                                              AS id,
+            {jrn}                                              AS receipt_number,
+            {jshop_id}                                         AS shop_id,
+            {jshop_name}                                       AS shop_name,
+            {jcust_id}                                         AS customer_id,
+            {jcust_name}                                       AS customer_name,
+            external_created_at                                AS created_at,
+            {jupdated}                                         AS updated_at,
+            CAST({jtotal}    AS DECIMAL(14,4))                 AS total_money,
+            CAST({jdisc}     AS DECIMAL(14,4))                 AS total_discount,
+            CAST({jtax}      AS DECIMAL(14,4))                 AS total_tax,
+            {jrtype}                                           AS receipt_type,
+            {jstatus}                                          AS status,
+            {jpay_id}                                          AS payment_type_id,
+            {jpay_name}                                        AS payment_type_name,
+            CAST({jpay_amt}  AS DECIMAL(14,4))                 AS payment_amount,
             synced_at
         FROM integration_records
-        WHERE tenant_id='{prefix}' AND provider_id='salesplay' AND record_type='receipt'
-    """,
+        WHERE tenant_id='{{prefix}}' AND provider_id='salesplay' AND record_type='receipt'
+    """.format(
+        jid=_jstr("id"), jrn=_jstr("receipt_number"), jshop_id=_jstr("shop_id"),
+        jshop_name=_jstr("shop_name"), jcust_id=_jstr("customer_id"),
+        jcust_name=_jstr("customer_name"), jupdated=_jstr("updated_at"),
+        jtotal=_jnum("total_money"), jdisc=_jnum("total_discount"), jtax=_jnum("total_tax"),
+        jrtype=_jstr("receipt_type"), jstatus=_jstr("status"),
+        jpay_id=_jstr("payment_type_id"), jpay_name=_jstr("payment_type_name"),
+        jpay_amt=_jnum("payment_amount"),
+    ),
     "{prefix}receipt_line_items": """
         SELECT
-            JSON_UNQUOTE(data->>'$.id')         AS id,
-            JSON_UNQUOTE(data->>'$.receipt_id') AS receipt_id,
-            JSON_UNQUOTE(data->>'$.product_id') AS product_id,
-            JSON_UNQUOTE(data->>'$.variant_id') AS variant_id,
-            JSON_UNQUOTE(data->>'$.product_name') AS product_name,
-            JSON_UNQUOTE(data->>'$.sku')          AS sku,
-            CAST(data->>'$.quantity'         AS DECIMAL(12,4)) AS quantity,
-            CAST(data->>'$.price'            AS DECIMAL(12,4)) AS price,
-            CAST(data->>'$.gross_total_money' AS DECIMAL(14,4)) AS gross_total_money,
-            CAST(data->>'$.total_discount'   AS DECIMAL(14,4)) AS total_discount,
-            CAST(data->>'$.total_money'      AS DECIMAL(14,4)) AS total_money,
-            CAST(data->>'$.cost'             AS DECIMAL(12,4)) AS cost,
-            JSON_UNQUOTE(data->>'$.created_at') AS created_at,
+            {jid}                                              AS id,
+            {jrid}                                             AS receipt_id,
+            {jpid}                                             AS product_id,
+            {jvid}                                             AS variant_id,
+            {jpname}                                           AS product_name,
+            {jsku}                                             AS sku,
+            CAST({jqty}   AS DECIMAL(12,4))                    AS quantity,
+            CAST({jprice} AS DECIMAL(12,4))                    AS price,
+            CAST({jgross} AS DECIMAL(14,4))                    AS gross_total_money,
+            CAST({jdisc}  AS DECIMAL(14,4))                    AS total_discount,
+            CAST({jtotal} AS DECIMAL(14,4))                    AS total_money,
+            CAST({jcost}  AS DECIMAL(12,4))                    AS cost,
+            {jcreated}                                         AS created_at,
             synced_at
         FROM integration_records
-        WHERE tenant_id='{prefix}' AND provider_id='salesplay' AND record_type='receipt_line_item'
-    """,
+        WHERE tenant_id='{{prefix}}' AND provider_id='salesplay' AND record_type='receipt_line_item'
+    """.format(
+        jid=_jstr("id"), jrid=_jstr("receipt_id"), jpid=_jstr("product_id"),
+        jvid=_jstr("variant_id"), jpname=_jstr("product_name"), jsku=_jstr("sku"),
+        jqty=_jnum("quantity"), jprice=_jnum("price"), jgross=_jnum("gross_total_money"),
+        jdisc=_jnum("total_discount"), jtotal=_jnum("total_money"), jcost=_jnum("cost"),
+        jcreated=_jstr("created_at"),
+    ),
 }
 
 _LOYVERSE_VIEWS = {
     "{prefix}_stores": """
         SELECT
-            JSON_UNQUOTE(data->>'$.id')           AS id,
-            JSON_UNQUOTE(data->>'$.name')         AS name,
-            JSON_UNQUOTE(data->>'$.address')      AS address,
-            JSON_UNQUOTE(data->>'$.phone_number') AS phone_number,
-            JSON_UNQUOTE(data->>'$.description')  AS description,
-            JSON_UNQUOTE(data->>'$.created_at')   AS created_at,
-            JSON_UNQUOTE(data->>'$.updated_at')   AS updated_at,
+            {jid}      AS id,
+            {jname}    AS name,
+            {jaddr}    AS address,
+            {jphone}   AS phone_number,
+            {jdesc}    AS description,
+            {jcreated} AS created_at,
+            {jupdated} AS updated_at,
             synced_at
         FROM integration_records
-        WHERE tenant_id='{prefix}' AND provider_id='loyverse' AND record_type='shop'
-    """,
+        WHERE tenant_id='{{prefix}}' AND provider_id='loyverse' AND record_type='shop'
+    """.format(jid=_jstr("id"), jname=_jstr("name"), jaddr=_jstr("address"),
+               jphone=_jstr("phone_number"), jdesc=_jstr("description"),
+               jcreated=_jstr("created_at"), jupdated=_jstr("updated_at")),
     "{prefix}_employees": """
         SELECT
-            JSON_UNQUOTE(data->>'$.id')       AS id,
-            JSON_UNQUOTE(data->>'$.name')     AS name,
-            JSON_UNQUOTE(data->>'$.email')    AS email,
-            JSON_UNQUOTE(data->>'$.role')     AS role,
-            JSON_UNQUOTE(data->>'$.store_id') AS store_id,
-            JSON_UNQUOTE(data->>'$.created_at') AS created_at,
-            JSON_UNQUOTE(data->>'$.updated_at') AS updated_at,
+            {jid}       AS id,
+            {jname}     AS name,
+            {jemail}    AS email,
+            {jrole}     AS role,
+            {jstore}    AS store_id,
+            {jcreated}  AS created_at,
+            {jupdated}  AS updated_at,
             synced_at
         FROM integration_records
-        WHERE tenant_id='{prefix}' AND provider_id='loyverse' AND record_type='employee'
-    """,
+        WHERE tenant_id='{{prefix}}' AND provider_id='loyverse' AND record_type='employee'
+    """.format(jid=_jstr("id"), jname=_jstr("name"), jemail=_jstr("email"),
+               jrole=_jstr("role"), jstore=_jstr("store_id"),
+               jcreated=_jstr("created_at"), jupdated=_jstr("updated_at")),
     "{prefix}_categories": """
         SELECT
-            JSON_UNQUOTE(data->>'$.id')    AS id,
-            JSON_UNQUOTE(data->>'$.name')  AS name,
-            JSON_UNQUOTE(data->>'$.color') AS color,
+            {jid}    AS id,
+            {jname}  AS name,
+            {jcolor} AS color,
             synced_at
         FROM integration_records
-        WHERE tenant_id='{prefix}' AND provider_id='loyverse' AND record_type='category'
-    """,
+        WHERE tenant_id='{{prefix}}' AND provider_id='loyverse' AND record_type='category'
+    """.format(jid=_jstr("id"), jname=_jstr("name"), jcolor=_jstr("color")),
     "{prefix}_products": """
         SELECT
-            JSON_UNQUOTE(data->>'$.id')          AS id,
-            JSON_UNQUOTE(data->>'$.handle')      AS handle,
-            JSON_UNQUOTE(data->>'$.item_name')   AS item_name,
-            JSON_UNQUOTE(data->>'$.description') AS description,
-            JSON_UNQUOTE(data->>'$.category_id') AS category_id,
-            CAST(data->>'$.track_stock' AS UNSIGNED) AS track_stock,
-            JSON_UNQUOTE(data->>'$.created_at')  AS created_at,
-            JSON_UNQUOTE(data->>'$.updated_at')  AS updated_at,
+            {jid}                            AS id,
+            {jhandle}                        AS handle,
+            {jitem}                          AS item_name,
+            {jdesc}                          AS description,
+            {jcat}                           AS category_id,
+            CAST({jstock} AS UNSIGNED)       AS track_stock,
+            {jcreated}                       AS created_at,
+            {jupdated}                       AS updated_at,
             synced_at
         FROM integration_records
-        WHERE tenant_id='{prefix}' AND provider_id='loyverse' AND record_type='product'
-    """,
+        WHERE tenant_id='{{prefix}}' AND provider_id='loyverse' AND record_type='product'
+    """.format(jid=_jstr("id"), jhandle=_jstr("handle"), jitem=_jstr("item_name"),
+               jdesc=_jstr("description"), jcat=_jstr("category_id"),
+               jstock=_jnum("track_stock"),
+               jcreated=_jstr("created_at"), jupdated=_jstr("updated_at")),
     "{prefix}_variants": """
         SELECT
-            JSON_UNQUOTE(data->>'$.id')      AS id,
-            JSON_UNQUOTE(data->>'$.item_id') AS item_id,
-            JSON_UNQUOTE(data->>'$.sku')     AS sku,
-            JSON_UNQUOTE(data->>'$.barcode') AS barcode,
-            CAST(data->>'$.cost'          AS DECIMAL(12,4)) AS cost,
-            CAST(data->>'$.default_price' AS DECIMAL(12,4)) AS default_price,
-            JSON_UNQUOTE(data->>'$.stores_json') AS stores_json,
-            JSON_UNQUOTE(data->>'$.created_at')  AS created_at,
-            JSON_UNQUOTE(data->>'$.updated_at')  AS updated_at,
+            {jid}                                AS id,
+            {jitem}                              AS item_id,
+            {jsku}                               AS sku,
+            {jbar}                               AS barcode,
+            CAST({jcost}  AS DECIMAL(12,4))      AS cost,
+            CAST({jprice} AS DECIMAL(12,4))      AS default_price,
+            {jstores}                            AS stores_json,
+            {jcreated}                           AS created_at,
+            {jupdated}                           AS updated_at,
             synced_at
         FROM integration_records
-        WHERE tenant_id='{prefix}' AND provider_id='loyverse' AND record_type='variant'
-    """,
+        WHERE tenant_id='{{prefix}}' AND provider_id='loyverse' AND record_type='variant'
+    """.format(jid=_jstr("id"), jitem=_jstr("item_id"), jsku=_jstr("sku"),
+               jbar=_jstr("barcode"), jcost=_jnum("cost"), jprice=_jnum("default_price"),
+               jstores=_jstr("stores_json"),
+               jcreated=_jstr("created_at"), jupdated=_jstr("updated_at")),
     "{prefix}_customers": """
         SELECT
-            JSON_UNQUOTE(data->>'$.id')           AS id,
-            JSON_UNQUOTE(data->>'$.name')         AS name,
-            JSON_UNQUOTE(data->>'$.email')        AS email,
-            JSON_UNQUOTE(data->>'$.phone_number') AS phone_number,
-            CAST(data->>'$.total_visits'   AS UNSIGNED)      AS total_visits,
-            CAST(data->>'$.total_spent'    AS DECIMAL(14,4)) AS total_spent,
-            CAST(data->>'$.points_balance' AS DECIMAL(12,2)) AS points_balance,
-            JSON_UNQUOTE(data->>'$.created_at') AS created_at,
-            JSON_UNQUOTE(data->>'$.updated_at') AS updated_at,
+            {jid}                                    AS id,
+            {jname}                                  AS name,
+            {jemail}                                 AS email,
+            {jphone}                                 AS phone_number,
+            CAST({jvisits}  AS UNSIGNED)              AS total_visits,
+            CAST({jspent}   AS DECIMAL(14,4))         AS total_spent,
+            CAST({jpoints}  AS DECIMAL(12,2))         AS points_balance,
+            {jcreated}                               AS created_at,
+            {jupdated}                               AS updated_at,
             synced_at
         FROM integration_records
-        WHERE tenant_id='{prefix}' AND provider_id='loyverse' AND record_type='customer'
-    """,
+        WHERE tenant_id='{{prefix}}' AND provider_id='loyverse' AND record_type='customer'
+    """.format(jid=_jstr("id"), jname=_jstr("name"), jemail=_jstr("email"),
+               jphone=_jstr("phone_number"), jvisits=_jnum("total_visits"),
+               jspent=_jnum("total_spent"), jpoints=_jnum("points_balance"),
+               jcreated=_jstr("created_at"), jupdated=_jstr("updated_at")),
     "{prefix}_receipts": """
         SELECT
-            JSON_UNQUOTE(data->>'$.receipt_number') AS receipt_number,
-            external_created_at                     AS receipt_date,
-            JSON_UNQUOTE(data->>'$.order_type')     AS order_type,
-            JSON_UNQUOTE(data->>'$.store_id')       AS store_id,
-            JSON_UNQUOTE(data->>'$.cashier_id')     AS cashier_id,
-            JSON_UNQUOTE(data->>'$.customer_id')    AS customer_id,
-            JSON_UNQUOTE(data->>'$.customer_name')  AS customer_name,
-            CAST(data->>'$.total_money'     AS DECIMAL(14,4)) AS total_money,
-            CAST(data->>'$.total_discounts' AS DECIMAL(14,4)) AS total_discounts,
-            CAST(data->>'$.total_tax'       AS DECIMAL(14,4)) AS total_tax,
-            JSON_UNQUOTE(data->>'$.receipt_type') AS receipt_type,
-            JSON_UNQUOTE(data->>'$.created_at')   AS created_at,
-            JSON_UNQUOTE(data->>'$.updated_at')   AS updated_at,
+            {jrn}                                     AS receipt_number,
+            external_created_at                       AS receipt_date,
+            {jotype}                                  AS order_type,
+            {jstore}                                  AS store_id,
+            {jcashier}                                AS cashier_id,
+            {jcust}                                   AS customer_id,
+            {jcname}                                  AS customer_name,
+            CAST({jtotal}  AS DECIMAL(14,4))          AS total_money,
+            CAST({jdisc}   AS DECIMAL(14,4))          AS total_discounts,
+            CAST({jtax}    AS DECIMAL(14,4))           AS total_tax,
+            {jrtype}                                  AS receipt_type,
+            {jcreated}                                AS created_at,
+            {jupdated}                                AS updated_at,
             synced_at
         FROM integration_records
-        WHERE tenant_id='{prefix}' AND provider_id='loyverse' AND record_type='receipt'
-    """,
+        WHERE tenant_id='{{prefix}}' AND provider_id='loyverse' AND record_type='receipt'
+    """.format(
+        jrn=_jstr("receipt_number"), jotype=_jstr("order_type"),
+        jstore=_jstr("store_id"), jcashier=_jstr("cashier_id"),
+        jcust=_jstr("customer_id"), jcname=_jstr("customer_name"),
+        jtotal=_jnum("total_money"), jdisc=_jnum("total_discounts"), jtax=_jnum("total_tax"),
+        jrtype=_jstr("receipt_type"),
+        jcreated=_jstr("created_at"), jupdated=_jstr("updated_at"),
+    ),
     "{prefix}_receipt_line_items": """
         SELECT
-            JSON_UNQUOTE(data->>'$.id')             AS id,
-            JSON_UNQUOTE(data->>'$.receipt_number') AS receipt_number,
-            JSON_UNQUOTE(data->>'$.item_id')        AS item_id,
-            JSON_UNQUOTE(data->>'$.variant_id')     AS variant_id,
-            JSON_UNQUOTE(data->>'$.item_name')      AS item_name,
-            JSON_UNQUOTE(data->>'$.variant_name')   AS variant_name,
-            JSON_UNQUOTE(data->>'$.sku')            AS sku,
-            CAST(data->>'$.quantity'         AS DECIMAL(12,4)) AS quantity,
-            CAST(data->>'$.price'            AS DECIMAL(12,4)) AS price,
-            CAST(data->>'$.gross_total_money' AS DECIMAL(14,4)) AS gross_total_money,
-            CAST(data->>'$.discount'         AS DECIMAL(12,4)) AS discount,
-            CAST(data->>'$.total_money'      AS DECIMAL(14,4)) AS total_money,
-            JSON_UNQUOTE(data->>'$.category_id') AS category_id,
+            {jid}                                      AS id,
+            {jrn}                                      AS receipt_number,
+            {jitem}                                    AS item_id,
+            {jvar}                                     AS variant_id,
+            {jiname}                                   AS item_name,
+            {jvname}                                   AS variant_name,
+            {jsku}                                     AS sku,
+            CAST({jqty}   AS DECIMAL(12,4))            AS quantity,
+            CAST({jprice} AS DECIMAL(12,4))            AS price,
+            CAST({jgross} AS DECIMAL(14,4))            AS gross_total_money,
+            CAST({jdisc}  AS DECIMAL(12,4))            AS discount,
+            CAST({jtotal} AS DECIMAL(14,4))            AS total_money,
+            {jcat}                                     AS category_id,
             synced_at
         FROM integration_records
-        WHERE tenant_id='{prefix}' AND provider_id='loyverse' AND record_type='receipt_line_item'
-    """,
+        WHERE tenant_id='{{prefix}}' AND provider_id='loyverse' AND record_type='receipt_line_item'
+    """.format(
+        jid=_jstr("id"), jrn=_jstr("receipt_number"), jitem=_jstr("item_id"),
+        jvar=_jstr("variant_id"), jiname=_jstr("item_name"), jvname=_jstr("variant_name"),
+        jsku=_jstr("sku"), jqty=_jnum("quantity"), jprice=_jnum("price"),
+        jgross=_jnum("gross_total_money"), jdisc=_jnum("discount"),
+        jtotal=_jnum("total_money"), jcat=_jstr("category_id"),
+    ),
     "{prefix}_payment_line_items": """
         SELECT
-            JSON_UNQUOTE(data->>'$.id')                AS id,
-            JSON_UNQUOTE(data->>'$.receipt_number')    AS receipt_number,
-            JSON_UNQUOTE(data->>'$.payment_type_id')   AS payment_type_id,
-            JSON_UNQUOTE(data->>'$.payment_type_name') AS payment_type_name,
-            CAST(data->>'$.money_amount' AS DECIMAL(14,4)) AS money_amount,
+            {jid}      AS id,
+            {jrn}      AS receipt_number,
+            {jpid}     AS payment_type_id,
+            {jpname}   AS payment_type_name,
+            CAST({jamt} AS DECIMAL(14,4)) AS money_amount,
             synced_at
         FROM integration_records
-        WHERE tenant_id='{prefix}' AND provider_id='loyverse' AND record_type='payment_line_item'
-    """,
+        WHERE tenant_id='{{prefix}}' AND provider_id='loyverse' AND record_type='payment_line_item'
+    """.format(jid=_jstr("id"), jrn=_jstr("receipt_number"),
+               jpid=_jstr("payment_type_id"), jpname=_jstr("payment_type_name"),
+               jamt=_jnum("money_amount")),
 }
 
 _PROVIDER_VIEWS = {
@@ -488,6 +555,7 @@ def connect_integration(
     # Save integration record
     enc_creds = _encrypt(creds)
     label = display_label or provider.manifest.display_name
+    cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO user_integrations
           (user_email, provider_id, display_label, table_prefix, credentials_enc, status)
