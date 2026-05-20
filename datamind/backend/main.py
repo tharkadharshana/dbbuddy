@@ -132,7 +132,20 @@ def startup_event():
     log.info("DataMind backend started")
 
 # In-memory build progress tracker
+# Keyed by status_hash. Evicted after 1 hour so stale entries don't OOM long-running processes.
 _build_status: Dict[str, Any] = {}
+_BUILD_STATUS_TTL_S = 3600   # 1 hour
+_BUILD_PROGRESS_MAX = 500    # max log lines kept per build
+
+def _evict_build_status():
+    """Remove entries older than TTL. Called on every new build start."""
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(seconds=_BUILD_STATUS_TTL_S)
+    stale = [
+        k for k, v in _build_status.items()
+        if datetime.datetime.fromisoformat(v.get("started_at", "2000-01-01")) < cutoff
+    ]
+    for k in stale:
+        del _build_status[k]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -378,6 +391,7 @@ async def embed_security_headers(request: Request, call_next):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _background_build(email: str, db_config: dict, llm: str, api_key: str):
+    _evict_build_status()  # prune entries older than 1 hour before adding a new one
     sk = _status_key(email, db_config)
     _build_status[sk] = {
         "status": "building",
@@ -399,7 +413,10 @@ def _background_build(email: str, db_config: dict, llm: str, api_key: str):
                  user=email, tables=len(tables), fkeys=len(fkeys))
 
         def progress(msg):
-            logs.append(msg)
+            if len(logs) < _BUILD_PROGRESS_MAX:
+                logs.append(msg)
+            elif len(logs) == _BUILD_PROGRESS_MAX:
+                logs.append("… (progress log truncated)")
             log.debug("Cache build progress", user=email, step=msg)
 
         def llm_caller(prompt, system, llm_name, max_tokens):
