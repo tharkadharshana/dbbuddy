@@ -150,6 +150,22 @@ def _server_error(msg: str) -> HTTPException:
     return HTTPException(status_code=500, detail=msg)
 
 
+# SEC-04: block LLM-generated SQL from running mutating statements
+import re as _re
+_SQL_MUTATION_RE = _re.compile(
+    r'\b(DROP|DELETE|INSERT|UPDATE|TRUNCATE|ALTER|CREATE|REPLACE|GRANT|REVOKE|CALL|EXEC)\b',
+    _re.IGNORECASE
+)
+
+def _guard_sql(sql: str):
+    m = _SQL_MUTATION_RE.search(sql)
+    if m:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Generated query contains a disallowed statement: {m.group(0).upper()}"
+        )
+
+
 def _resolve_db(user: dict) -> dict:
     """
     Return the active DB config from user settings.
@@ -1025,6 +1041,7 @@ def natural_language_query(req: NLQueryRequest, user: dict = Depends(current_use
 
         sql = query_to_sql(req.question, schemas, llm, fkeys, api_key=api_key,
                            user_email=user["email"], history_months=history["months"])
+        _guard_sql(sql)  # SEC-04: reject any mutating statement the LLM may have generated
         cursor = conn.cursor()
         cursor.execute(sql)
         columns = [desc[0] for desc in cursor.description]
