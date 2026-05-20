@@ -95,15 +95,17 @@ def bootstrap_embed_tables():
 def _get_partner(partner_key: str) -> Optional[dict]:
     """Return partner row dict or None if not found / inactive."""
     conn = _get_conn()
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute(
-        "SELECT * FROM embed_partners WHERE partner_key=%s AND active=1",
-        (partner_key,)
-    )
-    row = cursor.fetchone()
-    cursor.close()
-    conn.close()
-    return row
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(
+            "SELECT * FROM embed_partners WHERE partner_key=%s AND active=1",
+            (partner_key,)
+        )
+        row = cursor.fetchone()
+        cursor.close()
+        return row
+    finally:
+        conn.close()
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
