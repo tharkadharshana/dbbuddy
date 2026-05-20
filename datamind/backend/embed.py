@@ -40,6 +40,23 @@ _rate_store: dict = collections.defaultdict(list)
 _RATE_LIMIT   = 5    # max calls
 _RATE_WINDOW  = 60   # seconds
 
+def _client_ip(request: "Request") -> str:
+    """
+    Extract the real client IP, preferring X-Forwarded-For so the rate limiter
+    works correctly behind nginx / ALB / CloudFront.
+    Falls back to request.client.host, then 'unknown'.
+    Strips the port number so IPv4:port and bare IPv4 normalise to the same key.
+    """
+    forwarded = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+    if forwarded:
+        return forwarded
+    if request.client and request.client.host:
+        host = request.client.host
+        # Strip port (e.g. "127.0.0.1:51234" → "127.0.0.1")
+        return host.rsplit(":", 1)[0] if ":" in host and not host.startswith("[") else host
+    return "unknown"
+
+
 def _check_rate(ip: str):
     now = time.time()
     calls = _rate_store[ip]
@@ -137,8 +154,7 @@ def embed_validate_token(request: Request, req: EmbedValidateTokenRequest):
     Rate-limited to prevent brute-forcing provider tokens and abusing the
     external provider API at our cost.
     """
-    client_ip = request.client.host if request.client else "unknown"
-    _check_rate(client_ip)
+    _check_rate(_client_ip(request))
 
     partner = _get_partner(req.partner_key)
     if not partner:
@@ -178,8 +194,7 @@ def embed_init(request: Request, req: EmbedInitRequest):
     endpoints (/query, /providers/*, /billing/*, etc.).
     """
     # Rate limit: 5 calls/min per IP (blocks automated account creation abuse)
-    client_ip = request.client.host if request.client else "unknown"
-    _check_rate(client_ip)
+    _check_rate(_client_ip(request))
 
     # 1. Validate partner key
     partner = _get_partner(req.partner_key)
