@@ -51,6 +51,8 @@ from billing import (
     calculate_tokens, charge_tokens, get_token_usage_history,
     check_plan_feature, get_plan_history_limit,
 )
+from embed import router as embed_router, bootstrap_embed_tables
+from pool import get_pool
 
 log = get_logger(__name__)
 
@@ -66,16 +68,33 @@ from auth import (
 )
 
 app = FastAPI(title="DataMind AI", version="3.0.0")
+
+# CORS — allow all origins in dev; lock down to registered embed origins in prod
+# Set EMBED_ALLOWED_ORIGINS=https://app.salesplay.io,... in production .env
+_embed_origins_raw = os.getenv("EMBED_ALLOWED_ORIGINS", "")
+_embed_origins = [o.strip() for o in _embed_origins_raw.split(",") if o.strip()]
+_cors_origins = (
+    ["http://localhost:5173", "http://localhost:3000"] + _embed_origins
+    if _embed_origins else ["*"]
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
 )
+
+app.include_router(embed_router)
 
 @app.on_event("startup")
 def startup_event():
+    # Initialise connection pool first — all bootstraps below depend on DB access
+    try:
+        get_pool()
+    except Exception as _pe:
+        log.warning("DB connection pool init failed", error=str(_pe))
     try:
         init_users_table()
     except Exception as _be:
@@ -88,6 +107,10 @@ def startup_event():
         bootstrap_billing_tables()
     except Exception as _be:
         log.warning("Billing bootstrap skipped", error=str(_be))
+    try:
+        bootstrap_embed_tables()
+    except Exception as _be:
+        log.warning("Embed bootstrap skipped", error=str(_be))
     start_scheduler()
     log.info("DataMind backend started")
 
@@ -270,6 +293,20 @@ async def log_requests(request: Request, call_next):
                   method=request.method, path=request.url.path,
                   error=str(e), duration_ms=round(duration, 1))
         raise
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# EMBED SECURITY HEADERS
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.middleware("http")
+async def embed_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/embed"):
+        origins = os.getenv("EMBED_ALLOWED_ORIGINS", "*")
+        response.headers["Content-Security-Policy"] = f"frame-ancestors {origins}"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -905,19 +942,72 @@ def natural_language_query(req: NLQueryRequest, user: dict = Depends(current_use
     log.info("NL query", user=user["email"], llm=llm, question=req.question[:80])
     api_key = _resolve_api_key(user, llm)
     history = get_plan_history_limit(user["email"])
-    try:
+    s = user.get("settings", {})
+    if s.get("db_configs"):
+        # Own-DB user — their database is exclusively theirs; show all tables.
         conn = get_connection(_resolve_db(user))
-        schemas = get_table_schemas(conn, None)
-        fkeys = get_foreign_keys(conn)
+        tables_filter = None
+    else:
+        # Integration user (embed or main app).
+        # Resolve which tables belong to THIS user before opening the query conn.
+        user_conns = get_user_connections(user["email"])
+        prefixes = [c.get("table_prefix", "") for c in user_conns if c.get("table_prefix")]
+        if not prefixes:
+            raise HTTPException(
+                status_code=422,
+                detail="No data source connected. Please connect a provider first."
+            )
+        # Use a short-lived pool connection just to resolve table names, then
+        # release it before opening the query connection.
+        _meta_conn = _get_internal_conn()
+        try:
+            _meta_cur = _meta_conn.cursor()
+            tables_filter = []
+            for prefix in prefixes:
+                _meta_cur.execute(
+                    "SELECT TABLE_NAME FROM information_schema.TABLES "
+                    "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME LIKE %s "
+                    "ORDER BY TABLE_NAME",
+                    (f"{prefix}%",)
+                )
+                tables_filter.extend(r[0] for r in _meta_cur.fetchall())
+            _meta_cur.close()
+        finally:
+            _meta_conn.close()  # always returned to pool
+
+        if not tables_filter:
+            raise HTTPException(
+                status_code=422,
+                detail="Data sync not complete yet. Please wait for sync to finish."
+            )
+        log.debug("NL query scoped to user tables",
+                  user=user["email"], table_count=len(tables_filter))
+        conn = _get_internal_conn()
+
+    try:
+        schemas = get_table_schemas(conn, tables_filter)
+        all_fkeys = get_foreign_keys(conn)
+
+        # For integration users, filter FK relationships to only this user's
+        # tables. get_foreign_keys() returns every FK in the entire database —
+        # without this filter, User A's LLM prompt would contain User B's
+        # table relationships.
+        if tables_filter is not None:
+            user_tables = set(tables_filter)
+            fkeys = [
+                fk for fk in all_fkeys
+                if fk["table"] in user_tables and fk["ref_table"] in user_tables
+            ]
+        else:
+            fkeys = all_fkeys
+
         sql = query_to_sql(req.question, schemas, llm, fkeys, api_key=api_key,
                            user_email=user["email"], history_months=history["months"])
         cursor = conn.cursor()
         cursor.execute(sql)
         columns = [desc[0] for desc in cursor.description]
         rows = cursor.fetchall()
-        conn.close()
         data = [{k: _safe(v) for k, v in dict(zip(columns, row)).items()} for row in rows]
-        # Enforce plan row limit as fallback (applies when no date column filtered by LLM)
         row_limit = history["row_limit"]
         if len(data) > row_limit:
             data = data[:row_limit]
@@ -929,6 +1019,8 @@ def natural_language_query(req: NLQueryRequest, user: dict = Depends(current_use
     except Exception as e:
         log.error("NL query failed", user=user["email"], error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()  # always returned to pool (or closed for own-DB users)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

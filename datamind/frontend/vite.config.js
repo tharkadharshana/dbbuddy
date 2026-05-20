@@ -12,5 +12,13 @@ export default defineConfig({
         rewrite: path => path.replace(/^\/api/, '')
       }
     }
+  },
+  build: {
+    rollupOptions: {
+      input: {
+        main:  'index.html',
+        embed: 'src/embed/embed.html',
+      }
+    }
   }
 })

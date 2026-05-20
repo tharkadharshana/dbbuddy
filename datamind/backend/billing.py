@@ -9,6 +9,7 @@ from typing import Optional, Dict, List, Tuple
 from datetime import date, timedelta
 import mysql.connector
 from logger import get_logger
+from pool import get_internal_conn as _get_conn
 
 log = get_logger(__name__)
 
@@ -56,19 +57,6 @@ def calculate_tokens(operation_type: str, llm_tokens: int = 0, rows_returned: in
     T_db   = rows_returned / 1000
     T_feat = FEATURE_COST.get(operation_type, 0.5)
     return max(round(T_llm + T_db + T_feat, 4), 0.1)
-
-
-# ── DB connection ─────────────────────────────────────────────────────────────
-
-def _get_conn():
-    return mysql.connector.connect(
-        host     = os.getenv("DATAMIND_DB_HOST", os.getenv("DB_HOST", "localhost")),
-        port     = int(os.getenv("DATAMIND_DB_PORT", os.getenv("DB_PORT", "3306"))),
-        database = os.getenv("DATAMIND_DB_NAME", os.getenv("DB_NAME", "")),
-        user     = os.getenv("DATAMIND_DB_USER", os.getenv("DB_USER", "root")),
-        password = os.getenv("DATAMIND_DB_PASSWORD", os.getenv("DB_PASSWORD", "")),
-        connection_timeout=10,
-    )
 
 
 # ── Bootstrap ─────────────────────────────────────────────────────────────────
