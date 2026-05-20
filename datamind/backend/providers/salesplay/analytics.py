@@ -186,6 +186,10 @@ def _safe(v):
 
 def run_salesplay_analytics(conn, table_prefix: str, template_id: str) -> dict:
     """Run a pre-built SalesPlay analytics template."""
+    import re as _re
+    if not _re.match(r'^[A-Za-z0-9_]+$', table_prefix):
+        raise ValueError(f"Invalid table_prefix for analytics: {table_prefix!r}")
+
     if template_id not in TEMPLATES:
         raise ValueError(f"Template '{template_id}' not found for SalesPlay")
 
