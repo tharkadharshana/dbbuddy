@@ -82,17 +82,30 @@ class SalesPlayProvider(BaseProvider):
         mode = "Delta" if since else "Full"
         progress(f"{mode} sync started (since={since})")
 
-        steps = [
+        # Reference tables (shops, categories, payment_types) are small and rarely
+        # change — always sync them fully so lookup_map() finds names for receipts.
+        # Transactional tables (products, customers, receipts) respect the since cutoff.
+        ref_steps = [
             ("Shops",         sync_shops),
             ("Categories",    sync_categories),
             ("Payment Types", sync_payment_types),
-            ("Products",      sync_products),
-            ("Customers",     sync_customers),
-            ("Receipts",      sync_receipts),
+        ]
+        txn_steps = [
+            ("Products",  sync_products),
+            ("Customers", sync_customers),
+            ("Receipts",  sync_receipts),
         ]
 
         try:
-            for label, fn in steps:
+            for label, fn in ref_steps:
+                progress(f"  Syncing {label}…")
+                count = fn(client, conn, table_prefix, user_email,
+                           since=None, budget=None)  # always full, no budget on tiny ref data
+                total += count
+                conn.commit()
+                progress(f"  ✓ {label}: {count} rows")
+
+            for label, fn in txn_steps:
                 if budget.exhausted:
                     progress(f"  ⚠ Skipping {label} — row limit reached")
                     break

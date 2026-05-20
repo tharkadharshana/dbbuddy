@@ -89,17 +89,27 @@ class LoyverseProvider(BaseProvider):
         sync_mode = "Delta" if since else "Full"
         log_progress(f"{sync_mode} sync started (since={since})")
 
-        steps = [
+        ref_steps = [
             ("Stores",     sync_stores),
             ("Employees",  sync_employees),
             ("Categories", sync_categories),
-            ("Products",   sync_products),
-            ("Customers",  sync_customers),
-            ("Receipts",   sync_receipts),
+        ]
+        txn_steps = [
+            ("Products",  sync_products),
+            ("Customers", sync_customers),
+            ("Receipts",  sync_receipts),
         ]
 
         try:
-            for label, fn in steps:
+            for label, fn in ref_steps:
+                log_progress(f"  Syncing {label}…")
+                count = fn(client, conn, table_prefix, user_email,
+                           since=None, budget=None)
+                total += count
+                conn.commit()
+                log_progress(f"  ✓ {label}: {count} rows")
+
+            for label, fn in txn_steps:
                 if budget.exhausted:
                     log_progress(f"  ⚠ Skipping {label} — row limit reached")
                     break
