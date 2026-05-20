@@ -138,7 +138,22 @@ def bootstrap_integration_tables():
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """)
     conn.commit()
+
+    # Reset any integrations stuck in 'syncing' from a previous server crash.
+    # On a clean shutdown the status is always updated to 'active' or 'error',
+    # but a hard restart (SIGKILL, code reload, OOM) leaves the DB in 'syncing'
+    # permanently since the thread that would have updated it is gone.
+    cursor.execute("""
+        UPDATE user_integrations
+        SET status = 'error',
+            last_error = 'Sync was interrupted by a server restart. Will retry automatically.'
+        WHERE status = 'syncing'
+    """)
+    affected = cursor.rowcount
+    conn.commit()
     conn.close()
+    if affected:
+        log.warning("Reset stuck syncing integrations on startup", count=affected)
     log.info("Integration tables bootstrapped")
 
 
@@ -931,6 +946,7 @@ def _launch_scheduler_thread():
 
 
 _SYNC_ERROR_BACKOFF_MULTIPLIER = 5  # failed integrations wait 5× the normal interval
+_SYNC_STUCK_TIMEOUT_MINUTES = 30    # 'syncing' records older than this are considered crashed
 
 
 def _scheduler_tick():
@@ -938,6 +954,21 @@ def _scheduler_tick():
     conn = _get_internal_conn()
     try:
         cursor = conn.cursor(dictionary=True)
+
+        # Reset any integrations that have been stuck in 'syncing' for too long.
+        # This handles cases where a sync thread died without updating the status
+        # (e.g. OOM kill between our bootstrap cleanup and the next restart).
+        cursor.execute("""
+            UPDATE user_integrations
+            SET status = 'error',
+                last_error = 'Sync timed out — no completion after 30 minutes.'
+            WHERE status = 'syncing'
+              AND last_sync_at < DATE_SUB(NOW(), INTERVAL %s MINUTE)
+        """, (_SYNC_STUCK_TIMEOUT_MINUTES,))
+        if cursor.rowcount:
+            log.warning("Scheduler reset stuck syncing integrations", count=cursor.rowcount)
+            conn.commit()
+
         cursor.execute("""
             SELECT ui.id, ui.user_email, ui.provider_id, ui.last_sync_at, ui.status
             FROM user_integrations ui
