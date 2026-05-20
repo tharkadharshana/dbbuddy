@@ -103,6 +103,12 @@ function EmbedApp() {
     )
   }
 
+  // Apply accent colour from partner branding if provided
+  const accentColor = context?.branding?.accent_color
+  if (accentColor) {
+    document.documentElement.style.setProperty('--blue', accentColor)
+  }
+
   if (state === 'onboarding') {
     return (
       <EmbedOnboarding

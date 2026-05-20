@@ -167,6 +167,7 @@ function Message({ msg }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 export default function EmbedChat({ context, onExpired, onLogout }) {
+  const productTitle = context?.branding?.product_name || 'Ask Your Data'
   const [messages, setMessages] = useState([])
   const [input, setInput]       = useState('')
   const [loading, setLoading]   = useState(false)
@@ -235,7 +236,7 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
               <rect x="9" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.9)"/>
             </svg>
           </div>
-          <span style={{ fontSize:13, fontWeight:600, color:'var(--text)' }}>Ask Your Data</span>
+          <span style={{ fontSize:13, fontWeight:600, color:'var(--text)' }}>{productTitle}</span>
         </div>
         <button
           onClick={onLogout}

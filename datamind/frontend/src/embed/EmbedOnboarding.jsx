@@ -84,7 +84,8 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete }) {
   const [syncRows, setSyncRows]       = useState(0)
   const [error, setError]             = useState('')
 
-  const providerName = context?.partner_name || 'Salesplay'
+  const providerName  = context?.partner_name || 'Salesplay'
+  const productTitle  = context?.branding?.product_name || 'DataMind AI'
 
   // ── Step 0: validate Salesplay API token ────────────────────────────────────
   async function handleValidateToken() {
@@ -189,7 +190,7 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete }) {
             <rect x="9" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.95)"/>
           </svg>
         </div>
-        <div style={{ fontSize:15, fontWeight:700, color:'var(--text)' }}>DataMind AI</div>
+        <div style={{ fontSize:15, fontWeight:700, color:'var(--text)' }}>{productTitle}</div>
         <div style={{ fontSize:12, color:'var(--text3)', marginTop:2 }}>Ask your {providerName} data anything</div>
       </div>
 
