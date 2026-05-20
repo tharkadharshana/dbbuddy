@@ -30,8 +30,12 @@ from pool import get_internal_conn as _get_internal_conn
 
 log = get_logger(__name__)
 
-# In-memory sync progress store  keyed by integration_id; cleared when sync finishes
+# In-memory sync progress store keyed by integration_id; cleared when sync finishes
 _sync_progress: Dict[int, Dict] = {}
+
+# Guard set: integration IDs currently running a sync thread.
+# Prevents double-sync from scheduler + manual trigger racing on the same integration.
+_sync_active: set = set()
 
 
 # ── Credential encryption ──────────────────────────────────────────────────────
@@ -678,6 +682,17 @@ def _split_sql(sql: str) -> List[str]:
 def _run_sync(integration_id: int, user_email: str, provider_id: str,
               sync_type: str, progress_callback=None):
     """The actual sync worker — runs in a thread."""
+    try:
+        _run_sync_inner(integration_id, user_email, provider_id, sync_type, progress_callback)
+    finally:
+        # Always release the guard, even if the thread crashes unexpectedly
+        _sync_active.discard(integration_id)
+        _sync_progress.pop(integration_id, None)
+
+
+def _run_sync_inner(integration_id: int, user_email: str, provider_id: str,
+                    sync_type: str, progress_callback=None):
+    """Inner sync logic — separated so _run_sync can guarantee cleanup."""
     conn = _get_internal_conn()
     cursor = conn.cursor(dictionary=True)
 
@@ -817,15 +832,18 @@ def _run_sync(integration_id: int, user_email: str, provider_id: str,
     conn2.commit()
     conn2.close()
 
-    # Clear in-memory progress now that sync is done
-    _sync_progress.pop(integration_id, None)
-
     log.info("Sync worker finished", user=user_email, provider=provider_id,
              status=status, rows=result.rows_fetched)
 
 
 def _start_sync_thread(integration_id: int, user_email: str, provider_id: str,
-                       sync_type: str = "delta", progress_callback=None):
+                       sync_type: str = "delta", progress_callback=None) -> bool:
+    """Start a sync thread. Returns False (and skips) if a sync is already in progress."""
+    if integration_id in _sync_active:
+        log.info("Sync skipped — already in progress",
+                 user=user_email, provider=provider_id, integration_id=integration_id)
+        return False
+    _sync_active.add(integration_id)
     t = threading.Thread(
         target=_run_sync,
         args=(integration_id, user_email, provider_id, sync_type, progress_callback),
@@ -834,6 +852,7 @@ def _start_sync_thread(integration_id: int, user_email: str, provider_id: str,
     t.start()
     log.info("Sync thread started", user=user_email, provider=provider_id,
              sync_type=sync_type)
+    return True
 
 
 # ── Background scheduler ──────────────────────────────────────────────────────
