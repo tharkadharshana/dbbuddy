@@ -75,8 +75,9 @@ def _decrypt(token: str) -> dict:
 
 def bootstrap_integration_tables():
     """
-    Create the integration management tables in DataMind's own DB.
+    Create all integration management tables in DataMind's own DB.
     Safe to run on every startup (IF NOT EXISTS).
+    Includes the unified integration_records and integration_sync_state tables.
     """
     conn = _get_internal_conn()
     cursor = conn.cursor()
@@ -111,9 +112,311 @@ def bootstrap_integration_tables():
             INDEX idx_integration (integration_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """)
+    # Unified multi-tenant records table — replaces all dm_*_* per-user tables
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS integration_records (
+            id                   BIGINT       NOT NULL AUTO_INCREMENT,
+            tenant_id            VARCHAR(64)  NOT NULL,
+            user_email           VARCHAR(255) NOT NULL,
+            provider_id          VARCHAR(50)  NOT NULL,
+            record_type          VARCHAR(50)  NOT NULL,
+            external_id          VARCHAR(255) NOT NULL,
+            data                 JSON         NOT NULL,
+            external_created_at  DATETIME,
+            external_updated_at  DATETIME,
+            synced_at            DATETIME(3)  NOT NULL DEFAULT NOW(3),
+            created_at           DATETIME(3)  NOT NULL DEFAULT NOW(3),
+            updated_at           DATETIME(3)  NOT NULL DEFAULT NOW(3) ON UPDATE NOW(3),
+            PRIMARY KEY (id),
+            UNIQUE KEY uq_record (tenant_id, provider_id, record_type, external_id),
+            INDEX idx_query (tenant_id, provider_id, record_type, synced_at DESC),
+            INDEX idx_user  (user_email, provider_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 ROW_FORMAT=COMPRESSED
+    """)
+    # Sync cursor state per tenant/provider/record_type
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS integration_sync_state (
+            id              INT          NOT NULL AUTO_INCREMENT,
+            tenant_id       VARCHAR(64)  NOT NULL,
+            user_email      VARCHAR(255) NOT NULL,
+            provider_id     VARCHAR(50)  NOT NULL,
+            record_type     VARCHAR(50)  NOT NULL,
+            last_synced_at  DATETIME(3),
+            status          ENUM('ok','error','syncing') DEFAULT 'ok',
+            error_message   TEXT,
+            updated_at      DATETIME(3)  NOT NULL DEFAULT NOW(3) ON UPDATE NOW(3),
+            PRIMARY KEY (id),
+            UNIQUE KEY uq_state (tenant_id, provider_id, record_type)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """)
     conn.commit()
     conn.close()
     log.info("Integration tables bootstrapped")
+
+
+# ── SQL view creation ─────────────────────────────────────────────────────────
+# Views are named identically to the old per-user tables so analytics SQL
+# (salesplay/analytics.py, loyverse/analytics.py) works unchanged.
+# Views are created once per integration at connect time.
+
+_SALESPLAY_VIEWS = {
+    "{prefix}shops": """
+        SELECT
+            JSON_UNQUOTE(data->>'$.id')        AS id,
+            JSON_UNQUOTE(data->>'$.shop_name') AS shop_name,
+            JSON_UNQUOTE(data->>'$.address')   AS address,
+            JSON_UNQUOTE(data->>'$.phone')     AS phone,
+            JSON_UNQUOTE(data->>'$.email')     AS email,
+            JSON_UNQUOTE(data->>'$.status')    AS status,
+            JSON_UNQUOTE(data->>'$.updated_at') AS updated_at,
+            synced_at
+        FROM integration_records
+        WHERE tenant_id='{prefix}' AND provider_id='salesplay' AND record_type='shop'
+    """,
+    "{prefix}categories": """
+        SELECT
+            JSON_UNQUOTE(data->>'$.id')            AS id,
+            JSON_UNQUOTE(data->>'$.category_name') AS category_name,
+            JSON_UNQUOTE(data->>'$.created_at')    AS created_at,
+            JSON_UNQUOTE(data->>'$.updated_at')    AS updated_at,
+            synced_at
+        FROM integration_records
+        WHERE tenant_id='{prefix}' AND provider_id='salesplay' AND record_type='category'
+    """,
+    "{prefix}payment_types": """
+        SELECT
+            JSON_UNQUOTE(data->>'$.id')           AS id,
+            JSON_UNQUOTE(data->>'$.payment_name') AS payment_name,
+            JSON_UNQUOTE(data->>'$.created_at')   AS created_at,
+            JSON_UNQUOTE(data->>'$.updated_at')   AS updated_at,
+            synced_at
+        FROM integration_records
+        WHERE tenant_id='{prefix}' AND provider_id='salesplay' AND record_type='payment_type'
+    """,
+    "{prefix}products": """
+        SELECT
+            JSON_UNQUOTE(data->>'$.id')           AS id,
+            JSON_UNQUOTE(data->>'$.product_name') AS product_name,
+            JSON_UNQUOTE(data->>'$.category_id')  AS category_id,
+            JSON_UNQUOTE(data->>'$.sku')          AS sku,
+            CAST(data->>'$.price' AS DECIMAL(12,4)) AS price,
+            CAST(data->>'$.cost'  AS DECIMAL(12,4)) AS cost,
+            JSON_UNQUOTE(data->>'$.created_at')   AS created_at,
+            JSON_UNQUOTE(data->>'$.updated_at')   AS updated_at,
+            synced_at
+        FROM integration_records
+        WHERE tenant_id='{prefix}' AND provider_id='salesplay' AND record_type='product'
+    """,
+    "{prefix}customers": """
+        SELECT
+            JSON_UNQUOTE(data->>'$.id')            AS id,
+            JSON_UNQUOTE(data->>'$.customer_name') AS customer_name,
+            JSON_UNQUOTE(data->>'$.email')         AS email,
+            JSON_UNQUOTE(data->>'$.phone_number')  AS phone_number,
+            CAST(data->>'$.total_spent'    AS DECIMAL(14,4)) AS total_spent,
+            CAST(data->>'$.total_visits'   AS UNSIGNED)      AS total_visits,
+            CAST(data->>'$.points_balance' AS DECIMAL(12,2)) AS points_balance,
+            JSON_UNQUOTE(data->>'$.created_at') AS created_at,
+            JSON_UNQUOTE(data->>'$.updated_at') AS updated_at,
+            synced_at
+        FROM integration_records
+        WHERE tenant_id='{prefix}' AND provider_id='salesplay' AND record_type='customer'
+    """,
+    "{prefix}receipts": """
+        SELECT
+            JSON_UNQUOTE(data->>'$.id')                AS id,
+            JSON_UNQUOTE(data->>'$.receipt_number')    AS receipt_number,
+            JSON_UNQUOTE(data->>'$.shop_id')           AS shop_id,
+            JSON_UNQUOTE(data->>'$.shop_name')         AS shop_name,
+            JSON_UNQUOTE(data->>'$.customer_id')       AS customer_id,
+            JSON_UNQUOTE(data->>'$.customer_name')     AS customer_name,
+            external_created_at                        AS created_at,
+            JSON_UNQUOTE(data->>'$.updated_at')        AS updated_at,
+            CAST(data->>'$.total_money'    AS DECIMAL(14,4)) AS total_money,
+            CAST(data->>'$.total_discount' AS DECIMAL(14,4)) AS total_discount,
+            CAST(data->>'$.total_tax'      AS DECIMAL(14,4)) AS total_tax,
+            JSON_UNQUOTE(data->>'$.receipt_type')      AS receipt_type,
+            JSON_UNQUOTE(data->>'$.status')            AS status,
+            JSON_UNQUOTE(data->>'$.payment_type_id')   AS payment_type_id,
+            JSON_UNQUOTE(data->>'$.payment_type_name') AS payment_type_name,
+            CAST(data->>'$.payment_amount' AS DECIMAL(14,4)) AS payment_amount,
+            synced_at
+        FROM integration_records
+        WHERE tenant_id='{prefix}' AND provider_id='salesplay' AND record_type='receipt'
+    """,
+    "{prefix}receipt_line_items": """
+        SELECT
+            JSON_UNQUOTE(data->>'$.id')         AS id,
+            JSON_UNQUOTE(data->>'$.receipt_id') AS receipt_id,
+            JSON_UNQUOTE(data->>'$.product_id') AS product_id,
+            JSON_UNQUOTE(data->>'$.variant_id') AS variant_id,
+            JSON_UNQUOTE(data->>'$.product_name') AS product_name,
+            JSON_UNQUOTE(data->>'$.sku')          AS sku,
+            CAST(data->>'$.quantity'         AS DECIMAL(12,4)) AS quantity,
+            CAST(data->>'$.price'            AS DECIMAL(12,4)) AS price,
+            CAST(data->>'$.gross_total_money' AS DECIMAL(14,4)) AS gross_total_money,
+            CAST(data->>'$.total_discount'   AS DECIMAL(14,4)) AS total_discount,
+            CAST(data->>'$.total_money'      AS DECIMAL(14,4)) AS total_money,
+            CAST(data->>'$.cost'             AS DECIMAL(12,4)) AS cost,
+            JSON_UNQUOTE(data->>'$.created_at') AS created_at,
+            synced_at
+        FROM integration_records
+        WHERE tenant_id='{prefix}' AND provider_id='salesplay' AND record_type='receipt_line_item'
+    """,
+}
+
+_LOYVERSE_VIEWS = {
+    "{prefix}_stores": """
+        SELECT
+            JSON_UNQUOTE(data->>'$.id')           AS id,
+            JSON_UNQUOTE(data->>'$.name')         AS name,
+            JSON_UNQUOTE(data->>'$.address')      AS address,
+            JSON_UNQUOTE(data->>'$.phone_number') AS phone_number,
+            JSON_UNQUOTE(data->>'$.description')  AS description,
+            JSON_UNQUOTE(data->>'$.created_at')   AS created_at,
+            JSON_UNQUOTE(data->>'$.updated_at')   AS updated_at,
+            synced_at
+        FROM integration_records
+        WHERE tenant_id='{prefix}' AND provider_id='loyverse' AND record_type='shop'
+    """,
+    "{prefix}_employees": """
+        SELECT
+            JSON_UNQUOTE(data->>'$.id')       AS id,
+            JSON_UNQUOTE(data->>'$.name')     AS name,
+            JSON_UNQUOTE(data->>'$.email')    AS email,
+            JSON_UNQUOTE(data->>'$.role')     AS role,
+            JSON_UNQUOTE(data->>'$.store_id') AS store_id,
+            JSON_UNQUOTE(data->>'$.created_at') AS created_at,
+            JSON_UNQUOTE(data->>'$.updated_at') AS updated_at,
+            synced_at
+        FROM integration_records
+        WHERE tenant_id='{prefix}' AND provider_id='loyverse' AND record_type='employee'
+    """,
+    "{prefix}_categories": """
+        SELECT
+            JSON_UNQUOTE(data->>'$.id')    AS id,
+            JSON_UNQUOTE(data->>'$.name')  AS name,
+            JSON_UNQUOTE(data->>'$.color') AS color,
+            synced_at
+        FROM integration_records
+        WHERE tenant_id='{prefix}' AND provider_id='loyverse' AND record_type='category'
+    """,
+    "{prefix}_products": """
+        SELECT
+            JSON_UNQUOTE(data->>'$.id')          AS id,
+            JSON_UNQUOTE(data->>'$.handle')      AS handle,
+            JSON_UNQUOTE(data->>'$.item_name')   AS item_name,
+            JSON_UNQUOTE(data->>'$.description') AS description,
+            JSON_UNQUOTE(data->>'$.category_id') AS category_id,
+            CAST(data->>'$.track_stock' AS UNSIGNED) AS track_stock,
+            JSON_UNQUOTE(data->>'$.created_at')  AS created_at,
+            JSON_UNQUOTE(data->>'$.updated_at')  AS updated_at,
+            synced_at
+        FROM integration_records
+        WHERE tenant_id='{prefix}' AND provider_id='loyverse' AND record_type='product'
+    """,
+    "{prefix}_variants": """
+        SELECT
+            JSON_UNQUOTE(data->>'$.id')      AS id,
+            JSON_UNQUOTE(data->>'$.item_id') AS item_id,
+            JSON_UNQUOTE(data->>'$.sku')     AS sku,
+            JSON_UNQUOTE(data->>'$.barcode') AS barcode,
+            CAST(data->>'$.cost'          AS DECIMAL(12,4)) AS cost,
+            CAST(data->>'$.default_price' AS DECIMAL(12,4)) AS default_price,
+            JSON_UNQUOTE(data->>'$.stores_json') AS stores_json,
+            JSON_UNQUOTE(data->>'$.created_at')  AS created_at,
+            JSON_UNQUOTE(data->>'$.updated_at')  AS updated_at,
+            synced_at
+        FROM integration_records
+        WHERE tenant_id='{prefix}' AND provider_id='loyverse' AND record_type='variant'
+    """,
+    "{prefix}_customers": """
+        SELECT
+            JSON_UNQUOTE(data->>'$.id')           AS id,
+            JSON_UNQUOTE(data->>'$.name')         AS name,
+            JSON_UNQUOTE(data->>'$.email')        AS email,
+            JSON_UNQUOTE(data->>'$.phone_number') AS phone_number,
+            CAST(data->>'$.total_visits'   AS UNSIGNED)      AS total_visits,
+            CAST(data->>'$.total_spent'    AS DECIMAL(14,4)) AS total_spent,
+            CAST(data->>'$.points_balance' AS DECIMAL(12,2)) AS points_balance,
+            JSON_UNQUOTE(data->>'$.created_at') AS created_at,
+            JSON_UNQUOTE(data->>'$.updated_at') AS updated_at,
+            synced_at
+        FROM integration_records
+        WHERE tenant_id='{prefix}' AND provider_id='loyverse' AND record_type='customer'
+    """,
+    "{prefix}_receipts": """
+        SELECT
+            JSON_UNQUOTE(data->>'$.receipt_number') AS receipt_number,
+            external_created_at                     AS receipt_date,
+            JSON_UNQUOTE(data->>'$.order_type')     AS order_type,
+            JSON_UNQUOTE(data->>'$.store_id')       AS store_id,
+            JSON_UNQUOTE(data->>'$.cashier_id')     AS cashier_id,
+            JSON_UNQUOTE(data->>'$.customer_id')    AS customer_id,
+            JSON_UNQUOTE(data->>'$.customer_name')  AS customer_name,
+            CAST(data->>'$.total_money'     AS DECIMAL(14,4)) AS total_money,
+            CAST(data->>'$.total_discounts' AS DECIMAL(14,4)) AS total_discounts,
+            CAST(data->>'$.total_tax'       AS DECIMAL(14,4)) AS total_tax,
+            JSON_UNQUOTE(data->>'$.receipt_type') AS receipt_type,
+            JSON_UNQUOTE(data->>'$.created_at')   AS created_at,
+            JSON_UNQUOTE(data->>'$.updated_at')   AS updated_at,
+            synced_at
+        FROM integration_records
+        WHERE tenant_id='{prefix}' AND provider_id='loyverse' AND record_type='receipt'
+    """,
+    "{prefix}_receipt_line_items": """
+        SELECT
+            JSON_UNQUOTE(data->>'$.id')             AS id,
+            JSON_UNQUOTE(data->>'$.receipt_number') AS receipt_number,
+            JSON_UNQUOTE(data->>'$.item_id')        AS item_id,
+            JSON_UNQUOTE(data->>'$.variant_id')     AS variant_id,
+            JSON_UNQUOTE(data->>'$.item_name')      AS item_name,
+            JSON_UNQUOTE(data->>'$.variant_name')   AS variant_name,
+            JSON_UNQUOTE(data->>'$.sku')            AS sku,
+            CAST(data->>'$.quantity'         AS DECIMAL(12,4)) AS quantity,
+            CAST(data->>'$.price'            AS DECIMAL(12,4)) AS price,
+            CAST(data->>'$.gross_total_money' AS DECIMAL(14,4)) AS gross_total_money,
+            CAST(data->>'$.discount'         AS DECIMAL(12,4)) AS discount,
+            CAST(data->>'$.total_money'      AS DECIMAL(14,4)) AS total_money,
+            JSON_UNQUOTE(data->>'$.category_id') AS category_id,
+            synced_at
+        FROM integration_records
+        WHERE tenant_id='{prefix}' AND provider_id='loyverse' AND record_type='receipt_line_item'
+    """,
+    "{prefix}_payment_line_items": """
+        SELECT
+            JSON_UNQUOTE(data->>'$.id')                AS id,
+            JSON_UNQUOTE(data->>'$.receipt_number')    AS receipt_number,
+            JSON_UNQUOTE(data->>'$.payment_type_id')   AS payment_type_id,
+            JSON_UNQUOTE(data->>'$.payment_type_name') AS payment_type_name,
+            CAST(data->>'$.money_amount' AS DECIMAL(14,4)) AS money_amount,
+            synced_at
+        FROM integration_records
+        WHERE tenant_id='{prefix}' AND provider_id='loyverse' AND record_type='payment_line_item'
+    """,
+}
+
+_PROVIDER_VIEWS = {
+    "salesplay": _SALESPLAY_VIEWS,
+    "loyverse":  _LOYVERSE_VIEWS,
+}
+
+
+def _create_views_for_integration(conn, table_prefix: str, provider_id: str):
+    """
+    Create (or replace) SQL views that expose integration_records data using
+    the same names as the old per-user tables. Analytics SQL is unchanged.
+    Called once per integration at connect time.
+    """
+    view_map = _PROVIDER_VIEWS.get(provider_id, {})
+    cursor = conn.cursor()
+    for name_template, select_sql in view_map.items():
+        view_name = name_template.format(prefix=table_prefix)
+        body      = select_sql.format(prefix=table_prefix)
+        cursor.execute(f"CREATE OR REPLACE VIEW `{view_name}` AS {body}")
+    cursor.close()
+    log.info("Integration views created", prefix=table_prefix, provider=provider_id,
+             count=len(view_map))
 
 
 # ── Core integration operations ───────────────────────────────────────────────
@@ -177,14 +480,10 @@ def connect_integration(
     if not result.ok:
         raise ValueError(f"Credential validation failed: {result.error}")
 
-    # Create tables
+    # Create compatibility views (unified tables already exist via bootstrap)
     conn = _get_internal_conn()
-    cursor = conn.cursor()
-    schema_sql = provider.get_schema_sql(table_prefix)
-    for statement in _split_sql(schema_sql):
-        cursor.execute(statement)
+    _create_views_for_integration(conn, table_prefix, provider_id)
     conn.commit()
-    log.info("Tables created", prefix=table_prefix)
 
     # Save integration record
     enc_creds = _encrypt(creds)
@@ -238,17 +537,16 @@ def disconnect_integration(user_email: str, provider_id: str,
     cursor = conn.cursor()
 
     if drop_tables:
-        provider = get_provider(provider_id)
         prefix = row["table_prefix"]
-        # List tables with this prefix and drop them
         cursor.execute(
-            "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES "
-            "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME LIKE %s",
-            (f"{prefix}%",)
+            "DELETE FROM integration_records WHERE tenant_id=%s AND provider_id=%s",
+            (prefix, provider_id)
         )
-        for (tbl,) in cursor.fetchall():
-            cursor.execute(f"DROP TABLE IF EXISTS `{tbl}`")
-            log.info("Dropped provider table", table=tbl)
+        cursor.execute(
+            "DELETE FROM integration_sync_state WHERE tenant_id=%s AND provider_id=%s",
+            (prefix, provider_id)
+        )
+        log.info("Deleted integration data", prefix=prefix, provider=provider_id)
 
     cursor.execute(
         "DELETE FROM user_integrations WHERE user_email=%s AND provider_id=%s",
@@ -260,21 +558,17 @@ def disconnect_integration(user_email: str, provider_id: str,
 
 
 def delete_user_data(user_email: str):
-    """Drop all synced tables and every DB record belonging to this user."""
-    integrations = list_integrations(user_email)
+    """Delete all synced records and every DB row belonging to this user."""
     conn = _get_internal_conn()
     cursor = conn.cursor()
-    for integ in integrations:
-        prefix = integ.get("table_prefix", "")
-        if prefix:
-            cursor.execute(
-                "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES "
-                "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME LIKE %s",
-                (f"{prefix}%",)
-            )
-            for (tbl,) in cursor.fetchall():
-                cursor.execute(f"DROP TABLE IF EXISTS `{tbl}`")
-                log.info("Dropped user table", user=user_email, table=tbl)
+    # Delete unified integration data
+    cursor.execute(
+        "DELETE FROM integration_records WHERE user_email = %s", (user_email,)
+    )
+    cursor.execute(
+        "DELETE FROM integration_sync_state WHERE user_email = %s", (user_email,)
+    )
+    # Delete metadata rows
     cursor.execute(
         "DELETE sl FROM sync_logs sl "
         "JOIN user_integrations ui ON sl.integration_id = ui.id "
@@ -433,6 +727,7 @@ def _run_sync(integration_id: int, user_email: str, provider_id: str,
             since=since,
             progress_callback=_progress,
             row_budget=row_budget,
+            user_email=user_email,
         )
     finally:
         sync_conn.close()
@@ -631,20 +926,18 @@ def get_connection_status(user_email: str, connection_id: str) -> Dict:
         """, (integration_id,))
         row = cursor.fetchone() or {}
 
-        # Count total rows using actual COUNT(*) — information_schema is approximate for InnoDB
+        # Count total rows from unified table — fast, indexed
         total_rows = 0
         table_prefix = row.get("table_prefix", "")
         if table_prefix:
             try:
                 cursor.execute("""
-                    SELECT TABLE_NAME FROM information_schema.TABLES
-                    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME LIKE %s
-                """, (f"{table_prefix}%",))
-                tables = [r["TABLE_NAME"] for r in cursor.fetchall()]
-                for tbl in tables:
-                    cursor.execute(f"SELECT COUNT(*) AS cnt FROM `{tbl}`")
-                    r = cursor.fetchone()
-                    total_rows += int((r or {}).get("cnt") or 0)
+                    SELECT COUNT(*) AS cnt
+                    FROM integration_records
+                    WHERE tenant_id = %s AND provider_id = %s
+                """, (table_prefix, connection_id))
+                r = cursor.fetchone()
+                total_rows = int((r or {}).get("cnt") or 0)
             except Exception as e:
                 log.warning("Row count failed", prefix=table_prefix, error=str(e))
 
@@ -676,27 +969,17 @@ def get_connection_status(user_email: str, connection_id: str) -> Dict:
 
 
 def get_user_total_rows(user_email: str) -> int:
-    """Sum COUNT(*) across all synced tables for every integration the user has."""
+    """Sum all synced records for this user across all providers."""
     conn = _get_internal_conn()
     cursor = conn.cursor(dictionary=True)
     try:
-        cursor.execute(
-            "SELECT table_prefix FROM user_integrations WHERE user_email=%s",
-            (user_email,)
-        )
-        prefixes = [r["table_prefix"] for r in cursor.fetchall()]
-        total = 0
-        for prefix in prefixes:
-            cursor.execute("""
-                SELECT TABLE_NAME FROM information_schema.TABLES
-                WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME LIKE %s
-            """, (f"{prefix}%",))
-            tables = [r["TABLE_NAME"] for r in cursor.fetchall()]
-            for tbl in tables:
-                cursor.execute(f"SELECT COUNT(*) AS cnt FROM `{tbl}`")
-                r = cursor.fetchone()
-                total += int((r or {}).get("cnt") or 0)
-        return total
+        cursor.execute("""
+            SELECT COUNT(*) AS cnt
+            FROM integration_records
+            WHERE user_email = %s
+        """, (user_email,))
+        row = cursor.fetchone()
+        return int((row or {}).get("cnt") or 0)
     except Exception as e:
         log.warning("get_user_total_rows failed", user=user_email, error=str(e))
         return 0

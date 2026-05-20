@@ -65,13 +65,13 @@ class SalesPlayProvider(BaseProvider):
         since: Optional[datetime] = None,
         progress_callback=None,
         row_budget: Optional[int] = None,
+        user_email: str = "",
     ) -> SyncResult:
         from providers.base import RowBudget
         budget = RowBudget(row_budget)
 
         api_token = creds.get("api_token", "").strip()
         client    = SalesPlayAPIClient(api_token)
-        cursor    = conn.cursor()
         total     = 0
 
         def progress(msg: str):
@@ -97,7 +97,8 @@ class SalesPlayProvider(BaseProvider):
                     progress(f"  ⚠ Skipping {label} — row limit reached")
                     break
                 progress(f"  Syncing {label}…")
-                count = fn(client, cursor, table_prefix, since=since, budget=budget)
+                count = fn(client, conn, table_prefix, user_email,
+                           since=since, budget=budget)
                 total += count
                 conn.commit()
                 progress(f"  ✓ {label}: {count} rows")

@@ -1145,15 +1145,19 @@ def auto_forecast(periods: int = 90, user: dict = Depends(current_user)):
         raise HTTPException(status_code=402, detail=reason)
     s = user.get("settings", {})
 
-    # Provider-only user: run forecast on their synced receipts table
+    # Provider-only user: run forecast on their synced receipts view
     if not s.get("db_configs"):
         conns = get_user_connections(user["email"])
         if not conns:
             raise HTTPException(status_code=422, detail="No data source connected.")
-        prefix = conns[0].get("table_prefix", "")
+        primary      = conns[0]
+        prefix       = primary.get("table_prefix", "")
+        provider_id  = primary.get("provider_id", "salesplay")
         if not prefix:
             raise HTTPException(status_code=422, detail="Integration tables not ready.")
-        receipts_tbl = f"{prefix}receipts"
+        receipts_tbl = _PROVIDER_RECEIPTS_TABLE.get(
+            provider_id, "{prefix}receipts"
+        ).format(prefix=prefix)
         log.info("Provider auto forecast", user=user["email"], table=receipts_tbl)
         history = get_plan_history_limit(user["email"])
         try:
@@ -1269,15 +1273,19 @@ def auto_anomalies(user: dict = Depends(current_user)):
         raise HTTPException(status_code=402, detail=reason)
     s = user.get("settings", {})
 
-    # Provider-only user: run anomaly detection on their synced receipts table
+    # Provider-only user: run anomaly detection on their synced receipts view
     if not s.get("db_configs"):
         conns = get_user_connections(user["email"])
         if not conns:
             raise HTTPException(status_code=422, detail="No data source connected.")
-        prefix = conns[0].get("table_prefix", "")
+        primary      = conns[0]
+        prefix       = primary.get("table_prefix", "")
+        provider_id  = primary.get("provider_id", "salesplay")
         if not prefix:
             raise HTTPException(status_code=422, detail="Integration tables not ready.")
-        receipts_tbl = f"{prefix}receipts"
+        receipts_tbl = _PROVIDER_RECEIPTS_TABLE.get(
+            provider_id, "{prefix}receipts"
+        ).format(prefix=prefix)
         log.info("Provider auto anomaly", user=user["email"], table=receipts_tbl)
         history = get_plan_history_limit(user["email"])
         try:
