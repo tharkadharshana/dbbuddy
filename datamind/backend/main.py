@@ -73,10 +73,8 @@ app = FastAPI(title="DataMind AI", version="3.0.0")
 # Set EMBED_ALLOWED_ORIGINS=https://app.salesplay.io,... in production .env
 _embed_origins_raw = os.getenv("EMBED_ALLOWED_ORIGINS", "")
 _embed_origins = [o.strip() for o in _embed_origins_raw.split(",") if o.strip()]
-_cors_origins = (
-    ["http://localhost:5173", "http://localhost:3000"] + _embed_origins
-    if _embed_origins else ["*"]
-)
+# SEC-07: never default to "*" — always start from explicit localhost origins
+_cors_origins = ["http://localhost:5173", "http://localhost:3000"] + _embed_origins
 
 app.add_middleware(
     CORSMiddleware,
