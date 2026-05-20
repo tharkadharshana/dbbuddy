@@ -20,8 +20,9 @@ import collections
 import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
+from limiter import limiter as _limiter, RL_V1
 
 from logger import get_logger
 from pool import get_internal_conn as _get_conn
@@ -187,7 +188,9 @@ class UsageResponse(BaseModel):
     summary="List user integrations",
     description="Returns all provider integrations connected for the given user.",
 )
+@_limiter.limit(RL_V1)
 def v1_list_integrations(
+    request: Request,
     user_email: str = Query(..., description="End-user email address"),
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
 ):
@@ -224,7 +227,9 @@ def v1_list_integrations(
         "Rate-limited to 1 request per provider per user per 5 minutes."
     ),
 )
+@_limiter.limit(RL_V1)
 def v1_trigger_sync(
+    request: Request,
     provider: str,
     req: SyncRequest,
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
@@ -269,7 +274,9 @@ def v1_trigger_sync(
         "Record types: `products`, `receipts`, `customers`, `employees`, `categories`, etc."
     ),
 )
+@_limiter.limit(RL_V1)
 def v1_get_records(
+    request: Request,
     provider: str,
     record_type: str,
     user_email: str = Query(..., description="End-user email address"),
@@ -359,7 +366,9 @@ def v1_get_records(
         "Available template IDs depend on the provider — see `GET /discover` for the full list."
     ),
 )
+@_limiter.limit(RL_V1)
 def v1_run_analytics(
+    request: Request,
     template_id: str,
     user_email: str = Query(..., description="End-user email address"),
     provider: str = Query(..., description="Provider id: `loyverse` or `salesplay`"),
@@ -440,7 +449,9 @@ def v1_run_analytics(
         "Same data as `GET /billing/usage` but authenticated via partner API key."
     ),
 )
+@_limiter.limit(RL_V1)
 def v1_get_usage(
+    request: Request,
     user_email: str = Query(..., description="End-user email address"),
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
 ):
