@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
-from limiter import limiter as _limiter, RL_V1
+from limiter import partner_limiter as _limiter, RL_V1
 
 from logger import get_logger
 from pool import get_internal_conn as _get_conn
