@@ -75,8 +75,9 @@ def _decrypt(token: str) -> dict:
 
 def bootstrap_integration_tables():
     """
-    Create the integration management tables in DataMind's own DB.
+    Create all integration management tables in DataMind's own DB.
     Safe to run on every startup (IF NOT EXISTS).
+    Includes the unified integration_records and integration_sync_state tables.
     """
     conn = _get_internal_conn()
     cursor = conn.cursor()
@@ -111,9 +112,378 @@ def bootstrap_integration_tables():
             INDEX idx_integration (integration_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """)
+    # Unified multi-tenant records table — replaces all dm_*_* per-user tables
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS integration_records (
+            id                   BIGINT       NOT NULL AUTO_INCREMENT,
+            tenant_id            VARCHAR(64)  NOT NULL,
+            user_email           VARCHAR(255) NOT NULL,
+            provider_id          VARCHAR(50)  NOT NULL,
+            record_type          VARCHAR(50)  NOT NULL,
+            external_id          VARCHAR(255) NOT NULL,
+            data                 JSON         NOT NULL,
+            external_created_at  DATETIME,
+            external_updated_at  DATETIME,
+            synced_at            DATETIME(3)  NOT NULL DEFAULT NOW(3),
+            created_at           DATETIME(3)  NOT NULL DEFAULT NOW(3),
+            updated_at           DATETIME(3)  NOT NULL DEFAULT NOW(3) ON UPDATE NOW(3),
+            PRIMARY KEY (id),
+            UNIQUE KEY uq_record (tenant_id, provider_id, record_type, external_id),
+            INDEX idx_query (tenant_id, provider_id, record_type, synced_at DESC),
+            INDEX idx_user  (user_email, provider_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 ROW_FORMAT=COMPRESSED
+    """)
+    # Sync cursor state per tenant/provider/record_type
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS integration_sync_state (
+            id              INT          NOT NULL AUTO_INCREMENT,
+            tenant_id       VARCHAR(64)  NOT NULL,
+            user_email      VARCHAR(255) NOT NULL,
+            provider_id     VARCHAR(50)  NOT NULL,
+            record_type     VARCHAR(50)  NOT NULL,
+            last_synced_at  DATETIME(3),
+            status          ENUM('ok','error','syncing') DEFAULT 'ok',
+            error_message   TEXT,
+            updated_at      DATETIME(3)  NOT NULL DEFAULT NOW(3) ON UPDATE NOW(3),
+            PRIMARY KEY (id),
+            UNIQUE KEY uq_state (tenant_id, provider_id, record_type)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """)
     conn.commit()
     conn.close()
     log.info("Integration tables bootstrapped")
+
+
+# ── SQL view creation ─────────────────────────────────────────────────────────
+# Views are named identically to the old per-user tables so analytics SQL
+# (salesplay/analytics.py, loyverse/analytics.py) works unchanged.
+# Views are created once per integration at connect time.
+
+# MariaDB 10.4 compatible JSON extraction.
+# ->>'$.x' is MySQL 5.7.13+ / MariaDB 10.5+ only.
+# Use JSON_UNQUOTE(JSON_EXTRACT(col, '$.x')) for string fields,
+# and JSON_EXTRACT(col, '$.x') (no UNQUOTE) inside CAST for numeric fields.
+
+def _jstr(field: str) -> str:
+    """Extract a string JSON field — MariaDB 10.4 compatible."""
+    return f"JSON_UNQUOTE(JSON_EXTRACT(data, '$.{field}'))"
+
+def _jnum(field: str) -> str:
+    """Extract a numeric JSON field for use inside CAST."""
+    return f"JSON_EXTRACT(data, '$.{field}')"
+
+
+_SALESPLAY_VIEWS = {
+    "{prefix}shops": """
+        SELECT
+            {jid}                                          AS id,
+            {jshop_name}                                   AS shop_name,
+            {jaddress}                                     AS address,
+            {jphone}                                       AS phone,
+            {jemail}                                       AS email,
+            {jstatus}                                      AS status,
+            {jupdated_at}                                  AS updated_at,
+            synced_at
+        FROM integration_records
+        WHERE tenant_id='{{prefix}}' AND provider_id='salesplay' AND record_type='shop'
+    """.format(
+        jid=_jstr("id"), jshop_name=_jstr("shop_name"), jaddress=_jstr("address"),
+        jphone=_jstr("phone"), jemail=_jstr("email"), jstatus=_jstr("status"),
+        jupdated_at=_jstr("updated_at"),
+    ),
+    "{prefix}categories": """
+        SELECT
+            {jid}          AS id,
+            {jcat}         AS category_name,
+            {jcreated}     AS created_at,
+            {jupdated}     AS updated_at,
+            synced_at
+        FROM integration_records
+        WHERE tenant_id='{{prefix}}' AND provider_id='salesplay' AND record_type='category'
+    """.format(jid=_jstr("id"), jcat=_jstr("category_name"),
+               jcreated=_jstr("created_at"), jupdated=_jstr("updated_at")),
+    "{prefix}payment_types": """
+        SELECT
+            {jid}      AS id,
+            {jname}    AS payment_name,
+            {jcreated} AS created_at,
+            {jupdated} AS updated_at,
+            synced_at
+        FROM integration_records
+        WHERE tenant_id='{{prefix}}' AND provider_id='salesplay' AND record_type='payment_type'
+    """.format(jid=_jstr("id"), jname=_jstr("payment_name"),
+               jcreated=_jstr("created_at"), jupdated=_jstr("updated_at")),
+    "{prefix}products": """
+        SELECT
+            {jid}                                              AS id,
+            {jname}                                            AS product_name,
+            {jcat}                                             AS category_id,
+            {jsku}                                             AS sku,
+            CAST({jprice} AS DECIMAL(12,4))                    AS price,
+            CAST({jcost}  AS DECIMAL(12,4))                    AS cost,
+            {jcreated}                                         AS created_at,
+            {jupdated}                                         AS updated_at,
+            synced_at
+        FROM integration_records
+        WHERE tenant_id='{{prefix}}' AND provider_id='salesplay' AND record_type='product'
+    """.format(jid=_jstr("id"), jname=_jstr("product_name"), jcat=_jstr("category_id"),
+               jsku=_jstr("sku"), jprice=_jnum("price"), jcost=_jnum("cost"),
+               jcreated=_jstr("created_at"), jupdated=_jstr("updated_at")),
+    "{prefix}customers": """
+        SELECT
+            {jid}                                              AS id,
+            {jname}                                            AS customer_name,
+            {jemail}                                           AS email,
+            {jphone}                                           AS phone_number,
+            CAST({jspent}   AS DECIMAL(14,4))                  AS total_spent,
+            CAST({jvisits}  AS UNSIGNED)                       AS total_visits,
+            CAST({jpoints}  AS DECIMAL(12,2))                  AS points_balance,
+            {jcreated}                                         AS created_at,
+            {jupdated}                                         AS updated_at,
+            synced_at
+        FROM integration_records
+        WHERE tenant_id='{{prefix}}' AND provider_id='salesplay' AND record_type='customer'
+    """.format(jid=_jstr("id"), jname=_jstr("customer_name"), jemail=_jstr("email"),
+               jphone=_jstr("phone_number"), jspent=_jnum("total_spent"),
+               jvisits=_jnum("total_visits"), jpoints=_jnum("points_balance"),
+               jcreated=_jstr("created_at"), jupdated=_jstr("updated_at")),
+    "{prefix}receipts": """
+        SELECT
+            {jid}                                              AS id,
+            {jrn}                                              AS receipt_number,
+            {jshop_id}                                         AS shop_id,
+            {jshop_name}                                       AS shop_name,
+            {jcust_id}                                         AS customer_id,
+            {jcust_name}                                       AS customer_name,
+            external_created_at                                AS created_at,
+            {jupdated}                                         AS updated_at,
+            CAST({jtotal}    AS DECIMAL(14,4))                 AS total_money,
+            CAST({jdisc}     AS DECIMAL(14,4))                 AS total_discount,
+            CAST({jtax}      AS DECIMAL(14,4))                 AS total_tax,
+            {jrtype}                                           AS receipt_type,
+            {jstatus}                                          AS status,
+            {jpay_id}                                          AS payment_type_id,
+            {jpay_name}                                        AS payment_type_name,
+            CAST({jpay_amt}  AS DECIMAL(14,4))                 AS payment_amount,
+            synced_at
+        FROM integration_records
+        WHERE tenant_id='{{prefix}}' AND provider_id='salesplay' AND record_type='receipt'
+    """.format(
+        jid=_jstr("id"), jrn=_jstr("receipt_number"), jshop_id=_jstr("shop_id"),
+        jshop_name=_jstr("shop_name"), jcust_id=_jstr("customer_id"),
+        jcust_name=_jstr("customer_name"), jupdated=_jstr("updated_at"),
+        jtotal=_jnum("total_money"), jdisc=_jnum("total_discount"), jtax=_jnum("total_tax"),
+        jrtype=_jstr("receipt_type"), jstatus=_jstr("status"),
+        jpay_id=_jstr("payment_type_id"), jpay_name=_jstr("payment_type_name"),
+        jpay_amt=_jnum("payment_amount"),
+    ),
+    "{prefix}receipt_line_items": """
+        SELECT
+            {jid}                                              AS id,
+            {jrid}                                             AS receipt_id,
+            {jpid}                                             AS product_id,
+            {jvid}                                             AS variant_id,
+            {jpname}                                           AS product_name,
+            {jsku}                                             AS sku,
+            CAST({jqty}   AS DECIMAL(12,4))                    AS quantity,
+            CAST({jprice} AS DECIMAL(12,4))                    AS price,
+            CAST({jgross} AS DECIMAL(14,4))                    AS gross_total_money,
+            CAST({jdisc}  AS DECIMAL(14,4))                    AS total_discount,
+            CAST({jtotal} AS DECIMAL(14,4))                    AS total_money,
+            CAST({jcost}  AS DECIMAL(12,4))                    AS cost,
+            {jcreated}                                         AS created_at,
+            synced_at
+        FROM integration_records
+        WHERE tenant_id='{{prefix}}' AND provider_id='salesplay' AND record_type='receipt_line_item'
+    """.format(
+        jid=_jstr("id"), jrid=_jstr("receipt_id"), jpid=_jstr("product_id"),
+        jvid=_jstr("variant_id"), jpname=_jstr("product_name"), jsku=_jstr("sku"),
+        jqty=_jnum("quantity"), jprice=_jnum("price"), jgross=_jnum("gross_total_money"),
+        jdisc=_jnum("total_discount"), jtotal=_jnum("total_money"), jcost=_jnum("cost"),
+        jcreated=_jstr("created_at"),
+    ),
+}
+
+_LOYVERSE_VIEWS = {
+    "{prefix}_stores": """
+        SELECT
+            {jid}      AS id,
+            {jname}    AS name,
+            {jaddr}    AS address,
+            {jphone}   AS phone_number,
+            {jdesc}    AS description,
+            {jcreated} AS created_at,
+            {jupdated} AS updated_at,
+            synced_at
+        FROM integration_records
+        WHERE tenant_id='{{prefix}}' AND provider_id='loyverse' AND record_type='shop'
+    """.format(jid=_jstr("id"), jname=_jstr("name"), jaddr=_jstr("address"),
+               jphone=_jstr("phone_number"), jdesc=_jstr("description"),
+               jcreated=_jstr("created_at"), jupdated=_jstr("updated_at")),
+    "{prefix}_employees": """
+        SELECT
+            {jid}       AS id,
+            {jname}     AS name,
+            {jemail}    AS email,
+            {jrole}     AS role,
+            {jstore}    AS store_id,
+            {jcreated}  AS created_at,
+            {jupdated}  AS updated_at,
+            synced_at
+        FROM integration_records
+        WHERE tenant_id='{{prefix}}' AND provider_id='loyverse' AND record_type='employee'
+    """.format(jid=_jstr("id"), jname=_jstr("name"), jemail=_jstr("email"),
+               jrole=_jstr("role"), jstore=_jstr("store_id"),
+               jcreated=_jstr("created_at"), jupdated=_jstr("updated_at")),
+    "{prefix}_categories": """
+        SELECT
+            {jid}    AS id,
+            {jname}  AS name,
+            {jcolor} AS color,
+            synced_at
+        FROM integration_records
+        WHERE tenant_id='{{prefix}}' AND provider_id='loyverse' AND record_type='category'
+    """.format(jid=_jstr("id"), jname=_jstr("name"), jcolor=_jstr("color")),
+    "{prefix}_products": """
+        SELECT
+            {jid}                            AS id,
+            {jhandle}                        AS handle,
+            {jitem}                          AS item_name,
+            {jdesc}                          AS description,
+            {jcat}                           AS category_id,
+            CAST({jstock} AS UNSIGNED)       AS track_stock,
+            {jcreated}                       AS created_at,
+            {jupdated}                       AS updated_at,
+            synced_at
+        FROM integration_records
+        WHERE tenant_id='{{prefix}}' AND provider_id='loyverse' AND record_type='product'
+    """.format(jid=_jstr("id"), jhandle=_jstr("handle"), jitem=_jstr("item_name"),
+               jdesc=_jstr("description"), jcat=_jstr("category_id"),
+               jstock=_jnum("track_stock"),
+               jcreated=_jstr("created_at"), jupdated=_jstr("updated_at")),
+    "{prefix}_variants": """
+        SELECT
+            {jid}                                AS id,
+            {jitem}                              AS item_id,
+            {jsku}                               AS sku,
+            {jbar}                               AS barcode,
+            CAST({jcost}  AS DECIMAL(12,4))      AS cost,
+            CAST({jprice} AS DECIMAL(12,4))      AS default_price,
+            {jstores}                            AS stores_json,
+            {jcreated}                           AS created_at,
+            {jupdated}                           AS updated_at,
+            synced_at
+        FROM integration_records
+        WHERE tenant_id='{{prefix}}' AND provider_id='loyverse' AND record_type='variant'
+    """.format(jid=_jstr("id"), jitem=_jstr("item_id"), jsku=_jstr("sku"),
+               jbar=_jstr("barcode"), jcost=_jnum("cost"), jprice=_jnum("default_price"),
+               jstores=_jstr("stores_json"),
+               jcreated=_jstr("created_at"), jupdated=_jstr("updated_at")),
+    "{prefix}_customers": """
+        SELECT
+            {jid}                                    AS id,
+            {jname}                                  AS name,
+            {jemail}                                 AS email,
+            {jphone}                                 AS phone_number,
+            CAST({jvisits}  AS UNSIGNED)              AS total_visits,
+            CAST({jspent}   AS DECIMAL(14,4))         AS total_spent,
+            CAST({jpoints}  AS DECIMAL(12,2))         AS points_balance,
+            {jcreated}                               AS created_at,
+            {jupdated}                               AS updated_at,
+            synced_at
+        FROM integration_records
+        WHERE tenant_id='{{prefix}}' AND provider_id='loyverse' AND record_type='customer'
+    """.format(jid=_jstr("id"), jname=_jstr("name"), jemail=_jstr("email"),
+               jphone=_jstr("phone_number"), jvisits=_jnum("total_visits"),
+               jspent=_jnum("total_spent"), jpoints=_jnum("points_balance"),
+               jcreated=_jstr("created_at"), jupdated=_jstr("updated_at")),
+    "{prefix}_receipts": """
+        SELECT
+            {jrn}                                     AS receipt_number,
+            external_created_at                       AS receipt_date,
+            {jotype}                                  AS order_type,
+            {jstore}                                  AS store_id,
+            {jcashier}                                AS cashier_id,
+            {jcust}                                   AS customer_id,
+            {jcname}                                  AS customer_name,
+            CAST({jtotal}  AS DECIMAL(14,4))          AS total_money,
+            CAST({jdisc}   AS DECIMAL(14,4))          AS total_discounts,
+            CAST({jtax}    AS DECIMAL(14,4))           AS total_tax,
+            {jrtype}                                  AS receipt_type,
+            {jcreated}                                AS created_at,
+            {jupdated}                                AS updated_at,
+            synced_at
+        FROM integration_records
+        WHERE tenant_id='{{prefix}}' AND provider_id='loyverse' AND record_type='receipt'
+    """.format(
+        jrn=_jstr("receipt_number"), jotype=_jstr("order_type"),
+        jstore=_jstr("store_id"), jcashier=_jstr("cashier_id"),
+        jcust=_jstr("customer_id"), jcname=_jstr("customer_name"),
+        jtotal=_jnum("total_money"), jdisc=_jnum("total_discounts"), jtax=_jnum("total_tax"),
+        jrtype=_jstr("receipt_type"),
+        jcreated=_jstr("created_at"), jupdated=_jstr("updated_at"),
+    ),
+    "{prefix}_receipt_line_items": """
+        SELECT
+            {jid}                                      AS id,
+            {jrn}                                      AS receipt_number,
+            {jitem}                                    AS item_id,
+            {jvar}                                     AS variant_id,
+            {jiname}                                   AS item_name,
+            {jvname}                                   AS variant_name,
+            {jsku}                                     AS sku,
+            CAST({jqty}   AS DECIMAL(12,4))            AS quantity,
+            CAST({jprice} AS DECIMAL(12,4))            AS price,
+            CAST({jgross} AS DECIMAL(14,4))            AS gross_total_money,
+            CAST({jdisc}  AS DECIMAL(12,4))            AS discount,
+            CAST({jtotal} AS DECIMAL(14,4))            AS total_money,
+            {jcat}                                     AS category_id,
+            synced_at
+        FROM integration_records
+        WHERE tenant_id='{{prefix}}' AND provider_id='loyverse' AND record_type='receipt_line_item'
+    """.format(
+        jid=_jstr("id"), jrn=_jstr("receipt_number"), jitem=_jstr("item_id"),
+        jvar=_jstr("variant_id"), jiname=_jstr("item_name"), jvname=_jstr("variant_name"),
+        jsku=_jstr("sku"), jqty=_jnum("quantity"), jprice=_jnum("price"),
+        jgross=_jnum("gross_total_money"), jdisc=_jnum("discount"),
+        jtotal=_jnum("total_money"), jcat=_jstr("category_id"),
+    ),
+    "{prefix}_payment_line_items": """
+        SELECT
+            {jid}      AS id,
+            {jrn}      AS receipt_number,
+            {jpid}     AS payment_type_id,
+            {jpname}   AS payment_type_name,
+            CAST({jamt} AS DECIMAL(14,4)) AS money_amount,
+            synced_at
+        FROM integration_records
+        WHERE tenant_id='{{prefix}}' AND provider_id='loyverse' AND record_type='payment_line_item'
+    """.format(jid=_jstr("id"), jrn=_jstr("receipt_number"),
+               jpid=_jstr("payment_type_id"), jpname=_jstr("payment_type_name"),
+               jamt=_jnum("money_amount")),
+}
+
+_PROVIDER_VIEWS = {
+    "salesplay": _SALESPLAY_VIEWS,
+    "loyverse":  _LOYVERSE_VIEWS,
+}
+
+
+def _create_views_for_integration(conn, table_prefix: str, provider_id: str):
+    """
+    Create (or replace) SQL views that expose integration_records data using
+    the same names as the old per-user tables. Analytics SQL is unchanged.
+    Called once per integration at connect time.
+    """
+    view_map = _PROVIDER_VIEWS.get(provider_id, {})
+    cursor = conn.cursor()
+    for name_template, select_sql in view_map.items():
+        view_name = name_template.format(prefix=table_prefix)
+        body      = select_sql.format(prefix=table_prefix)
+        cursor.execute(f"CREATE OR REPLACE VIEW `{view_name}` AS {body}")
+    cursor.close()
+    log.info("Integration views created", prefix=table_prefix, provider=provider_id,
+             count=len(view_map))
 
 
 # ── Core integration operations ───────────────────────────────────────────────
@@ -177,18 +547,15 @@ def connect_integration(
     if not result.ok:
         raise ValueError(f"Credential validation failed: {result.error}")
 
-    # Create tables
+    # Create compatibility views (unified tables already exist via bootstrap)
     conn = _get_internal_conn()
-    cursor = conn.cursor()
-    schema_sql = provider.get_schema_sql(table_prefix)
-    for statement in _split_sql(schema_sql):
-        cursor.execute(statement)
+    _create_views_for_integration(conn, table_prefix, provider_id)
     conn.commit()
-    log.info("Tables created", prefix=table_prefix)
 
     # Save integration record
     enc_creds = _encrypt(creds)
     label = display_label or provider.manifest.display_name
+    cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO user_integrations
           (user_email, provider_id, display_label, table_prefix, credentials_enc, status)
@@ -238,17 +605,16 @@ def disconnect_integration(user_email: str, provider_id: str,
     cursor = conn.cursor()
 
     if drop_tables:
-        provider = get_provider(provider_id)
         prefix = row["table_prefix"]
-        # List tables with this prefix and drop them
         cursor.execute(
-            "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES "
-            "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME LIKE %s",
-            (f"{prefix}%",)
+            "DELETE FROM integration_records WHERE tenant_id=%s AND provider_id=%s",
+            (prefix, provider_id)
         )
-        for (tbl,) in cursor.fetchall():
-            cursor.execute(f"DROP TABLE IF EXISTS `{tbl}`")
-            log.info("Dropped provider table", table=tbl)
+        cursor.execute(
+            "DELETE FROM integration_sync_state WHERE tenant_id=%s AND provider_id=%s",
+            (prefix, provider_id)
+        )
+        log.info("Deleted integration data", prefix=prefix, provider=provider_id)
 
     cursor.execute(
         "DELETE FROM user_integrations WHERE user_email=%s AND provider_id=%s",
@@ -260,21 +626,17 @@ def disconnect_integration(user_email: str, provider_id: str,
 
 
 def delete_user_data(user_email: str):
-    """Drop all synced tables and every DB record belonging to this user."""
-    integrations = list_integrations(user_email)
+    """Delete all synced records and every DB row belonging to this user."""
     conn = _get_internal_conn()
     cursor = conn.cursor()
-    for integ in integrations:
-        prefix = integ.get("table_prefix", "")
-        if prefix:
-            cursor.execute(
-                "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES "
-                "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME LIKE %s",
-                (f"{prefix}%",)
-            )
-            for (tbl,) in cursor.fetchall():
-                cursor.execute(f"DROP TABLE IF EXISTS `{tbl}`")
-                log.info("Dropped user table", user=user_email, table=tbl)
+    # Delete unified integration data
+    cursor.execute(
+        "DELETE FROM integration_records WHERE user_email = %s", (user_email,)
+    )
+    cursor.execute(
+        "DELETE FROM integration_sync_state WHERE user_email = %s", (user_email,)
+    )
+    # Delete metadata rows
     cursor.execute(
         "DELETE sl FROM sync_logs sl "
         "JOIN user_integrations ui ON sl.integration_id = ui.id "
@@ -433,6 +795,7 @@ def _run_sync(integration_id: int, user_email: str, provider_id: str,
             since=since,
             progress_callback=_progress,
             row_budget=row_budget,
+            user_email=user_email,
         )
     finally:
         sync_conn.close()
@@ -631,20 +994,18 @@ def get_connection_status(user_email: str, connection_id: str) -> Dict:
         """, (integration_id,))
         row = cursor.fetchone() or {}
 
-        # Count total rows using actual COUNT(*) — information_schema is approximate for InnoDB
+        # Count total rows from unified table — fast, indexed
         total_rows = 0
         table_prefix = row.get("table_prefix", "")
         if table_prefix:
             try:
                 cursor.execute("""
-                    SELECT TABLE_NAME FROM information_schema.TABLES
-                    WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME LIKE %s
-                """, (f"{table_prefix}%",))
-                tables = [r["TABLE_NAME"] for r in cursor.fetchall()]
-                for tbl in tables:
-                    cursor.execute(f"SELECT COUNT(*) AS cnt FROM `{tbl}`")
-                    r = cursor.fetchone()
-                    total_rows += int((r or {}).get("cnt") or 0)
+                    SELECT COUNT(*) AS cnt
+                    FROM integration_records
+                    WHERE tenant_id = %s AND provider_id = %s
+                """, (table_prefix, connection_id))
+                r = cursor.fetchone()
+                total_rows = int((r or {}).get("cnt") or 0)
             except Exception as e:
                 log.warning("Row count failed", prefix=table_prefix, error=str(e))
 
@@ -676,27 +1037,17 @@ def get_connection_status(user_email: str, connection_id: str) -> Dict:
 
 
 def get_user_total_rows(user_email: str) -> int:
-    """Sum COUNT(*) across all synced tables for every integration the user has."""
+    """Sum all synced records for this user across all providers."""
     conn = _get_internal_conn()
     cursor = conn.cursor(dictionary=True)
     try:
-        cursor.execute(
-            "SELECT table_prefix FROM user_integrations WHERE user_email=%s",
-            (user_email,)
-        )
-        prefixes = [r["table_prefix"] for r in cursor.fetchall()]
-        total = 0
-        for prefix in prefixes:
-            cursor.execute("""
-                SELECT TABLE_NAME FROM information_schema.TABLES
-                WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME LIKE %s
-            """, (f"{prefix}%",))
-            tables = [r["TABLE_NAME"] for r in cursor.fetchall()]
-            for tbl in tables:
-                cursor.execute(f"SELECT COUNT(*) AS cnt FROM `{tbl}`")
-                r = cursor.fetchone()
-                total += int((r or {}).get("cnt") or 0)
-        return total
+        cursor.execute("""
+            SELECT COUNT(*) AS cnt
+            FROM integration_records
+            WHERE user_email = %s
+        """, (user_email,))
+        row = cursor.fetchone()
+        return int((row or {}).get("cnt") or 0)
     except Exception as e:
         log.warning("get_user_total_rows failed", user=user_email, error=str(e))
         return 0

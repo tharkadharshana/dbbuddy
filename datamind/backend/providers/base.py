@@ -122,11 +122,12 @@ class BaseProvider(ABC):
     def sync(
         self,
         creds: Dict[str, str],
-        conn,                          # MySQL connection to DataMind's own DB
-        table_prefix: str,             # e.g. "dm_u42_loyverse"
-        since: Optional[datetime],     # None = full sync, datetime = delta sync
-        progress_callback=None,        # optional callable(str) for live progress
+        conn,                              # MySQL connection to DataMind's own DB
+        table_prefix: str,                 # e.g. "dm_u42_loyverse"
+        since: Optional[datetime],         # None = full sync, datetime = delta sync
+        progress_callback=None,            # optional callable(str) for live progress
         row_budget: Optional[int] = None,  # max new rows allowed; None = unlimited
+        user_email: str = "",              # owner of this integration
     ) -> SyncResult:
         """
         Fetch data from the external API and upsert into our tables.

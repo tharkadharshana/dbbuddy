@@ -72,16 +72,14 @@ class LoyverseProvider(BaseProvider):
         since: Optional[datetime] = None,
         progress_callback=None,
         row_budget: Optional[int] = None,
+        user_email: str = "",
     ) -> SyncResult:
         from providers.base import RowBudget
         budget = RowBudget(row_budget)
 
         api_token = creds.get("api_token", "").strip()
-        client = LoyverseAPIClient(api_token)
-        cursor = conn.cursor()
-
-        total_inserted = 0
-        total_updated  = 0
+        client    = LoyverseAPIClient(api_token)
+        total     = 0
 
         def log_progress(msg: str):
             log.info("Loyverse sync", step=msg, prefix=table_prefix)
@@ -91,40 +89,49 @@ class LoyverseProvider(BaseProvider):
         sync_mode = "Delta" if since else "Full"
         log_progress(f"{sync_mode} sync started (since={since})")
 
-        steps = [
+        ref_steps = [
             ("Stores",     sync_stores),
             ("Employees",  sync_employees),
             ("Categories", sync_categories),
-            ("Products",   sync_products),
-            ("Customers",  sync_customers),
-            ("Receipts",   sync_receipts),
+            ("Products",   sync_products),   # always full — needed for analytics JOINs
+        ]
+        txn_steps = [
+            ("Customers", sync_customers),
+            ("Receipts",  sync_receipts),
         ]
 
         try:
-            for label, fn in steps:
+            for label, fn in ref_steps:
+                log_progress(f"  Syncing {label}…")
+                count = fn(client, conn, table_prefix, user_email,
+                           since=None, budget=None)
+                total += count
+                conn.commit()
+                log_progress(f"  ✓ {label}: {count} rows")
+
+            for label, fn in txn_steps:
                 if budget.exhausted:
                     log_progress(f"  ⚠ Skipping {label} — row limit reached")
                     break
                 log_progress(f"  Syncing {label}…")
-                count = fn(client, cursor, table_prefix, since=since, budget=budget)
-                total_inserted += count
+                count = fn(client, conn, table_prefix, user_email,
+                           since=since, budget=budget)
+                total += count
+                conn.commit()
                 log_progress(f"  ✓ {label}: {count} rows")
-
-            conn.commit()
 
             if budget.skipped > 0:
                 log_progress(f"⚠ Row limit reached — {budget.skipped:,} rows skipped")
             else:
-                log_progress(f"✅ Sync complete — {total_inserted} rows synced")
+                log_progress(f"✅ Sync complete — {total} rows synced")
 
             log.info("Loyverse sync complete",
-                     prefix=table_prefix, total=total_inserted, skipped=budget.skipped)
+                     prefix=table_prefix, total=total, skipped=budget.skipped)
 
             return SyncResult(
                 ok=True,
-                rows_fetched=total_inserted + budget.skipped,
-                rows_inserted=total_inserted,
-                rows_updated=total_updated,
+                rows_fetched=total + budget.skipped,
+                rows_inserted=total,
                 rows_skipped=budget.skipped,
                 limit_hit=budget.skipped > 0,
             )
