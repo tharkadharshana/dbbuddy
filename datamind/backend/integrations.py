@@ -1095,8 +1095,12 @@ def get_connection_status(user_email: str, connection_id: str) -> Dict:
         conn.close()
 
 
-def get_user_total_rows(user_email: str) -> int:
-    """Sum all synced records for this user across all providers."""
+def get_user_total_rows(user_email: str) -> Optional[int]:
+    """
+    Sum all synced records for this user across all providers.
+    Returns None on DB error so callers can distinguish 'zero rows' from
+    'count unavailable' — important for billing row-limit enforcement.
+    """
     conn = _get_internal_conn()
     cursor = conn.cursor(dictionary=True)
     try:
@@ -1109,7 +1113,7 @@ def get_user_total_rows(user_email: str) -> int:
         return int((row or {}).get("cnt") or 0)
     except Exception as e:
         log.warning("get_user_total_rows failed", user=user_email, error=str(e))
-        return 0
+        return None  # None signals 'count unavailable', not 'zero rows'
     finally:
         conn.close()
 

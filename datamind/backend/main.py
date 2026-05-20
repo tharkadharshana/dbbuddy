@@ -1742,11 +1742,10 @@ def connect_provider_route(req: ProviderConnectRequest,
 @app.get("/providers/stats")
 def provider_stats(user: dict = Depends(current_user)):
     """Return aggregate stats across all user integrations (total rows across all providers)."""
-    try:
-        return {"total_rows": get_user_total_rows(user["email"])}
-    except Exception as e:
-        log.error("Provider stats failed", user=user["email"], error=str(e))
+    count = get_user_total_rows(user["email"])
+    if count is None:
         raise _server_error("Failed to load provider stats.")
+    return {"total_rows": count}
 
 
 @app.delete("/providers/{connection_id}")
