@@ -819,9 +819,9 @@ def _run_sync_inner(integration_id: int, user_email: str, provider_id: str,
             WHERE id=%s
         """, (status, result.rows_fetched, result.rows_inserted,
               result.rows_updated, error_msg, log_id))
-        # Always update last_sync_at — even on failure — so the scheduler
-    # applies backoff instead of retrying on every tick.
-    c2.execute("""
+        # Always update last_sync_at even on failure so the scheduler
+        # applies backoff instead of retrying on every tick.
+        c2.execute("""
             UPDATE user_integrations SET
               status=%s, last_sync_at=NOW(),
               last_sync_rows=%s, last_error=%s
