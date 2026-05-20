@@ -859,31 +859,73 @@ def _start_sync_thread(integration_id: int, user_email: str, provider_id: str,
 
 # ── Background scheduler ──────────────────────────────────────────────────────
 
-_scheduler_running = False
+_scheduler_thread: Optional[threading.Thread] = None
+
+
+def _try_acquire_scheduler_lock() -> bool:
+    """
+    Attempt to acquire a DB-level advisory lock for the scheduler.
+    Returns True only for the one worker that wins the lock.
+    Uses GET_LOCK() with a 0-second timeout so non-winners return immediately.
+    The lock is held for the lifetime of the connection — released on conn.close().
+    """
+    try:
+        conn = _get_internal_conn()
+        cursor = conn.cursor()
+        cursor.execute("SELECT GET_LOCK('datamind_scheduler', 0)")
+        result = cursor.fetchone()
+        acquired = result and result[0] == 1
+        if acquired:
+            # Intentionally do NOT close this connection — releasing it drops the lock.
+            # The connection is kept open for the scheduler's lifetime.
+            log.info("Scheduler: acquired DB advisory lock — this worker owns the scheduler")
+        else:
+            conn.close()
+            log.debug("Scheduler: another worker already holds the lock — skipping")
+        return acquired
+    except Exception as e:
+        log.warning("Scheduler: could not acquire DB lock, starting anyway", error=str(e))
+        return True  # fail open — better to have duplicate ticks than no ticks
 
 
 def start_scheduler():
     """
-    Start the background scheduler that auto-syncs all active integrations
-    according to each provider's sync_interval_minutes.
-    Call once at application startup.
+    Start the background scheduler. Only one worker per server will actually run
+    ticks — the others are blocked by a DB advisory lock. The scheduler thread is
+    monitored and restarted if it dies (watchdog pattern).
     """
-    global _scheduler_running
-    if _scheduler_running:
-        return
-    _scheduler_running = True
+    _launch_scheduler_thread()
+
+
+def _launch_scheduler_thread():
+    global _scheduler_thread
 
     def _loop():
+        if not _try_acquire_scheduler_lock():
+            return  # another worker won — this thread exits cleanly
         log.info("Integration scheduler started")
-        while _scheduler_running:
+        while True:
             try:
                 _scheduler_tick()
             except Exception as e:
                 log.error("Scheduler tick failed", error=str(e))
-            time.sleep(60)  # check every minute
+            time.sleep(60)
 
-    t = threading.Thread(target=_loop, daemon=True)
-    t.start()
+    _scheduler_thread = threading.Thread(target=_loop, daemon=True, name="datamind-scheduler")
+    _scheduler_thread.start()
+
+    # Watchdog: a second daemon thread that checks if the scheduler is alive
+    # and relaunches it if it dies.
+    def _watchdog():
+        time.sleep(90)  # give the scheduler time to start
+        while True:
+            time.sleep(60)
+            if _scheduler_thread and not _scheduler_thread.is_alive():
+                log.warning("Scheduler thread died — restarting")
+                _launch_scheduler_thread()
+                break  # the new launch spawns its own watchdog
+
+    threading.Thread(target=_watchdog, daemon=True, name="datamind-scheduler-watchdog").start()
 
 
 def _scheduler_tick():
