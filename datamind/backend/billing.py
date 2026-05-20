@@ -13,6 +13,30 @@ from pool import get_internal_conn as _get_conn
 
 log = get_logger(__name__)
 
+# Track consecutive billing-check failures so we can alert when the DB is
+# persistently unavailable (fail-open is intentional but should not be silent).
+import threading as _threading
+_billing_fail_count = 0
+_billing_fail_lock  = _threading.Lock()
+_BILLING_FAIL_WARN_EVERY = 10  # log an escalated warning every N consecutive failures
+
+def _record_billing_fail(context: str):
+    global _billing_fail_count
+    with _billing_fail_lock:
+        _billing_fail_count += 1
+        count = _billing_fail_count
+    if count == 1 or count % _BILLING_FAIL_WARN_EVERY == 0:
+        log.error(
+            "Billing check FAILING OPEN — quota enforcement is bypassed",
+            context=context,
+            consecutive_failures=count,
+        )
+
+def _reset_billing_fail():
+    global _billing_fail_count
+    with _billing_fail_lock:
+        _billing_fail_count = 0
+
 ADDON_PACKAGES = {
     "ai_credits": {"units_per_pack": 50,       "price_cents": 100, "label": "50 AI Credits"},
     "db_rows":    {"units_per_pack": 100_000,   "price_cents": 100, "label": "100K DB Rows"},
@@ -515,15 +539,19 @@ def check_plan_feature(user_email: str, feature: str) -> Tuple[bool, str]:
         row = cur.fetchone()
         cur.close(); conn.close()
         if not row:
+            _reset_billing_fail()
             return False, "No active subscription."
         plan_name   = row["plan_name"]
         allowed     = _PLAN_FEATURE_GATE.get(feature)
         if allowed and plan_name not in allowed:
             upgrade_to = sorted(allowed)[0]
+            _reset_billing_fail()
             return False, f"Upgrade to {upgrade_to} or above to use this feature."
+        _reset_billing_fail()
         return True, ""
     except Exception as e:
         log.warning("check_plan_feature failed open", feature=feature, email=user_email, error=str(e))
+        _record_billing_fail(f"check_plan_feature:{feature}")
         return True, ""
 
 
@@ -570,6 +598,7 @@ def check_ai_limit(user_email: str) -> Tuple[bool, str]:
         return True, ""
     except Exception as e:
         log.warning("check_ai_limit failed open", email=user_email, error=str(e))
+        _record_billing_fail("check_ai_limit")
         return True, ""
 
 
@@ -585,6 +614,7 @@ def check_db_limit(user_email: str, rows: int) -> Tuple[bool, str]:
         return True, ""
     except Exception as e:
         log.warning("check_db_limit failed open", email=user_email, error=str(e))
+        _record_billing_fail("check_db_limit")
         return True, ""
 
 

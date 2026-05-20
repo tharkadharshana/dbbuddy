@@ -30,8 +30,12 @@ from pool import get_internal_conn as _get_internal_conn
 
 log = get_logger(__name__)
 
-# In-memory sync progress store  keyed by integration_id; cleared when sync finishes
+# In-memory sync progress store keyed by integration_id; cleared when sync finishes
 _sync_progress: Dict[int, Dict] = {}
+
+# Guard set: integration IDs currently running a sync thread.
+# Prevents double-sync from scheduler + manual trigger racing on the same integration.
+_sync_active: set = set()
 
 
 # ── Credential encryption ──────────────────────────────────────────────────────
@@ -134,7 +138,22 @@ def bootstrap_integration_tables():
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """)
     conn.commit()
+
+    # Reset any integrations stuck in 'syncing' from a previous server crash.
+    # On a clean shutdown the status is always updated to 'active' or 'error',
+    # but a hard restart (SIGKILL, code reload, OOM) leaves the DB in 'syncing'
+    # permanently since the thread that would have updated it is gone.
+    cursor.execute("""
+        UPDATE user_integrations
+        SET status = 'error',
+            last_error = 'Sync was interrupted by a server restart. Will retry automatically.'
+        WHERE status = 'syncing'
+    """)
+    affected = cursor.rowcount
+    conn.commit()
     conn.close()
+    if affected:
+        log.warning("Reset stuck syncing integrations on startup", count=affected)
     log.info("Integration tables bootstrapped")
 
 
@@ -678,46 +697,57 @@ def _split_sql(sql: str) -> List[str]:
 def _run_sync(integration_id: int, user_email: str, provider_id: str,
               sync_type: str, progress_callback=None):
     """The actual sync worker — runs in a thread."""
+    try:
+        _run_sync_inner(integration_id, user_email, provider_id, sync_type, progress_callback)
+    finally:
+        # Always release the guard, even if the thread crashes unexpectedly
+        _sync_active.discard(integration_id)
+        _sync_progress.pop(integration_id, None)
+
+
+def _run_sync_inner(integration_id: int, user_email: str, provider_id: str,
+                    sync_type: str, progress_callback=None):
+    """Inner sync logic — separated so _run_sync can guarantee cleanup."""
     conn = _get_internal_conn()
-    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor = conn.cursor(dictionary=True)
 
-    # Mark as syncing
-    cursor.execute(
-        "UPDATE user_integrations SET status='syncing' WHERE id=%s",
-        (integration_id,)
-    )
-    # Create sync log entry
-    cursor.execute(
-        "INSERT INTO sync_logs (integration_id, sync_type, started_at, status) "
-        "VALUES (%s,%s,NOW(),'running')",
-        (integration_id, sync_type)
-    )
-    conn.commit()
-    log_id = cursor.lastrowid
+        # Mark as syncing
+        cursor.execute(
+            "UPDATE user_integrations SET status='syncing' WHERE id=%s",
+            (integration_id,)
+        )
+        # Create sync log entry
+        cursor.execute(
+            "INSERT INTO sync_logs (integration_id, sync_type, started_at, status) "
+            "VALUES (%s,%s,NOW(),'running')",
+            (integration_id, sync_type)
+        )
+        conn.commit()
+        log_id = cursor.lastrowid
 
-    # Get credentials + table prefix
-    cursor.execute(
-        "SELECT credentials_enc, table_prefix, last_sync_at FROM user_integrations WHERE id=%s",
-        (integration_id,)
-    )
-    row = cursor.fetchone()
-    creds = _decrypt(row["credentials_enc"])
-    table_prefix = row["table_prefix"]
-    if sync_type == "delta" and row["last_sync_at"]:
-        since = row["last_sync_at"]          # delta: continue from last sync
-    else:
-        # Full sync: limit to plan's data-history window so we don't import
-        # years of data for users on restricted plans.
-        try:
-            from billing import get_plan_history_limit
-            history = get_plan_history_limit(user_email)
-            since = datetime.combine(history["cutoff_date"], datetime.min.time())
-            log.info("Full sync history cutoff applied",
-                     user=user_email, months=history["months"], since=str(since))
-        except Exception as _he:
-            log.warning("Could not get plan history limit — syncing all data", error=str(_he))
-            since = None
-    conn.close()
+        # Get credentials + table prefix
+        cursor.execute(
+            "SELECT credentials_enc, table_prefix, last_sync_at FROM user_integrations WHERE id=%s",
+            (integration_id,)
+        )
+        row = cursor.fetchone()
+        creds = _decrypt(row["credentials_enc"])
+        table_prefix = row["table_prefix"]
+        if sync_type == "delta" and row["last_sync_at"]:
+            since = row["last_sync_at"]
+        else:
+            try:
+                from billing import get_plan_history_limit
+                history = get_plan_history_limit(user_email)
+                since = datetime.combine(history["cutoff_date"], datetime.min.time())
+                log.info("Full sync history cutoff applied",
+                         user=user_email, months=history["months"], since=str(since))
+            except Exception as _he:
+                log.warning("Could not get plan history limit — syncing all data", error=str(_he))
+                since = None
+    finally:
+        conn.close()
 
     provider = get_provider(provider_id)
     log.info("Sync worker starting", user=user_email, provider=provider_id,
@@ -794,38 +824,45 @@ def _run_sync(integration_id: int, user_email: str, provider_id: str,
     error_msg = limit_msg or result.error or None
 
     conn2 = _get_internal_conn()
-    c2 = conn2.cursor()
-    c2.execute("""
-        UPDATE sync_logs SET
-          finished_at=NOW(), status=%s,
-          rows_fetched=%s, rows_inserted=%s, rows_updated=%s,
-          error_message=%s
-        WHERE id=%s
-    """, (status, result.rows_fetched, result.rows_inserted,
-          result.rows_updated, error_msg, log_id))
-    c2.execute("""
-        UPDATE user_integrations SET
-          status=%s, last_sync_at=IF(%s='success', NOW(), last_sync_at),
-          last_sync_rows=%s, last_error=%s
-        WHERE id=%s
-    """, (
-        "active" if result.ok else "error",
-        status, result.rows_inserted,
-        error_msg,
-        integration_id,
-    ))
-    conn2.commit()
-    conn2.close()
-
-    # Clear in-memory progress now that sync is done
-    _sync_progress.pop(integration_id, None)
+    try:
+        c2 = conn2.cursor()
+        c2.execute("""
+            UPDATE sync_logs SET
+              finished_at=NOW(), status=%s,
+              rows_fetched=%s, rows_inserted=%s, rows_updated=%s,
+              error_message=%s
+            WHERE id=%s
+        """, (status, result.rows_fetched, result.rows_inserted,
+              result.rows_updated, error_msg, log_id))
+        # Always update last_sync_at even on failure so the scheduler
+        # applies backoff instead of retrying on every tick.
+        c2.execute("""
+            UPDATE user_integrations SET
+              status=%s, last_sync_at=NOW(),
+              last_sync_rows=%s, last_error=%s
+            WHERE id=%s
+        """, (
+            "active" if result.ok else "error",
+            result.rows_inserted,
+            error_msg,
+            integration_id,
+        ))
+        conn2.commit()
+    finally:
+        conn2.close()
 
     log.info("Sync worker finished", user=user_email, provider=provider_id,
              status=status, rows=result.rows_fetched)
 
 
 def _start_sync_thread(integration_id: int, user_email: str, provider_id: str,
-                       sync_type: str = "delta", progress_callback=None):
+                       sync_type: str = "delta", progress_callback=None) -> bool:
+    """Start a sync thread. Returns False (and skips) if a sync is already in progress."""
+    if integration_id in _sync_active:
+        log.info("Sync skipped — already in progress",
+                 user=user_email, provider=provider_id, integration_id=integration_id)
+        return False
+    _sync_active.add(integration_id)
     t = threading.Thread(
         target=_run_sync,
         args=(integration_id, user_email, provider_id, sync_type, progress_callback),
@@ -834,48 +871,112 @@ def _start_sync_thread(integration_id: int, user_email: str, provider_id: str,
     t.start()
     log.info("Sync thread started", user=user_email, provider=provider_id,
              sync_type=sync_type)
+    return True
 
 
 # ── Background scheduler ──────────────────────────────────────────────────────
 
-_scheduler_running = False
+_scheduler_thread: Optional[threading.Thread] = None
+
+
+def _try_acquire_scheduler_lock() -> bool:
+    """
+    Attempt to acquire a DB-level advisory lock for the scheduler.
+    Returns True only for the one worker that wins the lock.
+    Uses GET_LOCK() with a 0-second timeout so non-winners return immediately.
+    The lock is held for the lifetime of the connection — released on conn.close().
+    """
+    try:
+        conn = _get_internal_conn()
+        cursor = conn.cursor()
+        cursor.execute("SELECT GET_LOCK('datamind_scheduler', 0)")
+        result = cursor.fetchone()
+        acquired = result and result[0] == 1
+        if acquired:
+            # Intentionally do NOT close this connection — releasing it drops the lock.
+            # The connection is kept open for the scheduler's lifetime.
+            log.info("Scheduler: acquired DB advisory lock — this worker owns the scheduler")
+        else:
+            conn.close()
+            log.debug("Scheduler: another worker already holds the lock — skipping")
+        return acquired
+    except Exception as e:
+        log.warning("Scheduler: could not acquire DB lock, starting anyway", error=str(e))
+        return True  # fail open — better to have duplicate ticks than no ticks
 
 
 def start_scheduler():
     """
-    Start the background scheduler that auto-syncs all active integrations
-    according to each provider's sync_interval_minutes.
-    Call once at application startup.
+    Start the background scheduler. Only one worker per server will actually run
+    ticks — the others are blocked by a DB advisory lock. The scheduler thread is
+    monitored and restarted if it dies (watchdog pattern).
     """
-    global _scheduler_running
-    if _scheduler_running:
-        return
-    _scheduler_running = True
+    _launch_scheduler_thread()
+
+
+def _launch_scheduler_thread():
+    global _scheduler_thread
 
     def _loop():
+        if not _try_acquire_scheduler_lock():
+            return  # another worker won — this thread exits cleanly
         log.info("Integration scheduler started")
-        while _scheduler_running:
+        while True:
             try:
                 _scheduler_tick()
             except Exception as e:
                 log.error("Scheduler tick failed", error=str(e))
-            time.sleep(60)  # check every minute
+            time.sleep(60)
 
-    t = threading.Thread(target=_loop, daemon=True)
-    t.start()
+    _scheduler_thread = threading.Thread(target=_loop, daemon=True, name="datamind-scheduler")
+    _scheduler_thread.start()
+
+    # Watchdog: a second daemon thread that checks if the scheduler is alive
+    # and relaunches it if it dies.
+    def _watchdog():
+        time.sleep(90)  # give the scheduler time to start
+        while True:
+            time.sleep(60)
+            if _scheduler_thread and not _scheduler_thread.is_alive():
+                log.warning("Scheduler thread died — restarting")
+                _launch_scheduler_thread()
+                break  # the new launch spawns its own watchdog
+
+    threading.Thread(target=_watchdog, daemon=True, name="datamind-scheduler-watchdog").start()
+
+
+_SYNC_ERROR_BACKOFF_MULTIPLIER = 5  # failed integrations wait 5× the normal interval
+_SYNC_STUCK_TIMEOUT_MINUTES = 30    # 'syncing' records older than this are considered crashed
 
 
 def _scheduler_tick():
-    """Check all active integrations and sync if due."""
+    """Check all active and errored integrations and sync if due."""
     conn = _get_internal_conn()
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute("""
-        SELECT ui.id, ui.user_email, ui.provider_id, ui.last_sync_at
-        FROM user_integrations ui
-        WHERE ui.status='active'
-    """)
-    rows = cursor.fetchall()
-    conn.close()
+    try:
+        cursor = conn.cursor(dictionary=True)
+
+        # Reset any integrations that have been stuck in 'syncing' for too long.
+        # This handles cases where a sync thread died without updating the status
+        # (e.g. OOM kill between our bootstrap cleanup and the next restart).
+        cursor.execute("""
+            UPDATE user_integrations
+            SET status = 'error',
+                last_error = 'Sync timed out — no completion after 30 minutes.'
+            WHERE status = 'syncing'
+              AND last_sync_at < DATE_SUB(NOW(), INTERVAL %s MINUTE)
+        """, (_SYNC_STUCK_TIMEOUT_MINUTES,))
+        if cursor.rowcount:
+            log.warning("Scheduler reset stuck syncing integrations", count=cursor.rowcount)
+            conn.commit()
+
+        cursor.execute("""
+            SELECT ui.id, ui.user_email, ui.provider_id, ui.last_sync_at, ui.status
+            FROM user_integrations ui
+            WHERE ui.status IN ('active', 'error')
+        """)
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
 
     from providers import REGISTRY
     now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -891,10 +992,15 @@ def _scheduler_tick():
         if last is None:
             continue  # not yet synced (connect flow handles first sync)
         elapsed = (now - last).total_seconds() / 60
-        if elapsed >= interval:
+        # Apply backoff multiplier for integrations in error state
+        effective_interval = (
+            interval * _SYNC_ERROR_BACKOFF_MULTIPLIER
+            if row["status"] == "error" else interval
+        )
+        if elapsed >= effective_interval:
             log.info("Scheduler triggering delta sync",
                      user=row["user_email"], provider=row["provider_id"],
-                     elapsed_minutes=round(elapsed, 1))
+                     elapsed_minutes=round(elapsed, 1), status=row["status"])
             _start_sync_thread(row["id"], row["user_email"],
                                row["provider_id"], sync_type="delta")
 
@@ -1020,8 +1126,12 @@ def get_connection_status(user_email: str, connection_id: str) -> Dict:
         conn.close()
 
 
-def get_user_total_rows(user_email: str) -> int:
-    """Sum all synced records for this user across all providers."""
+def get_user_total_rows(user_email: str) -> Optional[int]:
+    """
+    Sum all synced records for this user across all providers.
+    Returns None on DB error so callers can distinguish 'zero rows' from
+    'count unavailable' — important for billing row-limit enforcement.
+    """
     conn = _get_internal_conn()
     cursor = conn.cursor(dictionary=True)
     try:
@@ -1034,7 +1144,7 @@ def get_user_total_rows(user_email: str) -> int:
         return int((row or {}).get("cnt") or 0)
     except Exception as e:
         log.warning("get_user_total_rows failed", user=user_email, error=str(e))
-        return 0
+        return None  # None signals 'count unavailable', not 'zero rows'
     finally:
         conn.close()
 

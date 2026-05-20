@@ -40,6 +40,23 @@ _rate_store: dict = collections.defaultdict(list)
 _RATE_LIMIT   = 5    # max calls
 _RATE_WINDOW  = 60   # seconds
 
+def _client_ip(request: "Request") -> str:
+    """
+    Extract the real client IP, preferring X-Forwarded-For so the rate limiter
+    works correctly behind nginx / ALB / CloudFront.
+    Falls back to request.client.host, then 'unknown'.
+    Strips the port number so IPv4:port and bare IPv4 normalise to the same key.
+    """
+    forwarded = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+    if forwarded:
+        return forwarded
+    if request.client and request.client.host:
+        host = request.client.host
+        # Strip port (e.g. "127.0.0.1:51234" → "127.0.0.1")
+        return host.rsplit(":", 1)[0] if ":" in host and not host.startswith("[") else host
+    return "unknown"
+
+
 def _check_rate(ip: str):
     now = time.time()
     calls = _rate_store[ip]
@@ -78,15 +95,17 @@ def bootstrap_embed_tables():
 def _get_partner(partner_key: str) -> Optional[dict]:
     """Return partner row dict or None if not found / inactive."""
     conn = _get_conn()
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute(
-        "SELECT * FROM embed_partners WHERE partner_key=%s AND active=1",
-        (partner_key,)
-    )
-    row = cursor.fetchone()
-    cursor.close()
-    conn.close()
-    return row
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(
+            "SELECT * FROM embed_partners WHERE partner_key=%s AND active=1",
+            (partner_key,)
+        )
+        row = cursor.fetchone()
+        cursor.close()
+        return row
+    finally:
+        conn.close()
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -137,8 +156,7 @@ def embed_validate_token(request: Request, req: EmbedValidateTokenRequest):
     Rate-limited to prevent brute-forcing provider tokens and abusing the
     external provider API at our cost.
     """
-    client_ip = request.client.host if request.client else "unknown"
-    _check_rate(client_ip)
+    _check_rate(_client_ip(request))
 
     partner = _get_partner(req.partner_key)
     if not partner:
@@ -153,7 +171,7 @@ def embed_validate_token(request: Request, req: EmbedValidateTokenRequest):
         return {"ok": result.ok, "error": result.error, "details": result.details}
     except Exception as e:
         log.warning("Embed: provider token validation failed", error=str(e))
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": "Token validation failed. Check your API key and try again."}
 
 
 class EmbedInitRequest(BaseModel):
@@ -178,8 +196,7 @@ def embed_init(request: Request, req: EmbedInitRequest):
     endpoints (/query, /providers/*, /billing/*, etc.).
     """
     # Rate limit: 5 calls/min per IP (blocks automated account creation abuse)
-    client_ip = request.client.host if request.client else "unknown"
-    _check_rate(client_ip)
+    _check_rate(_client_ip(request))
 
     # 1. Validate partner key
     partner = _get_partner(req.partner_key)
@@ -223,10 +240,11 @@ def embed_init(request: Request, req: EmbedInitRequest):
         log.info("Embed: provider connected",
                  email=req.email, provider=partner["provider_id"])
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        log.warning("Embed: provider connect validation error", email=req.email, error=str(e))
+        raise HTTPException(status_code=422, detail="Invalid credentials or account details.")
     except Exception as e:
         log.error("Embed: provider connect failed", email=req.email, error=str(e))
-        raise HTTPException(status_code=500, detail=f"Failed to connect: {e}")
+        raise HTTPException(status_code=500, detail="Failed to connect provider. Please try again.")
 
     # 5. Return JWT
     token = create_token(req.email.strip().lower())

@@ -16,6 +16,17 @@ SECRET_KEY = os.getenv("SECRET_KEY", "datamind-secret-change-in-production-2024"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 
+# SEC-05: warn loudly at import time if the default key is in use
+_DEFAULT_SECRET = "datamind-secret-change-in-production-2024"
+if SECRET_KEY == _DEFAULT_SECRET:
+    import warnings
+    warnings.warn(
+        "SECRET_KEY is using the insecure default value. "
+        "Set a strong SECRET_KEY in your .env before deploying to production. "
+        "All JWTs signed with this key are forgeable by anyone who reads the source code.",
+        stacklevel=2,
+    )
+
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 bearer = HTTPBearer(auto_error=False)
 

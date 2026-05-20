@@ -69,14 +69,50 @@ from auth import (
 
 app = FastAPI(title="DataMind AI", version="3.0.0")
 
+# SEC-10: rate limiting — honours X-Forwarded-For so it works behind nginx/ALB
+from slowapi import Limiter
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+
+def _rate_limit_key(request: Request) -> str:
+    forwarded = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+    return forwarded or (request.client.host if request.client else "unknown")
+
+_limiter = Limiter(key_func=_rate_limit_key)
+app.state.limiter = _limiter
+
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(status_code=429, content={"ok": False, "error": "Too many requests. Please slow down."})
+
+app.add_middleware(SlowAPIMiddleware)
+
+# SEC-14: HTTPS enforcement — only active when FORCE_HTTPS=true (production).
+# In local dev (Windows) this env var is unset so redirects never fire.
+# On Red Hat: set FORCE_HTTPS=true in the systemd environment file.
+_FORCE_HTTPS = os.getenv("FORCE_HTTPS", "").lower() == "true"
+
+if _FORCE_HTTPS:
+    from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
+    app.add_middleware(HTTPSRedirectMiddleware)
+
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    response = await call_next(request)
+    if _FORCE_HTTPS:
+        # HSTS: tell browsers to only use HTTPS for 1 year, include subdomains
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
 # CORS — allow all origins in dev; lock down to registered embed origins in prod
 # Set EMBED_ALLOWED_ORIGINS=https://app.salesplay.io,... in production .env
 _embed_origins_raw = os.getenv("EMBED_ALLOWED_ORIGINS", "")
 _embed_origins = [o.strip() for o in _embed_origins_raw.split(",") if o.strip()]
-_cors_origins = (
-    ["http://localhost:5173", "http://localhost:3000"] + _embed_origins
-    if _embed_origins else ["*"]
-)
+# SEC-07: never default to "*" — always start from explicit localhost origins
+_cors_origins = ["http://localhost:5173", "http://localhost:3000"] + _embed_origins
 
 app.add_middleware(
     CORSMiddleware,
@@ -87,6 +123,25 @@ app.add_middleware(
 )
 
 app.include_router(embed_router)
+
+# SEC-08: standard error envelope — all 4xx/5xx responses use {"ok": false, "error": "..."}
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request, exc):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"ok": False, "error": exc.detail},
+    )
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc):
+    return JSONResponse(
+        status_code=422,
+        content={"ok": False, "error": "Invalid request parameters.", "details": str(exc)},
+    )
+
 
 @app.on_event("startup")
 def startup_event():
@@ -115,7 +170,20 @@ def startup_event():
     log.info("DataMind backend started")
 
 # In-memory build progress tracker
+# Keyed by status_hash. Evicted after 1 hour so stale entries don't OOM long-running processes.
 _build_status: Dict[str, Any] = {}
+_BUILD_STATUS_TTL_S = 3600   # 1 hour
+_BUILD_PROGRESS_MAX = 500    # max log lines kept per build
+
+def _evict_build_status():
+    """Remove entries older than TTL. Called on every new build start."""
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(seconds=_BUILD_STATUS_TTL_S)
+    stale = [
+        k for k, v in _build_status.items()
+        if datetime.datetime.fromisoformat(v.get("started_at", "2000-01-01")) < cutoff
+    ]
+    for k in stale:
+        del _build_status[k]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -128,6 +196,51 @@ def _safe(v):
     return v
 
 
+# SEC-02: never expose raw exception strings to API clients
+def _server_error(msg: str) -> HTTPException:
+    return HTTPException(status_code=500, detail=msg)
+
+
+# SEC-04: block LLM-generated SQL from running mutating statements
+import re as _re
+_SQL_MUTATION_RE = _re.compile(
+    r'\b(DROP|DELETE|INSERT|UPDATE|TRUNCATE|ALTER|CREATE|REPLACE|GRANT|REVOKE|CALL|EXEC)\b',
+    _re.IGNORECASE
+)
+
+def _guard_sql(sql: str):
+    m = _SQL_MUTATION_RE.search(sql)
+    if m:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Generated query contains a disallowed statement: {m.group(0).upper()}"
+        )
+
+
+# SEC-06: encrypt DB passwords at rest using same Fernet key as integrations
+def _get_pw_fernet():
+    from cryptography.fernet import Fernet
+    import base64, hashlib
+    raw = os.getenv("ENCRYPTION_KEY") or os.getenv("SECRET_KEY", "fallback-key")
+    key = base64.urlsafe_b64encode(hashlib.sha256(raw.encode()).digest())
+    return Fernet(key)
+
+def _encrypt_db_password(pw: str) -> str:
+    if not pw:
+        return pw
+    return _get_pw_fernet().encrypt(pw.encode()).decode()
+
+def _decrypt_db_password(token: str) -> str:
+    """Decrypt a password token. Falls back to original value for plaintext migration."""
+    if not token:
+        return token
+    try:
+        return _get_pw_fernet().decrypt(token.encode()).decode()
+    except Exception:
+        # Plaintext password (pre-encryption migration) — return as-is
+        return token
+
+
 def _resolve_db(user: dict) -> dict:
     """
     Return the active DB config from user settings.
@@ -138,7 +251,9 @@ def _resolve_db(user: dict) -> dict:
     configs = s.get("db_configs", [])
     idx = int(s.get("active_db_index", 0))
     if configs and 0 <= idx < len(configs):
-        cfg = configs[idx]
+        cfg = dict(configs[idx])
+        if cfg.get("password"):
+            cfg["password"] = _decrypt_db_password(cfg["password"])  # SEC-06
         log.debug("Using user DB config",
                   user=user.get("email"), config_name=cfg.get("name"),
                   host=cfg.get("host"), database=cfg.get("database"))
@@ -314,6 +429,7 @@ async def embed_security_headers(request: Request, call_next):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _background_build(email: str, db_config: dict, llm: str, api_key: str):
+    _evict_build_status()  # prune entries older than 1 hour before adding a new one
     sk = _status_key(email, db_config)
     _build_status[sk] = {
         "status": "building",
@@ -335,7 +451,10 @@ def _background_build(email: str, db_config: dict, llm: str, api_key: str):
                  user=email, tables=len(tables), fkeys=len(fkeys))
 
         def progress(msg):
-            logs.append(msg)
+            if len(logs) < _BUILD_PROGRESS_MAX:
+                logs.append(msg)
+            elif len(logs) == _BUILD_PROGRESS_MAX:
+                logs.append("… (progress log truncated)")
             log.debug("Cache build progress", user=email, step=msg)
 
         def llm_caller(prompt, system, llm_name, max_tokens):
@@ -398,7 +517,8 @@ class LoginRequest(BaseModel):
 
 
 @app.post("/auth/register")
-def register(req: RegisterRequest):
+@_limiter.limit("5/minute")
+def register(request: Request, req: RegisterRequest):
     log.info("Register attempt", email=req.email)
     user = create_user(req.name, req.email, req.password)
     token = create_token(req.email)
@@ -411,7 +531,8 @@ def register(req: RegisterRequest):
 
 
 @app.post("/auth/login")
-def login(req: LoginRequest):
+@_limiter.limit("10/minute")
+def login(request: Request, req: LoginRequest):
     log.info("Login attempt", email=req.email)
     user = authenticate_user(req.email, req.password)
     token = create_token(req.email)
@@ -481,7 +602,7 @@ def onboarding_test_db(req: OnboardingDBRequest,
     except Exception as e:
         log.warning("Onboarding: DB connection failed",
                     user=user["email"], error=str(e))
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": "Failed to connect. Check your credentials and try again."}
 
 
 @app.post("/onboarding/connect-db")
@@ -498,7 +619,8 @@ def onboarding_connect_db(req: OnboardingDBRequest,
     configs = s.get("db_configs", [])
     db_dict = {
         "name": req.name, "host": req.host, "port": req.port,
-        "database": req.database, "user": req.user, "password": req.password,
+        "database": req.database, "user": req.user,
+        "password": _encrypt_db_password(req.password),  # SEC-06
     }
     configs.append(db_dict)
     new_idx = len(configs) - 1
@@ -517,7 +639,9 @@ def onboarding_connect_db(req: OnboardingDBRequest,
 
     log.info("Onboarding: triggering background cache build",
              user=user["email"], llm=llm)
-    background_tasks.add_task(_background_build, user["email"], db_dict, llm, api_key)
+    # Pass plaintext config for cache build (encrypted version already persisted above)
+    plaintext_dict = {**db_dict, "password": req.password}
+    background_tasks.add_task(_background_build, user["email"], plaintext_dict, llm, api_key)
     return {"ok": True, "building_cache": True, "db_index": new_idx}
 
 
@@ -568,12 +692,15 @@ def add_db_config(cfg: DBConfig, background_tasks: BackgroundTasks,
     log.info("Add DB config", user=user["email"], db_name=cfg.name, host=cfg.host)
     s = get_user_settings(user["email"])
     configs = s.get("db_configs", [])
-    configs.append(cfg.dict())
+    cfg_dict = cfg.dict()
+    cfg_dict["password"] = _encrypt_db_password(cfg_dict["password"])  # SEC-06
+    configs.append(cfg_dict)
     new_idx = len(configs) - 1
     update_user_settings(user["email"], {"db_configs": configs, "active_db_index": new_idx})
     llm = _get_llm(user)
     try:
         api_key = _resolve_api_key(user, llm)
+        # Pass plaintext config for cache build (encrypted version already persisted above)
         background_tasks.add_task(_background_build, user["email"], cfg.dict(), llm, api_key)
         return {"ok": True, "building_cache": True}
     except HTTPException:
@@ -590,11 +717,14 @@ def update_db_config(index: int, cfg: DBConfig,
     if index < 0 or index >= len(configs):
         raise HTTPException(status_code=404, detail="Index out of range")
     invalidate_cache(user["email"], configs[index])
-    configs[index] = cfg.dict()
+    cfg_dict = cfg.dict()
+    cfg_dict["password"] = _encrypt_db_password(cfg_dict["password"])  # SEC-06
+    configs[index] = cfg_dict
     update_user_settings(user["email"], {"db_configs": configs})
     llm = _get_llm(user)
     try:
         api_key = _resolve_api_key(user, llm)
+        # Pass plaintext config for cache build (encrypted version already persisted above)
         background_tasks.add_task(_background_build, user["email"], cfg.dict(), llm, api_key)
     except HTTPException:
         pass
@@ -622,7 +752,9 @@ def activate_db(index: int, background_tasks: BackgroundTasks,
     if index < 0 or index >= len(configs):
         raise HTTPException(status_code=404, detail="Index out of range")
     update_user_settings(user["email"], {"active_db_index": index})
-    db_config = configs[index]
+    db_config = dict(configs[index])
+    if db_config.get("password"):
+        db_config["password"] = _decrypt_db_password(db_config["password"])  # SEC-06
     if not get_cache(user["email"], db_config):
         llm = _get_llm(user)
         try:
@@ -647,7 +779,7 @@ def test_db_connection(cfg: DBConfig, user: dict = Depends(current_user)):
         return {"ok": True, "tables": tables, "table_count": len(tables)}
     except Exception as e:
         log.warning("DB test failed", user=user["email"], error=str(e))
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": "Connection failed. Check your host, port, credentials, and firewall settings."}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -713,7 +845,7 @@ def list_tables(user: dict = Depends(current_user)):
             return {"tables": tables, "schemas": schemas, "foreign_keys": fkeys}
         except Exception as e:
             log.error("Failed to list tables", user=user["email"], error=str(e))
-            raise HTTPException(status_code=500, detail=str(e))
+            raise _server_error("Failed to load tables.")
 
     # Provider-only user: return only their own integration tables
     conns = get_user_connections(user["email"])
@@ -739,7 +871,7 @@ def list_tables(user: dict = Depends(current_user)):
         return {"tables": tables, "schemas": {}, "foreign_keys": []}
     except Exception as e:
         log.error("Failed to list provider tables", user=user["email"], error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error("Failed to load integration tables.")
 
 
 @app.get("/tables/{table_name}/columns")
@@ -768,7 +900,7 @@ def get_table_columns(table_name: str, user: dict = Depends(current_user)):
         raise
     except Exception as e:
         log.error("Failed to describe table", table=table_name, error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error("Failed to load column information.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1003,6 +1135,7 @@ def natural_language_query(req: NLQueryRequest, user: dict = Depends(current_use
 
         sql = query_to_sql(req.question, schemas, llm, fkeys, api_key=api_key,
                            user_email=user["email"], history_months=history["months"])
+        _guard_sql(sql)  # SEC-04: reject any mutating statement the LLM may have generated
         cursor = conn.cursor()
         cursor.execute(sql)
         columns = [desc[0] for desc in cursor.description]
@@ -1018,7 +1151,7 @@ def natural_language_query(req: NLQueryRequest, user: dict = Depends(current_use
         raise
     except Exception as e:
         log.error("NL query failed", user=user["email"], error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error("Query execution failed. Please try rephrasing your question.")
     finally:
         conn.close()  # always returned to pool (or closed for own-DB users)
 
@@ -1077,7 +1210,7 @@ def run_analytics(req: AnalyticsRunRequest, user: dict = Depends(current_user)):
             log.error("Run analytics: integration template failed",
                       user=user["email"], provider=req.provider,
                       template=req.template_id, error=str(e))
-            raise HTTPException(status_code=500, detail=str(e))
+            raise _server_error("Analytics execution failed.")
         finally:
             conn.close()
 
@@ -1135,7 +1268,7 @@ def run_analytics(req: AnalyticsRunRequest, user: dict = Depends(current_user)):
     except Exception as e:
         conn.close()
         log.error("Analytics run failed", template=req.template_id, error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error("Analytics execution failed.")
 
 
 def _try_python(tid: str, conn) -> Optional[Dict]:
@@ -1224,7 +1357,7 @@ def forecast(req: ForecastRequest, user: dict = Depends(current_user)):
         raise
     except Exception as e:
         log.error("Forecast failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error("Forecast failed. Ensure your table has enough historical data.")
 
 
 @app.get("/forecast/auto")
@@ -1266,7 +1399,7 @@ def auto_forecast(periods: int = 90, user: dict = Depends(current_user)):
             iconn.close()
         except Exception as e:
             log.error("Provider forecast query failed", error=str(e))
-            raise HTTPException(status_code=500, detail=str(e))
+            raise _server_error("Forecast query failed.")
         result = run_forecast(rows, periods)
         result.update(used_table=receipts_tbl, used_date_col="created_at",
                       used_value_col="total_money", from_cache=False)
@@ -1303,7 +1436,7 @@ def auto_forecast(periods: int = 90, user: dict = Depends(current_user)):
         return result
     except Exception as e:
         log.error("Auto forecast failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error("Forecast failed. Ensure your data source has enough historical data.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1352,7 +1485,7 @@ def anomalies(req: AnomalyRequest, user: dict = Depends(current_user)):
         return result
     except Exception as e:
         log.error("Anomaly detection failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error("Anomaly detection failed. Ensure your table has enough data.")
 
 
 @app.get("/anomalies/auto")
@@ -1394,7 +1527,7 @@ def auto_anomalies(user: dict = Depends(current_user)):
             iconn.close()
         except Exception as e:
             log.error("Provider anomaly query failed", error=str(e))
-            raise HTTPException(status_code=500, detail=str(e))
+            raise _server_error("Anomaly detection query failed.")
         result = run_anomaly_detection(rows, has_date=True)
         result.update(used_table=receipts_tbl, used_date_col="created_at",
                       used_value_col="total_money", from_cache=False)
@@ -1430,7 +1563,7 @@ def auto_anomalies(user: dict = Depends(current_user)):
         return result
     except Exception as e:
         log.error("Auto anomaly detection failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error("Anomaly detection failed. Ensure your data source has enough data.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1547,7 +1680,7 @@ def generate_report(req: ReportRequest, user: dict = Depends(current_user)):
         raise
     except Exception as e:
         log.error("Report generation failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error("Report generation failed.")
 
 
 def _get_kpis(conn, cache) -> Dict:
@@ -1592,7 +1725,7 @@ def get_providers():
         return {"providers": providers}
     except Exception as e:
         log.error("Failed to list providers", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error("Failed to load providers.")
 
 
 @app.get("/providers/connected")
@@ -1619,7 +1752,7 @@ def validate_provider_credentials(req: ProviderConnectRequest, user: dict = Depe
         return {"ok": result.ok, "error": result.error, "details": result.details}
     except Exception as e:
         log.error("Provider validation error", provider=req.provider_id, error=str(e))
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": "Failed to validate credentials. Check your API key and try again."}
 
 
 @app.post("/providers/connect")
@@ -1643,16 +1776,16 @@ def connect_provider_route(req: ProviderConnectRequest,
         return {"ok": True, "connection_id": connection_id}
     except Exception as e:
         log.error("Provider connect failed", provider=req.provider_id, error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error("Failed to connect provider.")
 
 
 @app.get("/providers/stats")
 def provider_stats(user: dict = Depends(current_user)):
     """Return aggregate stats across all user integrations (total rows across all providers)."""
-    try:
-        return {"total_rows": get_user_total_rows(user["email"])}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    count = get_user_total_rows(user["email"])
+    if count is None:
+        raise _server_error("Failed to load provider stats.")
+    return {"total_rows": count}
 
 
 @app.delete("/providers/{connection_id}")
@@ -1665,7 +1798,7 @@ def disconnect_provider_route(connection_id: str, user: dict = Depends(current_u
         return {"ok": True}
     except Exception as e:
         log.error("Disconnect provider failed", user=user["email"], connection_id=connection_id, error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error("Failed to disconnect provider.")
 
 
 @app.delete("/auth/account")
@@ -1685,7 +1818,7 @@ def delete_account(user: dict = Depends(current_user)):
         return {"ok": True}
     except Exception as e:
         log.error("Account deletion failed", user=email, error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error("Account deletion failed.")
 
 
 @app.post("/providers/{connection_id}/sync")
@@ -1707,7 +1840,8 @@ def provider_status(connection_id: str, user: dict = Depends(current_user)):
         status = get_connection_status(user["email"], connection_id)
         return status
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        log.error("Get sync status failed", user=user["email"], connection_id=connection_id, error=str(e))
+        raise _server_error("Failed to get sync status.")
 
 
 @app.get("/providers/{connection_id}/history")
@@ -1717,7 +1851,8 @@ def provider_history(connection_id: str, user: dict = Depends(current_user)):
         history = get_sync_history(user["email"], connection_id)
         return {"history": history}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        log.error("Get sync history failed", user=user["email"], connection_id=connection_id, error=str(e))
+        raise _server_error("Failed to get sync history.")
 
 
 
@@ -1764,10 +1899,10 @@ def list_integration_templates(
             ]
         }
     except Exception as e:
-        log.error("List integration templates failed", 
-                  provider=provider_id, 
+        log.error("List integration templates failed",
+                  provider=provider_id,
                   error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error("Failed to load integration templates.")
 
 
 class IntegrationAnalyticsRequest(BaseModel):
@@ -1821,7 +1956,7 @@ def run_integration_analytics(
     except Exception as e:
         log.error("Integration analytics failed", provider=provider_id,
                   template=req.template_id, user=user["email"], error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error("Integration analytics failed.")
 
 
 class IntegrationForecastRequest(BaseModel):
@@ -1857,12 +1992,18 @@ def forecast_integration(
         table_prefix = integration["table_prefix"]
 
         try:
+            # SEC-03: validate table/column names against actual schema before use in SQL
+            full_table = f"{table_prefix}_{req.table}"
+            schemas = get_table_schemas(conn, [full_table])
+            _validate_table_column(schemas, full_table, req.date_column)
+            _validate_table_column(schemas, full_table, req.value_column)
+
             cursor = conn.cursor()
             cursor.execute(
-                f"SELECT DATE({req.date_column}) as date, SUM({req.value_column}) as value "
-                f"FROM {table_prefix}_{req.table} "
-                f"WHERE {req.date_column} IS NOT NULL AND {req.date_column} >= %s "
-                f"GROUP BY DATE({req.date_column}) ORDER BY date",
+                f"SELECT DATE(`{req.date_column}`) as date, SUM(`{req.value_column}`) as value "
+                f"FROM `{full_table}` "
+                f"WHERE `{req.date_column}` IS NOT NULL AND `{req.date_column}` >= %s "
+                f"GROUP BY DATE(`{req.date_column}`) ORDER BY date",
                 (history["cutoff_date"],)
             )
             rows = cursor.fetchall()
@@ -1884,7 +2025,7 @@ def forecast_integration(
     except Exception as e:
         log.error("Integration forecast failed", provider=provider_id,
                   user=user["email"], error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _server_error("Integration forecast failed.")
 
 
 # ── BILLING ───────────────────────────────────────────────────────────────────
