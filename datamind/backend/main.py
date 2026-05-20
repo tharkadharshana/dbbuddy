@@ -52,6 +52,7 @@ from billing import (
     check_plan_feature, get_plan_history_limit,
 )
 from embed import router as embed_router, bootstrap_embed_tables
+from v1 import router as v1_router
 from pool import get_pool
 
 log = get_logger(__name__)
@@ -67,7 +68,25 @@ from auth import (
     get_user_settings, update_user_settings, current_user, init_users_table, delete_user,
 )
 
-app = FastAPI(title="DataMind AI", version="3.0.0")
+app = FastAPI(
+    title="DataMind AI",
+    version="3.0.0",
+    description=(
+        "DataMind AI API.\n\n"
+        "## Partner API (v1)\n"
+        "Server-to-server endpoints for embed partners. "
+        "Authenticate with `X-API-Key: <partner_key>` obtained from the DataMind partner dashboard.\n\n"
+        "All `/v1/` endpoints also require a `user_email` parameter to identify which end-user "
+        "is being queried.\n\n"
+        "## Embed API\n"
+        "Iframe embedding bootstrap flow (`/embed/*`). Used by the DataMind embed SDK.\n\n"
+        "## User API\n"
+        "Standard user-facing endpoints (`/auth/*`, `/query`, `/analytics/*`, etc.). "
+        "Authenticate with `Authorization: Bearer <jwt>`."
+    ),
+    contact={"name": "DataMind Support", "email": "support@datamind.ai"},
+    license_info={"name": "Proprietary"},
+)
 
 # SEC-10: rate limiting — honours X-Forwarded-For so it works behind nginx/ALB
 from slowapi import Limiter
@@ -119,10 +138,11 @@ app.add_middleware(
     allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
+    allow_headers=["Authorization", "Content-Type", "X-Requested-With", "X-API-Key"],
 )
 
 app.include_router(embed_router)
+app.include_router(v1_router)
 
 # SEC-08: standard error envelope — all 4xx/5xx responses use {"ok": false, "error": "..."}
 from fastapi.exceptions import RequestValidationError
