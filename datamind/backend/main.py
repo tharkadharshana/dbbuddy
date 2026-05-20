@@ -52,6 +52,7 @@ from billing import (
     check_plan_feature, get_plan_history_limit,
 )
 from embed import router as embed_router, bootstrap_embed_tables
+from pool import get_pool
 
 log = get_logger(__name__)
 
@@ -89,6 +90,11 @@ app.include_router(embed_router)
 
 @app.on_event("startup")
 def startup_event():
+    # Initialise connection pool first — all bootstraps below depend on DB access
+    try:
+        get_pool()
+    except Exception as _pe:
+        log.warning("DB connection pool init failed", error=str(_pe))
     try:
         init_users_table()
     except Exception as _be:

@@ -26,28 +26,12 @@ from cryptography.fernet import Fernet
 from logger import get_logger
 from providers import get_provider, list_providers
 from providers.base import SyncResult
+from pool import get_internal_conn as _get_internal_conn
 
 log = get_logger(__name__)
 
 # In-memory sync progress store  keyed by integration_id; cleared when sync finishes
 _sync_progress: Dict[int, Dict] = {}
-
-
-# ── DataMind's own internal DB connection ─────────────────────────────────────
-
-def _get_internal_conn():
-    """
-    Connect to DataMind's own MySQL database (not the user's DB).
-    Configure via DATAMIND_DB_* env vars (or falls back to DB_* if not set).
-    """
-    return mysql.connector.connect(
-        host=os.getenv("DATAMIND_DB_HOST") or os.getenv("DB_HOST", "localhost"),
-        port=int(os.getenv("DATAMIND_DB_PORT") or os.getenv("DB_PORT", "3306")),
-        database=os.getenv("DATAMIND_DB_NAME") or os.getenv("DB_NAME", ""),
-        user=os.getenv("DATAMIND_DB_USER") or os.getenv("DB_USER", "root"),
-        password=os.getenv("DATAMIND_DB_PASSWORD") or os.getenv("DB_PASSWORD", ""),
-        connection_timeout=10,
-    )
 
 
 # ── Credential encryption ──────────────────────────────────────────────────────

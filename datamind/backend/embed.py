@@ -16,6 +16,8 @@ bootstrap flow.
 
 import os
 import json
+import time
+import collections
 from typing import Optional
 
 import mysql.connector
@@ -26,23 +28,26 @@ from logger import get_logger
 from auth import create_user, authenticate_user, create_token
 from billing import start_trial
 from integrations import connect_provider
+from pool import get_internal_conn as _get_conn
 
 log = get_logger(__name__)
 
 router = APIRouter(prefix="/embed", tags=["embed"])
 
+# ── Simple in-memory rate limiter (no external deps) ─────────────────────────
+# Tracks per-IP request timestamps for /embed/init (5 requests/minute max).
+_rate_store: dict = collections.defaultdict(list)
+_RATE_LIMIT   = 5    # max calls
+_RATE_WINDOW  = 60   # seconds
 
-# ── Internal DB connection ────────────────────────────────────────────────────
-
-def _get_conn():
-    return mysql.connector.connect(
-        host     = os.getenv("DATAMIND_DB_HOST", os.getenv("DB_HOST", "localhost")),
-        port     = int(os.getenv("DATAMIND_DB_PORT", os.getenv("DB_PORT", "3306"))),
-        database = os.getenv("DATAMIND_DB_NAME", os.getenv("DB_NAME", "")),
-        user     = os.getenv("DATAMIND_DB_USER", os.getenv("DB_USER", "root")),
-        password = os.getenv("DATAMIND_DB_PASSWORD", os.getenv("DB_PASSWORD", "")),
-        connection_timeout=10,
-    )
+def _check_rate(ip: str):
+    now = time.time()
+    calls = _rate_store[ip]
+    # Purge timestamps outside the window
+    _rate_store[ip] = [t for t in calls if now - t < _RATE_WINDOW]
+    if len(_rate_store[ip]) >= _RATE_LIMIT:
+        raise HTTPException(status_code=429, detail="Too many requests. Please wait a moment and try again.")
+    _rate_store[ip].append(now)
 
 
 # ── Bootstrap ─────────────────────────────────────────────────────────────────
@@ -122,7 +127,7 @@ class EmbedInitRequest(BaseModel):
 
 
 @router.post("/init")
-def embed_init(req: EmbedInitRequest):
+def embed_init(request: Request, req: EmbedInitRequest):
     """
     One-shot onboarding for first-time embed users. In a single call:
       1. Validates the partner key
@@ -134,6 +139,10 @@ def embed_init(req: EmbedInitRequest):
     The iframe uses this token for all subsequent API calls via the standard
     endpoints (/query, /providers/*, /billing/*, etc.).
     """
+    # Rate limit: 5 calls/min per IP (blocks automated account creation abuse)
+    client_ip = request.client.host if request.client else "unknown"
+    _check_rate(client_ip)
+
     # 1. Validate partner key
     partner = _get_partner(req.partner_key)
     if not partner:

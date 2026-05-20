@@ -8,6 +8,7 @@ from passlib.context import CryptContext
 from jose import JWTError, jwt
 from fastapi import HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from pool import get_internal_conn as _get_conn
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -26,18 +27,6 @@ _DEFAULT_SETTINGS = {
     "default_llm": "gemini",
     "theme": "dark",
 }
-
-# ── Database ──────────────────────────────────────────────────────────────────
-
-def _get_conn():
-    return mysql.connector.connect(
-        host=os.getenv("DATAMIND_DB_HOST", os.getenv("DB_HOST", "localhost")),
-        port=int(os.getenv("DATAMIND_DB_PORT", os.getenv("DB_PORT", "3306"))),
-        database=os.getenv("DATAMIND_DB_NAME", os.getenv("DB_NAME", "")),
-        user=os.getenv("DATAMIND_DB_USER", os.getenv("DB_USER", "root")),
-        password=os.getenv("DATAMIND_DB_PASSWORD", os.getenv("DB_PASSWORD", "")),
-        connection_timeout=10,
-    )
 
 
 def init_users_table():
