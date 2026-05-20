@@ -145,9 +145,14 @@ class BaseProvider(ABC):
     def get_table_prefix(self, user_email: str, suffix: str = "") -> str:
         """
         Generate a safe, unique table prefix for this user+provider.
-        e.g. "dm_a1b2c3_loyverse" or "dm_a1b2c3_loyverse_2" (if suffix given)
+        e.g. "dm_a1b2c3d4e5f6a7b8_loyverse"
+
+        Uses 16 hex chars (64 bits of SHA-256) instead of 8 (32 bits of MD5).
+        Birthday collision: ~1% at ~600M users vs ~9K users with old 8-char MD5.
+        Existing prefixes stored in the DB are unaffected — this only changes
+        newly-created integrations.
         """
         import hashlib
-        user_hash = hashlib.md5(user_email.encode()).hexdigest()[:8]
+        user_hash = hashlib.sha256(user_email.lower().encode()).hexdigest()[:16]
         base = f"dm_{user_hash}_{self.provider_id}"
         return f"{base}_{suffix}" if suffix else base
