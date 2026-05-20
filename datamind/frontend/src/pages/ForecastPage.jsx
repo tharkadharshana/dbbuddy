@@ -47,7 +47,7 @@ export default function ForecastPage({ sub, onNavigate }) {
         ? await runAutoForecast(periods)
         : await runForecast(manForm.table, manForm.date_column, manForm.value_column, periods)
       setResult(data)
-    } catch(e) { setError(e.response?.data?.detail || e.message) }
+    } catch(e) { setError(e.response?.data?.error || e.response?.data?.detail || e.message) }
     finally { setLoading(false) }
   }
 

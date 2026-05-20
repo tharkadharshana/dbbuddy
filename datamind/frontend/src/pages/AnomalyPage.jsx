@@ -44,7 +44,7 @@ export default function AnomalyPage({ sub, onNavigate }) {
         ? await runAutoAnomalies()
         : await runAnomalies(form.table, form.value_column, form.date_column||null)
       setResult(data)
-    } catch(e) { setError(e.response?.data?.detail || e.message) }
+    } catch(e) { setError(e.response?.data?.error || e.response?.data?.detail || e.message) }
     finally { setLoading(false) }
   }
 

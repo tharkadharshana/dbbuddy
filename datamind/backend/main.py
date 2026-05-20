@@ -1448,9 +1448,9 @@ def auto_forecast(request: Request, periods: int = 90, user: dict = Depends(curr
             )
             rows = cursor.fetchall()
             iconn.close()
-            if not rows:
+            if len(rows) < 10:
                 raise HTTPException(status_code=422,
-                    detail="Not enough sales data to run a forecast. Sync more data first.")
+                    detail=f"Not enough data for forecasting — got {len(rows)} daily data points, need at least 10. Sync more data or widen your plan's history window.")
             result = run_forecast(rows, periods)
             result.update(used_table=receipts_tbl, used_date_col="created_at",
                           used_value_col="total_money", from_cache=False)
@@ -1483,6 +1483,9 @@ def auto_forecast(request: Request, periods: int = 90, user: dict = Depends(curr
         )
         rows = cursor.fetchall()
         conn.close()
+        if len(rows) < 10:
+            raise HTTPException(status_code=422,
+                detail=f"Not enough data for forecasting — got {len(rows)} daily data points, need at least 10. Ensure your table has sufficient historical data.")
         result = run_forecast(rows, periods)
         result["used_table"]     = table
         result["used_date_col"]  = d_col
@@ -1490,6 +1493,8 @@ def auto_forecast(request: Request, periods: int = 90, user: dict = Depends(curr
         result["from_cache"]     = bool(cache and auto.get("forecast_table"))
         _charge_op(user["email"], "forecast", len(rows))
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         log.error("Auto forecast failed", error=str(e))
         raise _server_error("Forecast failed. Ensure your data source has enough historical data.")
@@ -1583,9 +1588,9 @@ def auto_anomalies(request: Request, user: dict = Depends(current_user)):
             )
             rows = cursor.fetchall()
             iconn.close()
-            if not rows:
+            if len(rows) < 5:
                 raise HTTPException(status_code=422,
-                    detail="Not enough sales data to run anomaly detection. Sync more data first.")
+                    detail=f"Not enough data for anomaly detection — got {len(rows)} daily data points, need at least 5. Sync more data or widen your plan's history window.")
             result = run_anomaly_detection(rows, has_date=True)
             result.update(used_table=receipts_tbl, used_date_col="created_at",
                           used_value_col="total_money", from_cache=False)
@@ -1617,6 +1622,9 @@ def auto_anomalies(request: Request, user: dict = Depends(current_user)):
         )
         rows = cursor.fetchall()
         conn.close()
+        if len(rows) < 5:
+            raise HTTPException(status_code=422,
+                detail=f"Not enough data for anomaly detection — got {len(rows)} daily data points, need at least 5. Ensure your table has sufficient historical data.")
         result = run_anomaly_detection(rows, has_date=True)
         result["used_table"]     = table
         result["used_date_col"]  = d_col
@@ -1624,6 +1632,8 @@ def auto_anomalies(request: Request, user: dict = Depends(current_user)):
         result["from_cache"]     = bool(cache and auto.get("anomaly_table"))
         _charge_op(user["email"], "anomaly_detection", len(rows))
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         log.error("Auto anomaly detection failed", error=str(e))
         raise _server_error("Anomaly detection failed. Ensure your data source has enough data.")
