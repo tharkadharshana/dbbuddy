@@ -1448,14 +1448,19 @@ def auto_forecast(request: Request, periods: int = 90, user: dict = Depends(curr
             )
             rows = cursor.fetchall()
             iconn.close()
+            if not rows:
+                raise HTTPException(status_code=422,
+                    detail="Not enough sales data to run a forecast. Sync more data first.")
+            result = run_forecast(rows, periods)
+            result.update(used_table=receipts_tbl, used_date_col="created_at",
+                          used_value_col="total_money", from_cache=False)
+            _charge_op(user["email"], "forecast", len(rows))
+            return result
+        except HTTPException:
+            raise
         except Exception as e:
-            log.error("Provider forecast query failed", error=str(e))
-            raise _server_error("Forecast query failed.")
-        result = run_forecast(rows, periods)
-        result.update(used_table=receipts_tbl, used_date_col="created_at",
-                      used_value_col="total_money", from_cache=False)
-        _charge_op(user["email"], "forecast", len(rows))
-        return result
+            log.error("Provider forecast failed", error=str(e))
+            raise _server_error("Forecast failed. Ensure your integration has enough historical data.")
 
     # Own-DB user
     db_config = _resolve_db(user)
@@ -1578,14 +1583,19 @@ def auto_anomalies(request: Request, user: dict = Depends(current_user)):
             )
             rows = cursor.fetchall()
             iconn.close()
+            if not rows:
+                raise HTTPException(status_code=422,
+                    detail="Not enough sales data to run anomaly detection. Sync more data first.")
+            result = run_anomaly_detection(rows, has_date=True)
+            result.update(used_table=receipts_tbl, used_date_col="created_at",
+                          used_value_col="total_money", from_cache=False)
+            _charge_op(user["email"], "anomaly_detection", len(rows))
+            return result
+        except HTTPException:
+            raise
         except Exception as e:
-            log.error("Provider anomaly query failed", error=str(e))
-            raise _server_error("Anomaly detection query failed.")
-        result = run_anomaly_detection(rows, has_date=True)
-        result.update(used_table=receipts_tbl, used_date_col="created_at",
-                      used_value_col="total_money", from_cache=False)
-        _charge_op(user["email"], "anomaly_detection", len(rows))
-        return result
+            log.error("Provider anomaly detection failed", error=str(e))
+            raise _server_error("Anomaly detection failed. Ensure your integration has enough historical data.")
 
     # Own-DB user
     db_config = _resolve_db(user)
