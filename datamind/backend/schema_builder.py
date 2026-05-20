@@ -298,6 +298,51 @@ def validate_sql(conn, sql: str) -> Tuple[bool, str]:
         return False, str(e)
 
 
+# ── Safe sample summary (SEC-13) ──────────────────────────────────────────────
+
+import datetime as _dt
+import decimal as _decimal
+
+def _build_safe_sample_summary(samples: dict) -> str:
+    """
+    Describe each table's columns using type statistics, never actual values.
+
+    The LLM receives enough context to understand column data types and
+    rough cardinality without seeing any actual customer/business data.
+    """
+    summary = ""
+    for table, info in samples.items():
+        cols = info.get("columns", [])
+        rows = info.get("rows", [])
+        summary += f"\nTable `{table}` — {len(rows)} sample row(s) analysed\n"
+        for i, col_name in enumerate(cols):
+            values = [row[i] for row in rows if len(row) > i]
+            non_null = [v for v in values if v is not None and v != ""]
+            if not non_null:
+                summary += f"  {col_name}: all null/empty\n"
+                continue
+            sample = non_null[0]
+            if isinstance(sample, bool):
+                summary += f"  {col_name}: boolean\n"
+            elif isinstance(sample, int):
+                nums = [v for v in non_null if isinstance(v, int)]
+                summary += f"  {col_name}: integer (range {min(nums)}–{max(nums)})\n"
+            elif isinstance(sample, (_decimal.Decimal, float)):
+                nums = [float(v) for v in non_null if isinstance(v, (_decimal.Decimal, float, int))]
+                summary += f"  {col_name}: decimal (range {min(nums):.2f}–{max(nums):.2f})\n"
+            elif isinstance(sample, (_dt.datetime, _dt.date)):
+                dates = [v for v in non_null if isinstance(v, (_dt.datetime, _dt.date))]
+                summary += f"  {col_name}: date/datetime (range {min(dates)} to {max(dates)})\n"
+            elif isinstance(sample, str):
+                lengths = [len(v) for v in non_null if isinstance(v, str)]
+                avg_len = sum(lengths) // len(lengths) if lengths else 0
+                unique = len(set(v for v in non_null if isinstance(v, str)))
+                summary += f"  {col_name}: text (avg {avg_len} chars, {unique} distinct values in sample)\n"
+            else:
+                summary += f"  {col_name}: {type(sample).__name__}\n"
+    return summary
+
+
 # ── Main builder ───────────────────────────────────────────────────────────────
 
 def build_schema_cache(
@@ -320,13 +365,10 @@ def build_schema_cache(
 
     schema_text = schema_to_text(schemas, fkeys)
 
-    # Build sample text
-    sample_text = ""
-    for table, info in samples.items():
-        cols = ", ".join(info["columns"])
-        sample_text += f"\nTable `{table}` (columns: {cols})\n"
-        for row in info["rows"][:2]:
-            sample_text += f"  {dict(zip(info['columns'], row))}\n"
+    # SEC-13: build sample summary without transmitting actual row values to the LLM.
+    # We send column-level type statistics instead so the LLM understands the schema
+    # without receiving PII (names, emails, phone numbers, transaction details, etc.).
+    sample_text = _build_safe_sample_summary(samples)
 
     log("Detecting best time-series columns…")
     auto_columns = _detect_auto_columns(schema_text, sample_text, llm_caller, llm)
