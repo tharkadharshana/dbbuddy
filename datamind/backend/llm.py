@@ -10,12 +10,38 @@ NEW: Token tracking and credit deduction integrated.
 """
 
 import os
+import re
 import json
 import requests
 from typing import Dict, Any, List, Optional
 
 from logger import get_logger
 from db import schema_to_text
+
+# SEC-12: columns whose names suggest security-sensitive data that should
+# never appear in analytics queries or be transmitted to external LLM providers.
+_SENSITIVE_COL_RE = re.compile(
+    r'\b(password|passwd|pwd|secret|api_key|apikey|access_token|refresh_token|'
+    r'auth_token|bearer|private_key|encryption_key|enc_key|salt|hash|'
+    r'ssn|sin|cvv|cvc|card_number|credit_card|bank_account|routing_number)\b',
+    re.IGNORECASE,
+)
+
+def _filter_sensitive_schema(schemas: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Strip columns whose names match sensitive security patterns before the
+    schema is sent to an external LLM provider. Analytics queries have no
+    legitimate need for password hashes, API keys, or card numbers.
+    """
+    filtered: Dict[str, Any] = {}
+    for table, cols in schemas.items():
+        safe_cols = [c for c in cols if not _SENSITIVE_COL_RE.search(c.get("name", ""))]
+        dropped = len(cols) - len(safe_cols)
+        if dropped:
+            log.debug("Schema filter: dropped sensitive columns",
+                      table=table, dropped=dropped)
+        filtered[table] = safe_cols
+    return filtered
 
 log = get_logger(__name__)
 
@@ -283,7 +309,7 @@ def validate_llm_key(llm: str, api_key: str) -> Dict[str, Any]:
 def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "gemini",
                  fkeys: list = None, api_key: str = "", user_email: str = None,
                  history_months: int = None) -> str:
-    schema_text = schema_to_text(schemas, fkeys)
+    schema_text = schema_to_text(_filter_sensitive_schema(schemas), fkeys)
     history_hint = (
         f" Only return data from the last {history_months} month(s) — add "
         f"WHERE date_col >= DATE_SUB(NOW(), INTERVAL {history_months} MONTH) "
