@@ -943,8 +943,42 @@ def natural_language_query(req: NLQueryRequest, user: dict = Depends(current_use
     api_key = _resolve_api_key(user, llm)
     history = get_plan_history_limit(user["email"])
     try:
-        conn = get_connection(_resolve_db(user))
-        schemas = get_table_schemas(conn, None)
+        s = user.get("settings", {})
+        if s.get("db_configs"):
+            # Own-DB user: connect to their database and use all its tables
+            conn = get_connection(_resolve_db(user))
+            tables_filter = None  # show all tables in their own DB
+        else:
+            # Integration user (embed or main app): connect to internal DB but
+            # only expose THIS user's own prefixed tables — never another user's.
+            conn = _get_internal_conn()
+            user_conns = get_user_connections(user["email"])
+            prefixes = [c.get("table_prefix", "") for c in user_conns if c.get("table_prefix")]
+            if not prefixes:
+                raise HTTPException(
+                    status_code=422,
+                    detail="No data source connected. Please connect a provider first."
+                )
+            # Resolve exact table names for this user's prefixes only
+            cursor = conn.cursor()
+            tables_filter = []
+            for prefix in prefixes:
+                cursor.execute(
+                    "SELECT TABLE_NAME FROM information_schema.TABLES "
+                    "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME LIKE %s "
+                    "ORDER BY TABLE_NAME",
+                    (f"{prefix}%",)
+                )
+                tables_filter.extend(r[0] for r in cursor.fetchall())
+            if not tables_filter:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Data sync not complete yet. Please wait for sync to finish."
+                )
+            log.debug("NL query scoped to user tables",
+                      user=user["email"], table_count=len(tables_filter))
+
+        schemas = get_table_schemas(conn, tables_filter)
         fkeys = get_foreign_keys(conn)
         sql = query_to_sql(req.question, schemas, llm, fkeys, api_key=api_key,
                            user_email=user["email"], history_months=history["months"])
@@ -954,7 +988,6 @@ def natural_language_query(req: NLQueryRequest, user: dict = Depends(current_use
         rows = cursor.fetchall()
         conn.close()
         data = [{k: _safe(v) for k, v in dict(zip(columns, row)).items()} for row in rows]
-        # Enforce plan row limit as fallback (applies when no date column filtered by LLM)
         row_limit = history["row_limit"]
         if len(data) > row_limit:
             data = data[:row_limit]
