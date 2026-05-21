@@ -50,7 +50,7 @@ log = get_logger(__name__)
 # Suppress SSL warnings for spdeveloperapi.nvision.lk cert issues
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-BASE_URL     = os.getenv("SALESPLAY_BASE_URL", "https://spdeveloperapi.nvision.lk/v1.0")
+BASE_URL     = os.getenv("SALESPLAY_BASE_URL", "https://api.salesplaypos.com/v1.0")
 PAGE_SIZE    = 250
 RATE_SLEEP   = 1.1
 DEFAULT_DAYS = 90
