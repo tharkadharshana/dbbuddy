@@ -4,8 +4,8 @@ html, body, #embed-root {
   height: 100%;
   width: 100%;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  background: #0f1117;
-  color: #e8eaf6;
+  background: var(--bg);
+  color: var(--text);
 }
 
 /* ── Dark theme (default) ───────────────────────────────────────────────────── */
@@ -46,13 +46,6 @@ html, body, #embed-root {
   --red:       #dc2626;
   --red-dim:   rgba(220,38,38,0.08);
   --green-dim: rgba(22,163,74,0.08);
-}
-
-[data-theme="light"] html,
-[data-theme="light"] body,
-[data-theme="light"] #embed-root {
-  background: #f5f7fc;
-  color: #1a1d2e;
 }
 
 button { cursor: pointer; font-family: var(--font); }

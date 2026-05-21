@@ -22,9 +22,11 @@ const inp = {
 
 const primaryBtn = (disabled) => ({
   width:'100%', padding:'11px', borderRadius:8, fontSize:13, fontWeight:600,
-  background: disabled ? 'rgba(79,142,247,0.3)' : 'linear-gradient(135deg,#4f8ef7,#7c6af7)',
-  color:'#fff', border:'none', cursor: disabled ? 'not-allowed' : 'pointer',
-  marginTop:6, opacity: disabled ? 0.6 : 1,
+  background: disabled ? 'var(--bg3)' : 'linear-gradient(135deg,#4f8ef7,#7c6af7)',
+  color: disabled ? 'var(--text3)' : '#fff',
+  border: disabled ? '1px solid var(--border2)' : 'none',
+  cursor: disabled ? 'not-allowed' : 'pointer',
+  marginTop:6,
   display:'flex', alignItems:'center', justifyContent:'center', gap:6,
 })
 

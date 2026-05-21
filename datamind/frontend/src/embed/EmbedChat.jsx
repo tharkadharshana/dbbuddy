@@ -35,24 +35,27 @@ function TypingDots() {
 }
 
 // ── Chart ─────────────────────────────────────────────────────────────────────
-function ResultChart({ columns, data }) {
+function ResultChart({ columns, data, theme }) {
   if (!data?.length || !columns?.length) return null
   const numCols = columns.filter(c => typeof data[0]?.[c] === 'number')
   const strCols = columns.filter(c => typeof data[0]?.[c] === 'string')
   if (!numCols.length || !strCols.length || data.length < 2) return null
   const xKey = strCols[0], y1 = numCols[0], y2 = numCols[1]
+  const isLight    = theme === 'light'
+  const gridColor  = isLight ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.06)'
+  const tickColor  = isLight ? '#6b7280' : '#5a5f7d'
   const chartData = data.slice(0, 15).map(r => ({
     name: String(r[xKey] || '').slice(0, 14),
     [y1]: r[y1],
     ...(y2 ? { [y2]: r[y2] } : {}),
   }))
   return (
-    <div style={{ marginTop:10, background:'rgba(255,255,255,0.02)', borderRadius:8, padding:10, border:'1px solid var(--border)' }}>
+    <div style={{ marginTop:10, background:'var(--bg2)', borderRadius:8, padding:10, border:'1px solid var(--border)' }}>
       <ResponsiveContainer width="100%" height={140}>
         <ComposedChart data={chartData}>
-          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
-          <XAxis dataKey="name" tick={{ fontSize:9, fill:'#5a5f7d' }} axisLine={false} tickLine={false} />
-          <YAxis tick={{ fontSize:9, fill:'#5a5f7d' }} axisLine={false} tickLine={false} />
+          <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
+          <XAxis dataKey="name" tick={{ fontSize:9, fill:tickColor }} axisLine={false} tickLine={false} />
+          <YAxis tick={{ fontSize:9, fill:tickColor }} axisLine={false} tickLine={false} />
           <Tooltip contentStyle={TT} />
           <Bar dataKey={y1} fill="var(--blue)" radius={[3,3,0,0]} barSize={data.length > 10 ? 6 : 16} />
           {y2 && <Line dataKey={y2} stroke="var(--green)" strokeWidth={1.5} dot={false} />}
@@ -88,7 +91,7 @@ function ResultTable({ columns, data, rowCount }) {
           <thead>
             <tr>
               {columns.map(c => (
-                <th key={c} style={{ padding:'6px 10px', textAlign:'left', color:'var(--text3)', fontWeight:500, fontSize:10, textTransform:'uppercase', letterSpacing:'.05em', borderBottom:'1px solid var(--border)', background:'rgba(255,255,255,0.02)', whiteSpace:'nowrap' }}>
+                <th key={c} style={{ padding:'6px 10px', textAlign:'left', color:'var(--text3)', fontWeight:500, fontSize:10, textTransform:'uppercase', letterSpacing:'.05em', borderBottom:'1px solid var(--border)', background:'var(--bg2)', whiteSpace:'nowrap' }}>
                   {c.replace(/_/g, ' ')}
                 </th>
               ))}
@@ -120,7 +123,7 @@ function ResultTable({ columns, data, rowCount }) {
 }
 
 // ── Message bubble ────────────────────────────────────────────────────────────
-function Message({ msg }) {
+function Message({ msg, theme }) {
   if (msg.role === 'user') return (
     <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:14 }}>
       <div style={{ maxWidth:'80%', background:'var(--blue)', color:'#fff', borderRadius:'14px 14px 4px 14px', padding:'9px 13px', fontSize:13, lineHeight:1.5 }}>
@@ -151,7 +154,7 @@ function Message({ msg }) {
             <div style={{ fontSize:13, color:'var(--text)', lineHeight:1.6 }}>{msg.content}</div>
             {msg.data?.data?.length > 0 && (
               <>
-                <ResultChart columns={msg.data.columns} data={msg.data.data} />
+                <ResultChart columns={msg.data.columns} data={msg.data.data} theme={theme} />
                 <ResultTable columns={msg.data.columns} data={msg.data.data} rowCount={msg.data.row_count} />
               </>
             )}
@@ -297,7 +300,7 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
           </div>
         ) : (
           <div style={{ padding:'0 14px' }}>
-            {messages.map(msg => <Message key={msg.id} msg={msg} />)}
+            {messages.map(msg => <Message key={msg.id} msg={msg} theme={theme} />)}
             <div ref={bottomRef} />
           </div>
         )}
