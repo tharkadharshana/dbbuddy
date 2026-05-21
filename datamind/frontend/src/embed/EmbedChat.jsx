@@ -167,7 +167,7 @@ function Message({ msg, theme }) {
                 <div style={{ fontSize:10, fontWeight:600, color:'var(--blue)', textTransform:'uppercase', letterSpacing:'.06em', marginBottom:5 }}>
                   🧠 Think Mode
                 </div>
-                {msg.analysis}
+                {msg.analysis.replace(/\*\*/g, '').replace(/\*/g, '').replace(/_{2}/g, '').replace(/_/g, '')}
               </div>
             )}
 

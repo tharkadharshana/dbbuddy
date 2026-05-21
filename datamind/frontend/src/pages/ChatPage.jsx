@@ -129,7 +129,7 @@ function Message({ msg, llm }) {
                 <div style={{ fontSize:11, fontWeight:600, color:'var(--blue)', textTransform:'uppercase', letterSpacing:'.06em', marginBottom:6 }}>
                   🧠 Think Mode
                 </div>
-                {msg.analysis}
+                {msg.analysis.replace(/\*\*/g, '').replace(/\*/g, '').replace(/_{2}/g, '').replace(/_/g, '')}
               </div>
             )}
 

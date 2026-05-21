@@ -1129,11 +1129,16 @@ def _run_think_analysis(question: str, columns: list, data: list,
         "Be specific with numbers and values from the results. "
         "If the question asks for advice or recommendations, give 2-3 concrete, "
         "actionable suggestions based on what the data shows. "
-        "Keep your response under 150 words."
+        "Keep your response under 150 words. "
+        "Write in plain sentences only — no markdown, no asterisks, no bullet symbols."
     )
     return call_llm(
         prompt,
-        system="You are a concise business analyst. Answer based only on the provided data.",
+        system=(
+            "You are a concise business analyst. Answer based only on the provided data. "
+            "Use plain text only — never use markdown, asterisks, bold markers (**), "
+            "underscores, or any special formatting symbols."
+        ),
         llm=llm,
         max_tokens=400,
         api_key=api_key,
