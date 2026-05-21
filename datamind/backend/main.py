@@ -1107,9 +1107,44 @@ def discover(request: Request, user: dict = Depends(current_user)):
 # NL QUERY
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _run_think_analysis(question: str, columns: list, data: list,
+                        llm: str, api_key: str, user_email: str) -> str:
+    """Second LLM call for Think Mode: analyse SQL results and answer the question.
+    call_llm() handles token charging via charge_ai_usage() automatically."""
+    # Format top 50 rows as compact CSV for the prompt
+    sample = data[:50]
+    header = ", ".join(columns)
+    rows_text = "\n".join(
+        ", ".join(str(row.get(c, "")) for c in columns)
+        for row in sample
+    )
+    truncation_note = (
+        f"\n(Showing first 50 of {len(data)} rows)" if len(data) > 50 else ""
+    )
+    prompt = (
+        f"The user asked: \"{question}\"\n\n"
+        f"Here is the query result ({len(data)} rows total):{truncation_note}\n"
+        f"{header}\n{rows_text}\n\n"
+        "Answer the user's question directly using this data. "
+        "Be specific with numbers and values from the results. "
+        "If the question asks for advice or recommendations, give 2-3 concrete, "
+        "actionable suggestions based on what the data shows. "
+        "Keep your response under 150 words."
+    )
+    return call_llm(
+        prompt,
+        system="You are a concise business analyst. Answer based only on the provided data.",
+        llm=llm,
+        max_tokens=400,
+        api_key=api_key,
+        user_email=user_email,
+    )
+
+
 class NLQueryRequest(BaseModel):
     question: str
     llm: str = "gemini"
+    think_mode: bool = False
 
 
 @v1.post("/query")
@@ -1194,7 +1229,22 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
             data = data[:row_limit]
         log.info("NL query complete", user=user["email"], rows=len(data))
         _charge_op(user["email"], "nl_query_rows", len(data))
-        return {"sql": sql, "columns": columns, "data": data, "row_count": len(data)}
+
+        analysis = None
+        if req.think_mode and data:
+            try:
+                analysis = _run_think_analysis(
+                    req.question, columns, data, llm, api_key, user["email"]
+                )
+                log.info("Think mode analysis complete", user=user["email"])
+            except Exception as _te:
+                log.warning("Think mode analysis failed", user=user["email"], error=str(_te))
+                analysis = "Analysis unavailable — the AI could not process the results."
+
+        return {
+            "sql": sql, "columns": columns, "data": data, "row_count": len(data),
+            "analysis": analysis, "think_mode": req.think_mode,
+        }
     except HTTPException:
         raise
     except Exception as e:
