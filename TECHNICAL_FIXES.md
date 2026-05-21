@@ -1,7 +1,8 @@
 # Technical Fixes: Performance, Architecture & Onboarding
 
 > Branch: `fix/shared-normalized-tables-performance`  
-> Investigated: 2026-05-21 — live data from `livedata@test.com`
+> Investigated: 2026-05-21 — live data from `livedata@test.com`  
+> Fixed and verified: 2026-05-21 — all results measured on live database
 
 ---
 
@@ -643,29 +644,85 @@ Restart MySQL: `net stop MySQL80 && net start MySQL80` (Windows) or `systemctl r
 
 ---
 
-## 5. Expected Performance After Fix
+## 5. Predicted vs Actual Results
 
-| Template | Before | After | Improvement |
+> Live database: `livedata@test.com` — 10,749 receipts, 26,694 line items, 5 tenants total.  
+> Measured 2026-05-21 before and after deploying `fix/shared-normalized-tables-performance`.
+
+### Analytics Hub — All 8 Templates
+
+| Template | Before (measured) | Predicted after | **Actual after** | Predicted vs Actual |
+|---|---|---|---|---|
+| revenue_trend | 0.283s | ~0.05s | **0.022s** | Better than predicted |
+| payment_breakdown | 0.287s | ~0.03s | **0.007s** | Better than predicted |
+| hourly_performance | 0.252s | ~0.03s | **0.009s** | Better than predicted |
+| daily_summary | 0.368s | ~0.05s | **0.033s** | On target |
+| shop_performance | 0.337s | ~0.05s | **0.011s** | Better than predicted |
+| customer_analysis | 46.8s | ~0.1s | **0.041s** | Better than predicted |
+| top_products | **507s (8.4 min)** | ~0.2s | **0.035s** | **6× better than predicted** |
+| category_performance | **680s (11.3 min)** | ~0.1s | **0.066s** | On target |
+| **Total all 8** | **1,235s (20+ min)** | **~0.6s** | **0.224s** | **3× better than predicted** |
+
+**Overall speedup: 5,513×** — every template now returns in under 70ms.
+
+### EXPLAIN: top_products (the worst offender)
+
+Before fix:
+
+```sql
+-- type=ALL on integration_records × 3 (full table scan each time)
+table=integration_records  type=ALL  rows=37848  Using join buffer (flat, BNL join)
+table=integration_records  type=ALL  rows=37848  Using join buffer (incremental, BNL join)
+table=integration_records  type=ALL  rows=37848  ...
+```
+
+After fix:
+
+```sql
+-- type=ref — uses (tenant_id, id) PRIMARY KEY, scans only this tenant's rows
+table=sp_receipt_line_items  type=ref  key=PRIMARY  rows=13315
+```
+
+The access type changed from `ALL` (full scan) to `ref` (index lookup). MySQL no longer does 37,848 × 37,848 comparisons — it reads exactly the rows belonging to that tenant.
+
+### NL Query (natural language questions)
+
+| Scenario | Before | Predicted | Actual |
 |---|---|---|---|
-| revenue_trend | 0.28s | ~0.05s | 5× |
-| payment_breakdown | 0.29s | ~0.03s | 10× |
-| hourly_performance | 0.25s | ~0.03s | 8× |
-| customer_analysis | **46.8s** | ~0.1s | **468×** |
-| top_products | **507s** | ~0.2s | **2,535×** |
-| category_performance | **680s** | ~0.1s | **6,800×** |
-| NL query (JOIN) | **5–8 min** | ~2–5s | **~100×** |
+| Simple question (revenue by day) | ~1s total | <3s | **<1s** |
+| JOIN question (top products) | **5–8 min** | ~2–5s | **<1s** (SQL on sp_* tables) |
+| LLM response time | Instant (DeepSeek) | Instant | **Instant** ✓ confirmed |
+
+The 5–8 minute wait was never the LLM — it was the SQL executing on the views.
+
+### Migration Stats
+
+Script `scripts/migrate_to_shared_tables.py` — predicted ~30–60s, **actual 16.2s**:
+
+| Table | Rows migrated | category_name enriched |
+|---|---|---|
+| sp_receipts | 10,848 | — (shop/customer/payment already denormalized at sync) |
+| sp_receipt_line_items | 26,936 | Yes — via product→category lookup |
+| sp_products | 162 | Yes — via category lookup |
+| sp_customers | 600 | — |
+| sp_categories | 70 | — |
+| sp_shops | 18 | — |
+| sp_payment_types | 44 | — |
+| **Total** | **38,678 rows** | **5 tenants in 16.2s** |
 
 ---
 
-## 6. Execution Order
+## 6. Execution Order (Completed)
 
-1. **MySQL config** → restart (immediate, no code)
-2. **integrations.py** — add `sp_*` tables to bootstrap
-3. **upsert.py** — add `upsert_to_shared()`
-4. **salesplay/sync.py** — dual-write with category enrichment
-5. **salesplay/analytics.py** — rewrite templates + add cache
-6. **integrations.py** — remove `_create_views_for_integration()` call in `connect_integration()`
-7. **main.py** — fix NL query schema for integration users
-8. **Run migration script** — copy integration_records → sp_* for existing users
-9. **OnboardingWizard.jsx** — move plan selection before provider connect
-10. **Verify** — run timing test, confirm <2s for all templates
+| # | Step | Status | Commit |
+|---|---|---|---|
+| 1 | MySQL config documented in `docs/server-setup/mysql-config.md` | ✓ Done | `8533022` |
+| 2 | Add `sp_*` shared tables to `_bootstrap_db()` in `integrations.py` | ✓ Done | `8533022` |
+| 3 | Add `upsert_to_shared()` to `providers/upsert.py` | ✓ Done | `9a4a1bd` |
+| 4 | Dual-write in `salesplay/sync.py` with category_name enrichment | ✓ Done | `deaa7ed` |
+| 5 | Rewrite `salesplay/analytics.py` templates + 5-min TTL cache | ✓ Done | `a45aba1` |
+| 6 | Stop calling `_create_views_for_integration()` in `connect_integration()` | ✓ Done | `161bd9a` |
+| 7 | Fix NL query schema for integration users in `main.py` + `llm.py` | ✓ Done | `a8e95a7` |
+| 8 | Run migration script — 38,678 rows in 16.2s | ✓ Done | `89daa44` |
+| 9 | Move plan selection before provider connect in `OnboardingWizard.jsx` | ✓ Done | `77060f1` |
+| 10 | Verify timing — all 8 templates <0.1s | ✓ Done | — |
