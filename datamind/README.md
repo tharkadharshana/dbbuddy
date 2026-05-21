@@ -1,58 +1,150 @@
-# DataMind AI v2 — SQL Analytics Platform
+# DataMind AI
 
-A full-stack AI analytics platform. Connect your MySQL database, add your LLM API keys, and get natural language querying, smart analytics discovery, time-series forecasting, anomaly detection, and professional AI-generated reports — all from a beautiful dark-mode UI.
+> AI-powered analytics platform for retail & POS businesses. Connect your data sources, ask questions in plain English, and get instant charts, forecasts, anomaly alerts, and professional reports — or embed the entire experience into your own platform via a white-label iframe widget.
 
 ---
 
-## What's New in v2
+## Features
 
-| Feature | Description |
-|---|---|
-| **Login / Register** | Full JWT auth. Each user has their own account. |
-| **API Keys in UI** | Add Gemini & DeepSeek keys from Settings — no .env needed. |
-| **DB Manager in UI** | Add, edit, test, delete and switch between MySQL connections from Settings. |
-| **Smart Analytics Hub** | LLM reads your schema and discovers all possible analytics automatically. |
-| **24+ Analytics Templates** | Revenue, Products, Customers, Employees, Payments, Growth, Inventory. |
-| **Professional Reports** | Multi-section reports with embedded charts, KPI panels and AI narrative. |
-| **RFM Segmentation** | Champions, Loyal, At-Risk, Lost — full customer segmentation. |
-| **Cohort Analysis** | Retention heatmap by acquisition month. |
-| **Basket Analysis** | Product co-purchase patterns and confidence scores. |
-| **Per-user data isolation** | Every user's settings, DB configs and API keys are stored separately. |
+### Analytics & AI
+
+- **Natural language querying** — ask anything in plain English; the LLM generates MySQL and returns a chart + table
+- **Think Mode** — second LLM pass analyses the SQL results and gives a written insight
+- **24+ pre-built analytics templates** — revenue trends, product velocity, RFM segmentation, cohort retention, basket analysis, cashier performance, anomaly detection, and more
+- **Time-series forecasting** — Prophet model with confidence bands and seasonality charts
+- **Anomaly detection** — Isolation Forest with z-score severity levels (High / Medium / Low)
+- **Professional report builder** — multi-section reports with KPI panels, AI narrative, and embedded charts
+
+### Integrations
+
+- **External POS & API connectors** — sync products, customers, receipts, stores, and employees from supported external systems
+- **Bring Your Own DB** — connect any MySQL/MariaDB database directly and run NL queries against it
+- **Background sync scheduler** — automatic incremental syncs with configurable intervals and error backoff
+- **Unified multi-tenant schema** — all synced data lives in one shared table (`integration_records`) with per-user SQL views for zero-change analytics compatibility
+
+### Billing & Subscriptions
+
+- **Three-tier subscription plans** — Starter · Growth · Pro
+- **Unified token system** — every operation (LLM calls, row reads, ML features) deducts from a single token balance
+- **14-day free trial** on the Starter plan — auto-starts at registration, no credit card required
+- **Add-on packs** — purchase extra tokens or row quota that rolls over between periods
+- **Usage dashboard** — real-time token meter, per-operation history, plan comparison
+
+### Embeddable iFrame Widget
+
+- **White-label embed** — partners embed DataMind analytics into their own web portal via a `<script>` tag
+- **One-shot onboarding** — user enters their API credentials once; DataMind account + connection + trial start silently in the background
+- **Domain allowlist** — embed tokens are scoped to specific partner origins
+- **Short-lived JWT sessions** — standard Bearer token reused across all API calls within the iframe
+
+### Partner API (Pro plan)
+
+- **Server-to-server API** — partners call DataMind on behalf of their users using an `X-API-Key`
+- **5 REST endpoints** — integrations list, manual sync, records access (paginated), analytics template runner, usage stats
+- **OpenAPI 3.0 spec** — machine-readable spec at `openapi.yaml`
+- **SDK stubs** — Python (stdlib `urllib`, zero dependencies) and JavaScript (ESM, native `fetch`, Node ≥ 18)
+
+### Security
+
+- JWT authentication (HS256, 7-day expiry) with bcrypt password hashing
+- Fernet encryption for all stored provider credentials and DB passwords
+- LLM-generated SQL is guarded against mutation statements (DROP, DELETE, INSERT, UPDATE, …)
+- Schema and sample data are filtered for sensitive columns before LLM transmission
+- Rate limiting on all 47 endpoints across 6 configurable tiers
+- HTTPS redirect + HSTS + security headers (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`)
+- `X-Request-ID` tracing on every response
+
+---
+
+## Subscription Plans
+
+| | Starter | Growth | Pro |
+|---|---|---|---|
+| **Price** | $5 / mo | $10 / mo | $25 / mo |
+| **Tokens / period** | 500 | 1,500 | 10,000 |
+| **DB rows** | 2M | 5M | 20M |
+| **History** | 30 days | 90 days | 365 days |
+| **Forecasting & Anomaly** | — | ✓ | ✓ |
+| **Partner API** | — | — | ✓ |
+| **Free trial** | 14 days | — | — |
 
 ---
 
 ## Project Structure
 
-```
-datamind-v2/
+```text
+datamind/
 ├── backend/
-│   ├── main.py          # FastAPI — all API routes (auth + analytics)
-│   ├── auth.py          # JWT auth + TinyDB user store
-│   ├── db.py            # MySQL connection (env or per-user config)
-│   ├── llm.py           # Gemini + DeepSeek, Text-to-SQL, discovery
-│   ├── analytics.py     # Prophet, Isolation Forest, RFM, Cohort, Basket…
-│   ├── data/            # Auto-created — stores users.json (TinyDB)
+│   ├── main.py                  # FastAPI app — all 47 user-facing routes (/v1/*)
+│   ├── auth.py                  # JWT auth, bcrypt, user CRUD
+│   ├── billing.py               # Subscription plans, token metering, trial enforcement
+│   ├── integrations.py          # Integration lifecycle, sync scheduler, SQL views
+│   ├── embed.py                 # Embed partner router (/embed/*)
+│   ├── v1.py                    # Partner API router (/v1/partner/*)
+│   ├── limiter.py               # Rate limiting — IP-based + API-key-based instances
+│   ├── llm.py                   # Gemini + DeepSeek, NL→SQL, sensitive schema filtering
+│   ├── analytics.py             # Prophet, Isolation Forest, RFM, Cohort, Basket
+│   ├── db.py                    # User DB introspection (schema, foreign keys, samples)
+│   ├── pool.py                  # MySQL connection pool for DataMind's internal DB
+│   ├── cache.py                 # Per-user analytics template cache
+│   ├── schema_builder.py        # LLM-assisted SQL template generation
+│   ├── logger.py                # Structured logging (pretty / JSON format)
+│   ├── providers/
+│   │   ├── base.py              # Abstract provider interface
+│   │   ├── upsert.py            # Shared upsert_record() + lookup_map() helpers
+│   │   ├── salesplay/
+│   │   │   ├── provider.py      # SalesPlay credential validation
+│   │   │   ├── sync.py          # SalesPlay full + delta sync
+│   │   │   └── analytics.py     # SalesPlay-specific analytics SQL
+│   │   └── loyverse/
+│   │       ├── provider.py      # Loyverse credential validation
+│   │       ├── sync.py          # Loyverse full + delta sync
+│   │       └── analytics.py     # Loyverse-specific analytics SQL
 │   ├── requirements.txt
 │   ├── Dockerfile
 │   └── .env.example
 ├── frontend/
 │   ├── src/
-│   │   ├── App.jsx              # Root — auth guard, layout, routing
+│   │   ├── App.jsx              # Root — auth guard, routing
 │   │   ├── pages/
 │   │   │   ├── AuthPage.jsx     # Login + Register
-│   │   │   ├── DiscoverPage.jsx # Smart Analytics Hub
-│   │   │   ├── QueryPage.jsx    # Natural Language → SQL
-│   │   │   ├── ForecastPage.jsx # Prophet time-series
-│   │   │   ├── AnomalyPage.jsx  # Isolation Forest
-│   │   │   ├── ReportsPage.jsx  # Professional report builder
-│   │   │   └── SettingsPage.jsx # API keys + DB connections
-│   │   ├── components/
-│   │   │   ├── UI.jsx           # Shared design system
-│   │   │   └── Sidebar.jsx      # Navigation
-│   │   └── utils/api.js         # All API calls (with JWT)
+│   │   │   ├── ChatPage.jsx     # NL→SQL query interface + Think Mode
+│   │   │   ├── DiscoverPage.jsx # Analytics Hub (template catalogue)
+│   │   │   ├── ForecastPage.jsx # Time-series forecasting
+│   │   │   ├── AnomalyPage.jsx  # Anomaly detection
+│   │   │   ├── ReportsPage.jsx  # Report builder
+│   │   │   ├── BillingPage.jsx  # Plans, usage meter, add-ons
+│   │   │   ├── UsagePage.jsx    # Per-operation usage history
+│   │   │   ├── ConnectionsPage.jsx  # Integration management
+│   │   │   ├── SettingsPage.jsx     # Account, LLM keys, theme
+│   │   │   ├── OnboardingWizard.jsx # First-time setup flow
+│   │   │   └── DocsPage.jsx     # In-app documentation
+│   │   ├── embed/
+│   │   │   ├── EmbedApp.jsx     # iFrame root — JWT storage, postMessage
+│   │   │   ├── EmbedOnboarding.jsx  # Step-by-step embed onboarding wizard
+│   │   │   └── EmbedChat.jsx    # Compact NL query UI for the iframe
+│   │   └── components/
+│   │       ├── Sidebar.jsx
+│   │       ├── UI.jsx           # Shared design system
+│   │       └── UsageLimitBanner.jsx
 │   ├── Dockerfile
 │   ├── nginx.conf
 │   └── package.json
+├── sdk/
+│   ├── python/
+│   │   ├── datamind.py          # Python SDK (stdlib urllib, zero deps)
+│   │   └── setup.py
+│   └── js/
+│       ├── datamind.js          # JavaScript SDK (ESM, native fetch, Node ≥18)
+│       └── package.json
+├── docs/
+│   ├── CHANGELOG.md             # Full engineering changelog
+│   ├── DATABASE_SCHEMA.md       # Complete schema reference
+│   ├── token-system.md          # Token billing design
+│   ├── unified-db-schema-migration.md
+│   ├── security-hardening-plan.md
+│   └── deployment/              # Red Hat / nginx deployment guides
+├── openapi.yaml                 # OpenAPI 3.0.3 spec for the Partner API
 └── docker-compose.yml
 ```
 
@@ -63,168 +155,210 @@ datamind-v2/
 ### Option 1 — Docker (Recommended)
 
 ```bash
-# 1. Copy and configure env
-cd backend
-cp .env.example .env
-# Edit SECRET_KEY — change to a long random string
-# DB_HOST etc. are optional — users can add DBs from the UI
+cd datamind
 
-# 2. Run
-cd ..
+# 1. Configure environment
+cp backend/.env.example backend/.env
+# At minimum, set:
+#   SECRET_KEY    — a strong random string (see below)
+#   DATAMIND_DB_* — your MySQL credentials
+
+# Generate a secret key:
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+
+# 2. Start everything
 docker-compose up --build
-
-# Frontend → http://localhost:5173
-# Backend API → http://localhost:8000
-# API Docs → http://localhost:8000/docs
 ```
+
+| Service | URL |
+|---------|-----|
+| Frontend | <http://localhost:5173> |
+| Backend API | <http://localhost:8000> |
+| Interactive API docs | <http://localhost:8000/docs> |
 
 ### Option 2 — Manual
 
 **Backend:**
+
 ```bash
-cd backend
+cd datamind/backend
 python -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
+source venv/bin/activate      # Windows: venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env            # Edit SECRET_KEY at minimum
+cp .env.example .env          # Fill in SECRET_KEY and DATAMIND_DB_*
 uvicorn main:app --reload --port 8000
 ```
 
 **Frontend:**
+
 ```bash
-cd frontend
+cd datamind/frontend
 npm install
-npm run dev
-# Opens http://localhost:5173
+npm run dev                   # http://localhost:5173
 ```
 
 ---
 
-## First-Time Setup Flow
+## Environment Variables
 
-1. **Open** http://localhost:5173
-2. **Register** an account (stored locally in `backend/data/users.json`)
+Copy `backend/.env.example` to `backend/.env` and fill in your values. Key variables:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `SECRET_KEY` | **Yes** | JWT signing secret — generate with `secrets.token_urlsafe(48)` |
+| `ENCRYPTION_KEY` | Recommended | Fernet key for encrypting stored credentials. Falls back to `SECRET_KEY` if unset. |
+| `DATAMIND_DB_HOST` | **Yes** | MySQL host for DataMind's own database |
+| `DATAMIND_DB_NAME` | **Yes** | DataMind's internal database name |
+| `DATAMIND_DB_USER` | **Yes** | DataMind's database user |
+| `DATAMIND_DB_PASSWORD` | **Yes** | DataMind's database password |
+| `GEMINI_API_KEY` | Recommended | Server-level fallback LLM key (used for embed users) |
+| `DEEPSEEK_API_KEY` | Optional | Alternative LLM provider |
+| `EMBED_ALLOWED_ORIGINS` | Production | Comma-separated origins allowed to host the iframe widget |
+| `FORCE_HTTPS` | Production | `true` to enable HTTPS redirect + HSTS |
+| `LOG_LEVEL` | Optional | `DEBUG` / `INFO` / `WARNING` / `ERROR` (default: `INFO`) |
+| `LOG_FORMAT` | Optional | `pretty` (coloured) or `json` (one line per event) |
+| `DB_POOL_SIZE` | Optional | Internal DB connection pool size per worker (default: `20`) |
+
+**Rate limit overrides** (all optional — defaults shown):
+
+| Variable | Default | Applies to |
+|----------|---------|-----------|
+| `RATE_LIMIT_AUTH` | `5/minute` | `POST /v1/auth/register` |
+| `RATE_LIMIT_AUTH_LOGIN` | `10/minute` | `POST /v1/auth/login` |
+| `RATE_LIMIT_COMPUTE` | `10/minute` | `/v1/query`, analytics, forecast, anomaly, report |
+| `RATE_LIMIT_READ` | `60/minute` | All GET endpoints |
+| `RATE_LIMIT_WRITE` | `30/minute` | Settings, billing, sync mutations |
+| `RATE_LIMIT_V1` | `30/minute` | All `/v1/partner/*` endpoints (per API key) |
+
+---
+
+## First-Time Setup
+
+1. Open <http://localhost:5173>
+2. **Register** an account — a 14-day Starter trial starts automatically
 3. **Settings → LLM API Keys** — add your Gemini and/or DeepSeek key
-4. **Settings → Database Connections** — click "Add Database Connection"
-   - Fill in host, port, database, user, password
-   - Click **⚡ Test Connection** to verify
-   - Click **Save Connection** then **Use** to activate it
-5. **Go to Analytics Hub** — click any card to run an analysis instantly
+4. **Connections → Add Integration** — enter your external API credentials to connect a supported data source
+5. DataMind validates the credentials and starts an initial background sync
+6. **Analytics Hub** — once the sync completes, all 24+ templates are available instantly
+
+> Users can also connect their own MySQL database under **Settings → Database Connections** and run natural language queries directly against it.
 
 ---
 
-## Pages
+## API Overview
 
-### 🔐 Login / Register
-- Email + password auth with JWT tokens (7-day expiry)
-- Passwords hashed with bcrypt
-- Animated dark-mode UI
+All user endpoints are under `/v1/`. Partner API endpoints are under `/v1/partner/`. The embed bootstrap endpoints are under `/embed/` (unversioned — live in production iframes).
 
-### ⬡ Analytics Hub (Discover)
-- LLM reads your full schema + foreign keys + sample data
-- Returns a catalogue of 20-25 analytics tailored to your actual tables
-- Click any card → results appear instantly (chart + table + KPI cards)
-- Filter by category: Revenue / Products / Customers / Employees / Payments / Growth / Inventory
+```text
+GET    /health                           # Load balancer health check (no auth)
 
-### ⌕ Natural Language Query
-- Ask anything in plain English
-- LLM generates MySQL with JOIN support across multiple tables
-- Auto-detects chart type (bar / line) from result shape
-- Query history sidebar
+POST   /v1/auth/register                 # Create account + start free trial
+POST   /v1/auth/login                    # Sign in, receive JWT
+GET    /v1/auth/me                       # Current user info
+DELETE /v1/auth/account                  # Delete account
 
-### 📈 Forecasting
-- **Auto mode**: forecasts daily revenue from your invoices table
-- **Manual mode**: pick any table, date column, value column
-- Prophet model with yearly + weekly seasonality
-- Confidence bands, seasonality chart, predicted growth %
+GET    /v1/settings                      # User settings (API keys masked)
+PATCH  /v1/settings                      # Update LLM keys, theme, default LLM
+POST   /v1/settings/db                   # Add DB connection
+PUT    /v1/settings/db/{i}               # Update DB connection
+DELETE /v1/settings/db/{i}               # Remove DB connection
+POST   /v1/settings/db/{i}/activate      # Switch active DB
+POST   /v1/settings/db/test              # Test a connection (not saved)
 
-### ⚠ Anomaly Detection
-- **Auto mode**: scans daily revenue
-- **Manual mode**: any table + numeric column
-- Isolation Forest + z-score severity (High / Medium / Low)
-- Anomaly score time-series chart
+GET    /v1/tables                        # Schema introspection for active DB
+GET    /v1/discover                      # LLM analytics catalogue for active DB
+POST   /v1/query                         # NL → SQL → results (+ Think Mode)
+POST   /v1/analytics/run                 # Run a pre-built template by ID
+GET    /v1/forecast/auto                 # Auto revenue forecast
+POST   /v1/forecast                      # Manual forecast (any table + columns)
+GET    /v1/anomalies/auto                # Auto anomaly scan
+POST   /v1/anomalies                     # Manual anomaly scan
+POST   /v1/report                        # Generate multi-section report
 
-### 📋 Report Builder
-- Select from 15 data sections across Revenue, Products, Customers, People, Finance
-- 4 quick presets (Executive Summary, Revenue Deep Dive, Customer Report, Operations)
-- 3 formats: Detailed / Executive / Quick Bullets
-- Output: KPI panel + AI narrative + embedded mini-charts per section
-- Copy to clipboard
+GET    /v1/integrations                  # List connected integrations
+POST   /v1/integrations/{id}/sync        # Trigger manual sync
+DELETE /v1/integrations/{id}             # Disconnect integration
+GET    /v1/integrations/{id}/progress    # Live sync progress
 
-### ⚙ Settings
-- **Account**: profile info + sign out
-- **LLM API Keys**: Gemini + DeepSeek, with direct links to get keys; choose default LLM
-- **Database Connections**: add/edit/delete MySQL connections; test before saving; switch active connection
+GET    /v1/billing/plans                 # Available subscription plans
+GET    /v1/billing/subscription          # Current subscription + usage
+POST   /v1/billing/subscribe             # Upgrade or downgrade plan
+POST   /v1/billing/addon                 # Purchase add-on pack
+GET    /v1/billing/usage                 # Token usage summary for current period
+GET    /v1/billing/history               # Per-operation usage log
 
----
+GET    /v1/cache/status                  # Analytics cache status
+GET    /v1/cache/progress                # Live cache build log
+POST   /v1/cache/rebuild                 # Force a full cache rebuild
+```
 
-## Analytics Templates (24 total)
-
-**Revenue**
-- Monthly Revenue Trend · Category Breakdown · Location Performance · Hourly Pattern · Last 7 Days · Discount Analysis · Tax Analysis
-
-**Products**
-- Top 20 Products · Slow Movers · Margin by Category · Product Velocity · Basket Co-purchase Analysis
-
-**Customers**
-- Top Customers by LTV · RFM Segmentation · Cohort Retention Heatmap · Monthly Retention Rate · Loyalty Tier Performance
-
-**Employees**
-- Cashier Performance Ranking (sales, avg ticket, discount rate, sales/day)
-
-**Payments**
-- Payment Method Breakdown · Credit & Collections by Month
-
-**Growth**
-- Month-over-Month Growth Metrics · Location KPI Comparison · Revenue by Order Type & Channel
-
-**Inventory**
-- Inventory Movement Log
+Interactive docs (Swagger UI): **<http://localhost:8000/docs>**
 
 ---
 
-## API Reference
+## Partner API
 
-All endpoints require `Authorization: Bearer <token>` except `/auth/*`.
+The Partner API lets you call DataMind server-to-server on behalf of your users. Requires a Pro plan and an `X-API-Key` header.
 
-| Method | Path | Description |
-|---|---|---|
-| POST | `/auth/register` | Create account |
-| POST | `/auth/login` | Sign in, get token |
-| GET | `/auth/me` | Current user |
-| GET | `/settings` | Get user settings (DB configs, API keys masked) |
-| PATCH | `/settings` | Update API keys / default LLM |
-| POST | `/settings/db` | Add DB connection |
-| PUT | `/settings/db/{i}` | Update DB connection |
-| DELETE | `/settings/db/{i}` | Delete DB connection |
-| POST | `/settings/db/{i}/activate` | Switch active DB |
-| POST | `/settings/db/test` | Test a connection (not saved) |
-| GET | `/tables` | List tables + schemas + foreign keys |
-| GET | `/discover` | LLM-generated analytics catalogue |
-| POST | `/query` | NL → SQL → results |
-| POST | `/analytics/run` | Run a template by ID |
-| GET | `/forecast/auto` | Auto revenue forecast |
-| POST | `/forecast` | Manual forecast |
-| GET | `/anomalies/auto` | Auto revenue anomaly scan |
-| POST | `/anomalies` | Manual anomaly scan |
-| POST | `/report` | Generate professional report |
+```text
+GET  /v1/partner/integrations              # User's connected integrations
+POST /v1/partner/sync/{provider}           # Trigger a sync
+GET  /v1/partner/records/{provider}/{type} # Paginated synced records
+GET  /v1/partner/analytics/{template_id}   # Run an analytics template
+GET  /v1/partner/usage                     # User's token balance and plan
+```
 
-Full interactive docs: http://localhost:8000/docs
+The full machine-readable spec is at [`openapi.yaml`](openapi.yaml).
+
+**SDK quick-start:**
+
+```python
+# Python
+from datamind import DataMindClient
+client = DataMindClient(api_key="your_key")
+result = client.analytics("customer_rfm", user_email="user@example.com")
+```
+
+```javascript
+// JavaScript (ESM)
+import { DataMindClient } from './datamind.js';
+const client = new DataMindClient({ apiKey: 'your_key' });
+const result = await client.analytics('customer_rfm', { userEmail: 'user@example.com' });
+```
 
 ---
 
-## Security Notes
+## Embedding the Widget
 
-- **Change `SECRET_KEY`** in `.env` before deploying — the default is public
-- User data (accounts, settings) stored in `backend/data/users.json` — back this up
-- API keys are stored per-user in the JSON file — consider encrypting at rest in production
-- SQL generation prompt forbids mutating statements (DROP, DELETE, INSERT, UPDATE)
-- For production MySQL access, use a read-only user:
-  ```sql
-  GRANT SELECT ON your_db.* TO 'datamind'@'%';
-  FLUSH PRIVILEGES;
-  ```
-- The `docker-compose.yml` mounts a named volume `backend_data` so user data survives container restarts
+Add one `<script>` tag to your page. DataMind handles account creation, provider connection, and the full analytics UI inside the iframe.
+
+```html
+<script
+  src="https://your-datamind-instance.com/embed/bundle.js"
+  data-partner-key="YOUR_PARTNER_KEY"
+  data-theme="light"
+></script>
+```
+
+The widget detects first-time users automatically and shows a three-step onboarding wizard (enter API credentials → set up account → done). Returning users go straight to the analytics chat.
+
+Partner keys and allowed origins are managed in the `embed_partners` table — contact the DataMind admin to register a new partner.
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Backend | Python 3.10+, FastAPI, Uvicorn |
+| Frontend | React 18, Vite, Recharts |
+| Database | MySQL / MariaDB 10.4+ |
+| ML / Forecasting | Prophet, scikit-learn (IsolationForest), pandas, NumPy |
+| LLM providers | Google Gemini (primary), DeepSeek (fallback) |
+| Auth | JWT (python-jose), bcrypt (passlib) |
+| Encryption | Fernet (cryptography library) |
+| Rate limiting | slowapi |
+| Containerisation | Docker, docker-compose |
 
 ---
 
@@ -232,53 +366,46 @@ Full interactive docs: http://localhost:8000/docs
 
 - Python 3.10+
 - Node.js 18+
-- MySQL 8.0+
-- Gemini API key (from [AI Studio](https://aistudio.google.com))
+- MySQL 8.0+ or MariaDB 10.4+
+- Gemini API key → <https://aistudio.google.com/app/apikey>
+- DeepSeek API key (optional) → <https://platform.deepseek.com/api_keys>
 
 ---
 
-## v3 — Fully Dynamic + Cached Architecture
+## Security Notes
 
-### The problem with v2
-All analytics SQL was hardcoded for a specific POS database schema (`invoices`, `products`, `customers`…). Any other database would break.
+- **Change `SECRET_KEY` before deploying** — the default value is in the source code and makes all JWTs forgeable
+- **Set `ENCRYPTION_KEY`** separately from `SECRET_KEY` in production — used to encrypt stored integration credentials and DB passwords
+- All LLM-generated SQL is checked against a mutation guard before execution — `DROP`, `DELETE`, `INSERT`, `UPDATE`, `ALTER`, and other write statements are blocked
+- Schema columns matching sensitive patterns (passwords, API keys, SSNs, card numbers) are stripped before any data is sent to an LLM
+- For production BYODB access, use a read-only MySQL user:
 
-### How v3 fixes it
+  ```sql
+  GRANT SELECT ON your_db.* TO 'datamind'@'%';
+  FLUSH PRIVILEGES;
+  ```
 
-**One-time LLM build (when you add a DB):**
-1. DataMind reads your full schema — every table, column, type, foreign key
-2. LLM generates custom MySQL SQL for all 21 analytics templates based on YOUR column names
-3. LLM detects the best date/value columns for auto-forecast and auto-anomaly
-4. LLM writes a personalised analytics catalogue describing what's possible
-5. All of this is saved to `backend/data/cache/{user}_{db}.json`
+- Set `FORCE_HTTPS=true` behind a TLS-terminating reverse proxy to enable HTTPS redirect and HSTS
 
-**Every visit after that:**
-- Analytics Hub loads instantly — reads catalogue from cache file
-- Each template runs the pre-generated SQL directly on your DB
-- Zero LLM tokens used for any analytics
+---
 
-**Three-tier fallback:**
-```
-Cache SQL → Python analytics (RFM, Cohort, Basket…) → Hardcoded POS SQL
-```
+## Documentation
 
-### New files
-- `backend/cache.py` — read/write/invalidate per-user, per-DB JSON cache files
-- `backend/schema_builder.py` — LLM prompt builder + SQL validator + one-time build engine
+| Document | Description |
+|----------|-------------|
+| [`docs/CHANGELOG.md`](docs/CHANGELOG.md) | Full engineering changelog — every feature, logic detail, and design decision |
+| [`docs/DATABASE_SCHEMA.md`](docs/DATABASE_SCHEMA.md) | Complete schema reference — every table and column explained |
+| [`docs/token-system.md`](docs/token-system.md) | Token billing formula and known gaps |
+| [`docs/unified-db-schema-migration.md`](docs/unified-db-schema-migration.md) | M2 schema migration notes |
+| [`docs/security-hardening-plan.md`](docs/security-hardening-plan.md) | SEC-01 through SEC-14 implementation notes |
+| [`openapi.yaml`](openapi.yaml) | OpenAPI 3.0.3 spec for the Partner API |
 
-### New API endpoints
-| Method | Path | Description |
-|---|---|---|
-| GET | `/cache/status` | Is cache built? How many templates? When? |
-| GET | `/cache/progress` | Live build log (poll while building) |
-| POST | `/cache/rebuild` | Force a full rebuild for the active DB |
+---
 
-Copyright (c) 2026 POTHUMULLA KANKANAMALAGE THARKA DHARSHANA KARUNANAYAKE. All rights reserved.
+## License
 
-This software and its source code are proprietary and confidential.
-Unauthorized copying, distribution, modification, or deployment
-of this software, via any medium, is strictly prohibited.
+Copyright © 2026 Tharka Dharshana Karunanayake. All rights reserved.
 
-For licensing inquiries: tharkadharshana@gmail.com
-- MySQL 5.7+ or 8.0
-- Gemini API key → https://aistudio.google.com/app/apikey
-- DeepSeek API key → https://platform.deepseek.com/api_keys
+This software and its source code are proprietary and confidential. Unauthorised copying, distribution, modification, or deployment of this software, via any medium, is strictly prohibited.
+
+For licensing enquiries: tharkadharshana@gmail.com
