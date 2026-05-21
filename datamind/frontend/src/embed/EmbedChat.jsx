@@ -144,13 +144,33 @@ function Message({ msg, theme }) {
       </div>
       <div style={{ flex:1, minWidth:0 }}>
         {msg.loading ? (
-          <TypingDots />
+          <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+            <TypingDots />
+            {msg.loadingText && (
+              <span style={{ fontSize:10, color:'var(--text3)' }}>{msg.loadingText}</span>
+            )}
+          </div>
         ) : msg.error ? (
           <div style={{ background:'var(--red-dim)', border:'1px solid rgba(240,80,80,0.2)', borderRadius:8, padding:'8px 12px', fontSize:12, color:'var(--red)' }}>
             ⚠ {msg.error}
           </div>
         ) : (
           <>
+            {/* Think Mode analysis — shown above the data */}
+            {msg.analysis && (
+              <div style={{
+                marginBottom:10, padding:'10px 12px', borderRadius:8, fontSize:13,
+                lineHeight:1.65, color:'var(--text)',
+                background:'var(--bg2)', border:'1px solid var(--border2)',
+                borderLeft:'3px solid var(--blue)',
+              }}>
+                <div style={{ fontSize:10, fontWeight:600, color:'var(--blue)', textTransform:'uppercase', letterSpacing:'.06em', marginBottom:5 }}>
+                  🧠 Think Mode
+                </div>
+                {msg.analysis}
+              </div>
+            )}
+
             <div style={{ fontSize:13, color:'var(--text)', lineHeight:1.6 }}>{msg.content}</div>
             {msg.data?.data?.length > 0 && (
               <>
@@ -174,6 +194,7 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
   const [messages, setMessages] = useState([])
   const [input, setInput]       = useState('')
   const [loading, setLoading]   = useState(false)
+  const [thinkMode, setThinkMode] = useState(false)
   const bottomRef = useRef(null)
   const inputRef  = useRef(null)
 
@@ -197,15 +218,17 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
     setInput('')
     inputRef.current?.focus()
 
-    const userMsg  = { role:'user', content:q,    id: Date.now() }
-    const thinkMsg = { role:'ai',  loading:true,  id: Date.now() + 1 }
+    const userMsg  = { role:'user', content:q,           id: Date.now() }
+    const thinkMsg = { role:'ai',  loading:true,
+                       loadingText: thinkMode ? 'Querying data…' : null,
+                       id: Date.now() + 1 }
     setMessages(m => [...m, userMsg, thinkMsg])
     setLoading(true)
 
     notifyParent('dm:query', { question: q })
 
     try {
-      const data = await embedRunQuery(q)
+      const data = await embedRunQuery(q, 'gemini', thinkMode)
       const rowCount = data.row_count
       const numCol   = data.columns?.find(c => typeof data.data?.[0]?.[c] === 'number')
       let summary = `Found ${rowCount} result${rowCount !== 1 ? 's' : ''}`
@@ -216,7 +239,9 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
       if (rowCount === 0) summary = 'No matching records found for your query.'
 
       setMessages(m => m.map(msg =>
-        msg.id === thinkMsg.id ? { role:'ai', content:summary, data, id:thinkMsg.id } : msg
+        msg.id === thinkMsg.id
+          ? { role:'ai', content: summary, data, analysis: data.analysis || null, id: thinkMsg.id }
+          : msg
       ))
     } catch (e) {
       if (e.response?.status === 401) {
@@ -308,6 +333,29 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
 
       {/* Input */}
       <div style={{ flexShrink:0, padding:'10px 12px', borderTop: hasMessages ? '1px solid var(--border)' : 'none' }}>
+        {/* Think Mode toggle */}
+        <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:6 }}>
+          <button
+            onClick={() => setThinkMode(m => !m)}
+            title="Think Mode: runs a second AI call to analyse the data and answer your question directly"
+            style={{
+              display:'flex', alignItems:'center', gap:5,
+              padding:'4px 10px', borderRadius:20, fontSize:11, fontWeight:500,
+              background: thinkMode ? 'rgba(79,142,247,0.12)' : 'var(--bg2)',
+              color: thinkMode ? 'var(--blue)' : 'var(--text3)',
+              border: `1px solid ${thinkMode ? 'var(--blue)' : 'var(--border)'}`,
+              cursor:'pointer', transition:'all .15s',
+            }}
+          >
+            🧠 Think Mode {thinkMode ? 'ON' : 'OFF'}
+          </button>
+          {thinkMode && (
+            <span style={{ fontSize:10, color:'var(--text3)' }}>
+              Uses 2 AI calls · deducts extra tokens
+            </span>
+          )}
+        </div>
+
         <div style={{ display:'flex', gap:8, background:'var(--bg1)', border:'1px solid var(--border2)', borderRadius:12, padding:'6px 6px 6px 12px' }}>
           <textarea
             ref={inputRef}
