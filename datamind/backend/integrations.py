@@ -137,6 +137,144 @@ def bootstrap_integration_tables():
             UNIQUE KEY uq_state (tenant_id, provider_id, record_type)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """)
+    # ── SalesPlay shared normalized tables ─────────────────────────────────────
+    # Shared across ALL tenants — tenant_id is part of every primary key.
+    # This replaces per-user views over integration_records for analytics queries.
+    # JOINs between these tables use proper B-tree indexes → milliseconds not minutes.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sp_receipts (
+            tenant_id           VARCHAR(64)   NOT NULL,
+            id                  VARCHAR(64)   NOT NULL,
+            receipt_number      VARCHAR(100),
+            shop_id             VARCHAR(64),
+            shop_name           VARCHAR(255),
+            customer_id         VARCHAR(64),
+            customer_name       VARCHAR(255),
+            created_at          DATETIME,
+            updated_at          DATETIME,
+            total_money         DECIMAL(14,4) DEFAULT 0,
+            total_discount      DECIMAL(14,4) DEFAULT 0,
+            total_tax           DECIMAL(14,4) DEFAULT 0,
+            receipt_type        VARCHAR(30)   DEFAULT 'SALE',
+            status              VARCHAR(30)   DEFAULT 'COMPLETED',
+            payment_type_id     VARCHAR(64),
+            payment_type_name   VARCHAR(255),
+            payment_amount      DECIMAL(14,4) DEFAULT 0,
+            synced_at           DATETIME      DEFAULT NOW(),
+            PRIMARY KEY (tenant_id, id),
+            INDEX idx_date     (tenant_id, created_at),
+            INDEX idx_customer (tenant_id, customer_id),
+            INDEX idx_shop     (tenant_id, shop_id),
+            INDEX idx_type     (tenant_id, receipt_type)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sp_receipt_line_items (
+            tenant_id       VARCHAR(64)   NOT NULL,
+            id              VARCHAR(128)  NOT NULL,
+            receipt_id      VARCHAR(64)   NOT NULL,
+            product_id      VARCHAR(64),
+            variant_id      VARCHAR(64),
+            product_name    VARCHAR(500),
+            category_name   VARCHAR(255),
+            sku             VARCHAR(100),
+            quantity        DECIMAL(12,4) DEFAULT 0,
+            price           DECIMAL(12,4) DEFAULT 0,
+            gross_total_money DECIMAL(14,4) DEFAULT 0,
+            total_discount  DECIMAL(14,4) DEFAULT 0,
+            total_money     DECIMAL(14,4) DEFAULT 0,
+            cost            DECIMAL(12,4) DEFAULT 0,
+            created_at      DATETIME,
+            synced_at       DATETIME      DEFAULT NOW(),
+            PRIMARY KEY (tenant_id, id),
+            INDEX idx_receipt (tenant_id, receipt_id),
+            INDEX idx_product (tenant_id, product_id),
+            INDEX idx_date    (tenant_id, created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sp_products (
+            tenant_id       VARCHAR(64)   NOT NULL,
+            id              VARCHAR(64)   NOT NULL,
+            product_name    VARCHAR(500),
+            description     TEXT,
+            category_id     VARCHAR(64),
+            category_name   VARCHAR(255),
+            reference_id    VARCHAR(100),
+            sku             VARCHAR(100),
+            barcode         VARCHAR(100),
+            price           DECIMAL(12,4) DEFAULT 0,
+            cost            DECIMAL(12,4) DEFAULT 0,
+            is_active       TINYINT(1)    DEFAULT 1,
+            created_at      DATETIME,
+            updated_at      DATETIME,
+            synced_at       DATETIME      DEFAULT NOW(),
+            PRIMARY KEY (tenant_id, id),
+            INDEX idx_cat (tenant_id, category_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sp_customers (
+            tenant_id       VARCHAR(64)   NOT NULL,
+            id              VARCHAR(64)   NOT NULL,
+            customer_name   VARCHAR(255),
+            email           VARCHAR(255),
+            phone_number    VARCHAR(50),
+            customer_code   VARCHAR(100),
+            note            TEXT,
+            total_visits    INT           DEFAULT 0,
+            total_spent     DECIMAL(14,4) DEFAULT 0,
+            points_balance  DECIMAL(12,2) DEFAULT 0,
+            created_at      DATETIME,
+            updated_at      DATETIME,
+            synced_at       DATETIME      DEFAULT NOW(),
+            PRIMARY KEY (tenant_id, id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sp_categories (
+            tenant_id       VARCHAR(64)   NOT NULL,
+            id              VARCHAR(64)   NOT NULL,
+            category_name   VARCHAR(255),
+            color           VARCHAR(20),
+            shop_id         VARCHAR(64),
+            created_at      DATETIME,
+            updated_at      DATETIME,
+            synced_at       DATETIME      DEFAULT NOW(),
+            PRIMARY KEY (tenant_id, id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sp_shops (
+            tenant_id   VARCHAR(64)   NOT NULL,
+            id          VARCHAR(64)   NOT NULL,
+            shop_name   VARCHAR(255),
+            address     VARCHAR(500),
+            phone       VARCHAR(50),
+            email       VARCHAR(255),
+            currency    VARCHAR(10),
+            country     VARCHAR(10),
+            timezone    VARCHAR(100),
+            status      VARCHAR(20),
+            updated_at  DATETIME,
+            synced_at   DATETIME      DEFAULT NOW(),
+            PRIMARY KEY (tenant_id, id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sp_payment_types (
+            tenant_id    VARCHAR(64)   NOT NULL,
+            id           VARCHAR(64)   NOT NULL,
+            payment_name VARCHAR(255),
+            payment_type VARCHAR(50),
+            is_active    TINYINT(1)    DEFAULT 1,
+            shop_id      VARCHAR(64),
+            created_at   DATETIME,
+            updated_at   DATETIME,
+            synced_at    DATETIME      DEFAULT NOW(),
+            PRIMARY KEY (tenant_id, id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """)
     conn.commit()
 
     # Reset any integrations stuck in 'syncing' from a previous server crash.
