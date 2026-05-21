@@ -63,3 +63,9 @@ export const embedRunQuery = (question, llm = 'gemini') =>
 
 export const embedGetSubscription = () =>
   api.get('/billing/subscription').then(r => r.data)
+
+export const embedGetPlans = () =>
+  api.get('/billing/plans').then(r => r.data)
+
+export const embedSubscribePlan = (plan_id) =>
+  api.post('/billing/subscribe', { plan_id }).then(r => r.data)
