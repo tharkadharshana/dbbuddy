@@ -156,5 +156,11 @@ function EmbedApp() {
 }
 
 // ── Mount ─────────────────────────────────────────────────────────────────────
-const root = createRoot(document.getElementById('embed-root'))
-root.render(<EmbedApp />)
+// Guard against Vite HMR re-executing this module and calling createRoot()
+// on a container that already has a React root attached. In production the
+// bundle runs once so this branch is never taken.
+const container = document.getElementById('embed-root')
+if (!container._reactRoot) {
+  container._reactRoot = createRoot(container)
+}
+container._reactRoot.render(<EmbedApp />)
