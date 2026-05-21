@@ -78,9 +78,12 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
 
   const [error, setError]         = useState('')
 
-  // Step 3 — plan selection
-  const [plans, setPlans]           = useState([])
+  // Plan selection — now happens BEFORE sync so the backend uses the right
+  // data_months when computing the since-date for the initial full sync.
+  const [plans, setPlans]              = useState([])
+  const [selectedPlanId, setSelectedPlanId] = useState(null)
   const [planSubscribing, setPlanSubscribing] = useState(null)
+  const [planSubscribed, setPlanSubscribed]   = useState(false)
 
   useEffect(() => {
     fetchBillingPlans().then(d => setPlans(d.plans || [])).catch(() => {})
@@ -88,7 +91,23 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
 
   async function handleSelectPlan(plan) {
     setPlanSubscribing(plan.id)
-    try { await subscribeToPlan(plan.id) } catch { /* already on trial, that's fine */ }
+    try {
+      await subscribeToPlan(plan.id)
+      setSelectedPlanId(plan.id)
+      setPlanSubscribed(true)
+    } catch {
+      // Already on trial or plan — treat as success
+      setSelectedPlanId(plan.id)
+      setPlanSubscribed(true)
+    }
+    setPlanSubscribing(null)
+  }
+
+  // Final step — called from Step 3 "Go to Analytics Hub" for own-DB users
+  // or from Step 4 (fallback plan selection) for provider users
+  async function handleFinalPlanSelect(plan) {
+    setPlanSubscribing(plan.id)
+    try { await subscribeToPlan(plan.id) } catch { /* ok */ }
     setPlanSubscribing(null)
     onComplete()
   }
@@ -366,7 +385,47 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
                 ? `✓ Connected to ${provResult.details?.merchant_name || selProvider.display_name}`
                 : provResult.error} />
             )}
-            <div style={{ display:'flex', gap:8 }}>
+
+            {/* Plan selection — shown AFTER test succeeds, BEFORE sync starts.
+                The backend reads the plan to determine how many months to sync. */}
+            {provResult?.ok && (
+              <div style={{ marginTop:14 }}>
+                <div style={{ fontSize:12, color:'var(--text2)', marginBottom:8, fontWeight:600 }}>
+                  Choose your plan — this sets how much data we sync:
+                </div>
+                <div style={{ display:'flex', flexDirection:'column', gap:6, marginBottom:6 }}>
+                  {plans.map(plan => {
+                    const dataMonths = plan.name === 'Starter' ? '1 month' : plan.name === 'Growth' ? '3 months' : '12 months'
+                    const isSelected = selectedPlanId === plan.id
+                    return (
+                      <button key={plan.id} onClick={() => handleSelectPlan(plan)}
+                        disabled={planSubscribing === plan.id}
+                        style={{
+                          padding:'10px 14px', borderRadius:10, textAlign:'left', cursor:'pointer',
+                          background: isSelected ? 'rgba(79,142,247,0.12)' : 'var(--bg2)',
+                          border: `1px solid ${isSelected ? 'rgba(79,142,247,0.4)' : 'var(--border)'}`,
+                          color:'var(--text)', display:'flex', justifyContent:'space-between',
+                          alignItems:'center',
+                        }}>
+                        <span style={{ fontSize:13, fontWeight: isSelected ? 600 : 400 }}>
+                          {isSelected ? '✓ ' : ''}{plan.name} — {dataMonths} of data
+                        </span>
+                        <span style={{ fontSize:12, color:'var(--text2)' }}>
+                          ${plan.price_usd}/mo
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+                {planSubscribed && (
+                  <div style={{ fontSize:11, color:'var(--green)', marginBottom:4 }}>
+                    ✓ Plan saved — sync will import the right amount of data
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div style={{ display:'flex', gap:8, marginTop: provResult?.ok ? 6 : 0 }}>
               <button onClick={() => setSelProvider(null)} style={{ padding:'9px 14px', borderRadius:10, fontSize:13, background:'transparent', border:'1px solid var(--border)', color:'var(--text2)', cursor:'pointer' }}>← Back</button>
               <button onClick={async () => {
                 setProvTesting(true); setProvResult(null)
@@ -394,7 +453,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
                 }
               } catch(e) { setConnectErr(e.message) }
               finally { setConnecting(false) }
-            }} disabled={!provResult?.ok || connecting}>
+            }} disabled={!provResult?.ok || !planSubscribed || connecting}>
               {connecting ? 'Connecting…' : `Connect ${selProvider.display_name} & Sync Data →`}
             </NextBtn>
           </Card>
@@ -587,13 +646,25 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
                 ].map((t,i) => <div key={i} style={{ fontSize:12, color:'var(--text2)', padding:'4px 0' }}>{t}</div>)}
               </div>
 
-              <button onClick={() => setStep(4)} style={{
-                width:'100%', padding:'13px', borderRadius:10, fontSize:15, fontWeight:700,
-                background:'linear-gradient(135deg,#4f8ef7,#a78bfa)', color:'#fff', border:'none',
-                cursor:'pointer', boxShadow:'0 6px 20px rgba(79,142,247,0.35)',
-              }}>
-                Choose Your Plan →
-              </button>
+              {/* Provider users already selected a plan before sync — go straight to app.
+                  Own-DB users select plan here (no sync timing dependency). */}
+              {planSubscribed ? (
+                <button onClick={onComplete} style={{
+                  width:'100%', padding:'13px', borderRadius:10, fontSize:15, fontWeight:700,
+                  background:'linear-gradient(135deg,#4f8ef7,#a78bfa)', color:'#fff', border:'none',
+                  cursor:'pointer', boxShadow:'0 6px 20px rgba(79,142,247,0.35)',
+                }}>
+                  Go to Analytics Hub →
+                </button>
+              ) : (
+                <button onClick={() => setStep(4)} style={{
+                  width:'100%', padding:'13px', borderRadius:10, fontSize:15, fontWeight:700,
+                  background:'linear-gradient(135deg,#4f8ef7,#a78bfa)', color:'#fff', border:'none',
+                  cursor:'pointer', boxShadow:'0 6px 20px rgba(79,142,247,0.35)',
+                }}>
+                  Choose Your Plan →
+                </button>
+              )}
             </div>
           </Card>
         )}
@@ -625,7 +696,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
                     </div>
                     <div style={{ fontWeight:800, fontSize:16, color:'var(--text)', minWidth:36, textAlign:'right' }}>{h.price}<span style={{ fontSize:11, fontWeight:400, color:'var(--text3)' }}>/mo</span></div>
                     <button
-                      onClick={() => handleSelectPlan(plan)}
+                      onClick={() => handleFinalPlanSelect(plan)}
                       disabled={!!planSubscribing}
                       style={{
                         padding:'7px 16px', borderRadius:8, border:'none', cursor: planSubscribing ? 'wait' : 'pointer',
