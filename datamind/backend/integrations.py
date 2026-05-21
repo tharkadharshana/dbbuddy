@@ -992,6 +992,15 @@ def _run_sync_inner(integration_id: int, user_email: str, provider_id: str,
     log.info("Sync worker finished", user=user_email, provider=provider_id,
              status=status, rows=result.rows_fetched)
 
+    # Bust analytics result cache so next query gets fresh post-sync data
+    if result.ok and provider_id == "salesplay":
+        try:
+            from providers.salesplay.analytics import cache_bust
+            cache_bust(table_prefix)
+            log.debug("Analytics cache busted after sync", prefix=table_prefix)
+        except Exception:
+            pass
+
 
 def _start_sync_thread(integration_id: int, user_email: str, provider_id: str,
                        sync_type: str = "delta", progress_callback=None) -> bool:
