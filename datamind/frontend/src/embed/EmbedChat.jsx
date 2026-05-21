@@ -174,6 +174,16 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
   const bottomRef = useRef(null)
   const inputRef  = useRef(null)
 
+  // ── Theme ───────────────────────────────────────────────────────────────────
+  const [theme, setTheme] = useState(() => localStorage.getItem('dm_embed_theme') || 'dark')
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+    localStorage.setItem('dm_embed_theme', theme)
+  }, [theme])
+
+  const toggleTheme = () => setTheme(t => t === 'dark' ? 'light' : 'dark')
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior:'smooth' })
   }, [messages])
@@ -238,13 +248,31 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
           </div>
           <span style={{ fontSize:13, fontWeight:600, color:'var(--text)' }}>{productTitle}</span>
         </div>
-        <button
-          onClick={onLogout}
-          title="Disconnect account"
-          style={{ background:'none', border:'none', color:'var(--text3)', fontSize:11, cursor:'pointer', padding:'2px 6px' }}
-        >
-          ⏏ Disconnect
-        </button>
+        <div style={{ display:'flex', alignItems:'center', gap:4 }}>
+          {/* Light / dark toggle */}
+          <button
+            onClick={toggleTheme}
+            title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            style={{
+              background:'var(--bg3)', border:'1px solid var(--border2)',
+              borderRadius:20, cursor:'pointer', padding:'3px 8px',
+              display:'flex', alignItems:'center', gap:5,
+              fontSize:11, color:'var(--text2)', transition:'background .15s',
+            }}
+          >
+            {theme === 'dark'
+              ? <><span style={{ fontSize:12 }}>☀️</span> Light</>
+              : <><span style={{ fontSize:12 }}>🌙</span> Dark</>
+            }
+          </button>
+          <button
+            onClick={onLogout}
+            title="Disconnect account"
+            style={{ background:'none', border:'none', color:'var(--text3)', fontSize:11, cursor:'pointer', padding:'2px 6px' }}
+          >
+            ⏏ Disconnect
+          </button>
+        </div>
       </div>
 
       {/* Messages area */}

@@ -49,6 +49,12 @@ function EmbedApp() {
   const [context, setContext] = useState(null)
   const [errorMsg, setError]  = useState('')
 
+  // Apply saved theme on first load so onboarding is themed consistently
+  useEffect(() => {
+    const saved = localStorage.getItem('dm_embed_theme') || 'dark'
+    document.documentElement.setAttribute('data-theme', saved)
+  }, [])
+
   useEffect(() => {
     if (!partnerKey) {
       setError('No partner key provided. Add ?pk=YOUR_KEY to the iframe URL.')
