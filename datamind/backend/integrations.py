@@ -688,10 +688,10 @@ def connect_integration(
     if not result.ok:
         raise ValueError(f"Credential validation failed: {result.error}")
 
-    # Create compatibility views (unified tables already exist via bootstrap)
+    # Shared sp_* tables are created at bootstrap — no per-connection DDL needed.
+    # _create_views_for_integration() is kept defined for reference but no longer
+    # called; existing views on live connections continue to work harmlessly.
     conn = _get_internal_conn()
-    _create_views_for_integration(conn, table_prefix, provider_id)
-    conn.commit()
 
     # Save integration record
     enc_creds = _encrypt(creds)
