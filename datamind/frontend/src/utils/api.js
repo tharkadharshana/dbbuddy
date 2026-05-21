@@ -41,7 +41,7 @@ export const testDBConnection     = (cfg) => api.post('/settings/db/test', cfg).
 export const fetchTables          = () => api.get('/tables').then(r => r.data)
 export const fetchTableColumns    = (table) => api.get(`/tables/${encodeURIComponent(table)}/columns`).then(r => r.data)
 export const fetchDiscover        = () => api.get('/discover').then(r => r.data)
-export const runNLQuery           = (question, llm) => api.post('/query', { question, llm }).then(r => r.data)
+export const runNLQuery           = (question, llm, thinkMode = false) => api.post('/query', { question, llm, think_mode: thinkMode }).then(r => r.data)
 export const runAnalytics         = (template_id, llm, params={}, provider=null) => api.post('/analytics/run', { template_id, llm, params, provider }).then(r => r.data)
 export const runForecast          = (table, date_column, value_column, periods=90) => api.post('/forecast', { table, date_column, value_column, periods }).then(r => r.data)
 export const runAutoForecast      = (periods=90) => api.get(`/forecast/auto?periods=${periods}`).then(r => r.data)

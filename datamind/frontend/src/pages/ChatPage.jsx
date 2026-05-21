@@ -118,6 +118,21 @@ function Message({ msg, llm }) {
           </div>
         ) : (
           <>
+            {/* Think Mode analysis */}
+            {msg.analysis && (
+              <div style={{
+                marginBottom:12, padding:'12px 16px', borderRadius:10,
+                background:'var(--bg2)', border:'1px solid var(--border2)',
+                borderLeft:'3px solid var(--blue)', fontSize:14, lineHeight:1.7,
+                color:'var(--text)',
+              }}>
+                <div style={{ fontSize:11, fontWeight:600, color:'var(--blue)', textTransform:'uppercase', letterSpacing:'.06em', marginBottom:6 }}>
+                  🧠 Think Mode
+                </div>
+                {msg.analysis}
+              </div>
+            )}
+
             <div style={{ fontSize:14, color:'var(--text)', lineHeight:1.7, marginBottom: msg.data ? 4 : 0 }}>
               {msg.content}
             </div>
@@ -155,6 +170,7 @@ export default function ChatPage({ llm, setLlm, connection, sub, onNavigate }) {
   const [messages, setMessages]   = useState([])
   const [input, setInput]         = useState('')
   const [loading, setLoading]     = useState(false)
+  const [thinkMode, setThinkMode] = useState(false)
   const bottomRef = useRef(null)
   const inputRef  = useRef(null)
 
@@ -171,10 +187,8 @@ export default function ChatPage({ llm, setLlm, connection, sub, onNavigate }) {
     setMessages(m => [...m, userMsg, thinkMsg])
     setLoading(true)
     try {
-      const data = await runNLQuery(q, llm)
-      // Generate a natural language summary
+      const data = await runNLQuery(q, llm, thinkMode)
       const rowCount = data.row_count
-      const firstCol = data.columns?.[0]
       const numCol   = data.columns?.find(c => typeof data.data?.[0]?.[c] === 'number')
       let summary = `Found ${rowCount} result${rowCount !== 1 ? 's' : ''}`
       if (numCol && data.data?.[0]) {
@@ -183,9 +197,13 @@ export default function ChatPage({ llm, setLlm, connection, sub, onNavigate }) {
       }
       if (rowCount === 0) summary = "No matching records found for your query."
 
-      setMessages(m => m.map(msg => msg.id === thinkMsg.id ? { role:'ai', content:summary, data, id:thinkMsg.id } : msg))
+      setMessages(m => m.map(msg =>
+        msg.id === thinkMsg.id
+          ? { role:'ai', content: summary, data, analysis: data.analysis || null, id: thinkMsg.id }
+          : msg
+      ))
     } catch(e) {
-      const err = e.response?.data?.detail || e.message
+      const err = e.response?.data?.error || e.response?.data?.detail || e.message
       setMessages(m => m.map(msg => msg.id === thinkMsg.id ? { role:'ai', error:err, id:thinkMsg.id } : msg))
     } finally { setLoading(false) }
   }
@@ -255,6 +273,21 @@ export default function ChatPage({ llm, setLlm, connection, sub, onNavigate }) {
                 maxHeight:120, overflowY:'auto', fontFamily:'var(--font)',
               }}
             />
+            {/* Think Mode toggle */}
+            <button
+              onClick={() => setThinkMode(m => !m)}
+              title={thinkMode ? 'Think Mode ON — click to turn off (uses 2 AI calls)' : 'Think Mode OFF — click to enable AI analysis of results'}
+              style={{
+                width:38, height:38, borderRadius:10, flexShrink:0, alignSelf:'flex-end',
+                background: thinkMode ? 'rgba(79,142,247,0.15)' : 'var(--bg2)',
+                color: thinkMode ? 'var(--blue)' : 'var(--text3)',
+                border: `1px solid ${thinkMode ? 'var(--blue)' : 'var(--border)'}`,
+                display:'flex', alignItems:'center', justifyContent:'center',
+                fontSize:16, cursor:'pointer', transition:'all .15s',
+              }}
+            >
+              🧠
+            </button>
             <button onClick={() => send()} disabled={loading || !input.trim()} style={{
               width:38, height:38, borderRadius:10, flexShrink:0, alignSelf:'flex-end',
               background: loading || !input.trim() ? 'var(--bg3)' : 'var(--blue)',
