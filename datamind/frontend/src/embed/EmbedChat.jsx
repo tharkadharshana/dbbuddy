@@ -175,7 +175,7 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
   const inputRef  = useRef(null)
 
   // ── Theme ───────────────────────────────────────────────────────────────────
-  const [theme, setTheme] = useState(() => localStorage.getItem('dm_embed_theme') || 'dark')
+  const [theme, setTheme] = useState(() => localStorage.getItem('dm_embed_theme') || 'light')
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)

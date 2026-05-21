@@ -51,7 +51,7 @@ function EmbedApp() {
 
   // Apply saved theme on first load so onboarding is themed consistently
   useEffect(() => {
-    const saved = localStorage.getItem('dm_embed_theme') || 'dark'
+    const saved = localStorage.getItem('dm_embed_theme') || 'light'
     document.documentElement.setAttribute('data-theme', saved)
   }, [])
 
