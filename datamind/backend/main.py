@@ -1169,39 +1169,44 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
         tables_filter = None
     else:
         # Integration user (embed or main app).
-        # Resolve which tables belong to THIS user before opening the query conn.
         user_conns = get_user_connections(user["email"])
         prefixes = [c.get("table_prefix", "") for c in user_conns if c.get("table_prefix")]
+        provider_ids = [c.get("provider_id", "") for c in user_conns if c.get("provider_id")]
         if not prefixes:
             raise HTTPException(
                 status_code=422,
                 detail="No data source connected. Please connect a provider first."
             )
-        # Use a short-lived pool connection just to resolve table names, then
-        # release it before opening the query connection.
-        _meta_conn = _get_internal_conn()
-        try:
-            _meta_cur = _meta_conn.cursor()
-            tables_filter = []
-            for prefix in prefixes:
-                _meta_cur.execute(
-                    "SELECT TABLE_NAME FROM information_schema.TABLES "
-                    "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME LIKE %s "
-                    "ORDER BY TABLE_NAME",
-                    (f"{prefix}%",)
-                )
-                tables_filter.extend(r[0] for r in _meta_cur.fetchall())
-            _meta_cur.close()
-        finally:
-            _meta_conn.close()  # always returned to pool
+
+        # Map each provider to its shared normalized tables.
+        # The LLM will query these directly with WHERE tenant_id = '...'
+        # instead of going through JSON views — eliminates the 8-minute JOIN queries.
+        _PROVIDER_SHARED_TABLES = {
+            "salesplay": [
+                "sp_receipts", "sp_receipt_line_items", "sp_products",
+                "sp_customers", "sp_categories", "sp_shops", "sp_payment_types",
+            ],
+            "loyverse": [
+                "ly_receipts", "ly_receipt_line_items", "ly_products",
+                "ly_customers", "ly_categories",
+            ],
+        }
+        tables_filter = []
+        nl_tenant_id = prefixes[0] if prefixes else None  # primary tenant for hint
+        for pid in provider_ids:
+            tables_filter.extend(_PROVIDER_SHARED_TABLES.get(pid, []))
+
+        # Deduplicate in case user has multiple integrations of same type
+        tables_filter = list(dict.fromkeys(tables_filter))
 
         if not tables_filter:
             raise HTTPException(
                 status_code=422,
                 detail="Data sync not complete yet. Please wait for sync to finish."
             )
-        log.debug("NL query scoped to user tables",
-                  user=user["email"], table_count=len(tables_filter))
+        log.debug("NL query scoped to shared tables",
+                  user=user["email"], table_count=len(tables_filter),
+                  tenant_id=nl_tenant_id)
         conn = _get_internal_conn()
 
     try:
@@ -1222,7 +1227,8 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
             fkeys = all_fkeys
 
         sql = query_to_sql(req.question, schemas, llm, fkeys, api_key=api_key,
-                           user_email=user["email"], history_months=history["months"])
+                           user_email=user["email"], history_months=history["months"],
+                           tenant_id=nl_tenant_id if s.get("db_configs") is None else None)
         _guard_sql(sql)  # SEC-04: reject any mutating statement the LLM may have generated
         cursor = conn.cursor()
         cursor.execute(sql)
