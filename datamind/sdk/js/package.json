@@ -1,0 +1,12 @@
+{
+  "name": "datamind-sdk",
+  "version": "1.0.0",
+  "description": "DataMind AI — Partner API v1 JavaScript SDK",
+  "type": "module",
+  "main": "datamind.js",
+  "exports": "./datamind.js",
+  "author": "DataMind AI <support@datamind.ai>",
+  "license": "UNLICENSED",
+  "keywords": ["datamind", "analytics", "partner-api"],
+  "engines": { "node": ">=18" }
+}

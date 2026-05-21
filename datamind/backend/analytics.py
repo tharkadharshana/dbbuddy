@@ -31,8 +31,8 @@ def run_forecast(rows: List[Tuple], periods: int = 90) -> Dict:
     except ImportError:
         raise ImportError("prophet not installed")
 
-    if len(rows) < 10:
-        raise ValueError("Need at least 10 data points")
+    if len(rows) < 5:
+        raise ValueError(f"Need at least 5 days of sales data, got {len(rows)}")
 
     df = pd.DataFrame(rows, columns=["ds", "y"])
     df["ds"] = pd.to_datetime(df["ds"])

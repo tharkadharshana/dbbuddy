@@ -513,6 +513,7 @@ _PLAN_FEATURE_GATE: dict = {
     "forecast":          {"Growth", "Pro"},
     "anomaly_detection": {"Growth", "Pro"},
     "external_api":      {"Starter", "Growth", "Pro"},
+    "partner_api":       {"Pro"},
 }
 
 # Data-history window per plan: months to look back, and row fallback when no date column.

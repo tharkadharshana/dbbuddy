@@ -5,11 +5,20 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
+    host: true,  // bind to 0.0.0.0 so LAN devices can reach the dev server
     proxy: {
-      '/api': {
+      // Embed endpoints are unversioned on the backend (/embed/*)
+      // — must be listed BEFORE the generic /api rule
+      '/api/embed': {
         target: 'http://localhost:8000',
         changeOrigin: true,
         rewrite: path => path.replace(/^\/api/, '')
+      },
+      // All other API calls go to the versioned backend (/v1/*)
+      '/api': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        rewrite: path => path.replace(/^\/api/, '/v1')
       }
     }
   },

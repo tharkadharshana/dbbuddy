@@ -35,24 +35,27 @@ function TypingDots() {
 }
 
 // ── Chart ─────────────────────────────────────────────────────────────────────
-function ResultChart({ columns, data }) {
+function ResultChart({ columns, data, theme }) {
   if (!data?.length || !columns?.length) return null
   const numCols = columns.filter(c => typeof data[0]?.[c] === 'number')
   const strCols = columns.filter(c => typeof data[0]?.[c] === 'string')
   if (!numCols.length || !strCols.length || data.length < 2) return null
   const xKey = strCols[0], y1 = numCols[0], y2 = numCols[1]
+  const isLight    = theme === 'light'
+  const gridColor  = isLight ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.06)'
+  const tickColor  = isLight ? '#6b7280' : '#5a5f7d'
   const chartData = data.slice(0, 15).map(r => ({
     name: String(r[xKey] || '').slice(0, 14),
     [y1]: r[y1],
     ...(y2 ? { [y2]: r[y2] } : {}),
   }))
   return (
-    <div style={{ marginTop:10, background:'rgba(255,255,255,0.02)', borderRadius:8, padding:10, border:'1px solid var(--border)' }}>
+    <div style={{ marginTop:10, background:'var(--bg2)', borderRadius:8, padding:10, border:'1px solid var(--border)' }}>
       <ResponsiveContainer width="100%" height={140}>
         <ComposedChart data={chartData}>
-          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
-          <XAxis dataKey="name" tick={{ fontSize:9, fill:'#5a5f7d' }} axisLine={false} tickLine={false} />
-          <YAxis tick={{ fontSize:9, fill:'#5a5f7d' }} axisLine={false} tickLine={false} />
+          <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
+          <XAxis dataKey="name" tick={{ fontSize:9, fill:tickColor }} axisLine={false} tickLine={false} />
+          <YAxis tick={{ fontSize:9, fill:tickColor }} axisLine={false} tickLine={false} />
           <Tooltip contentStyle={TT} />
           <Bar dataKey={y1} fill="var(--blue)" radius={[3,3,0,0]} barSize={data.length > 10 ? 6 : 16} />
           {y2 && <Line dataKey={y2} stroke="var(--green)" strokeWidth={1.5} dot={false} />}
@@ -88,7 +91,7 @@ function ResultTable({ columns, data, rowCount }) {
           <thead>
             <tr>
               {columns.map(c => (
-                <th key={c} style={{ padding:'6px 10px', textAlign:'left', color:'var(--text3)', fontWeight:500, fontSize:10, textTransform:'uppercase', letterSpacing:'.05em', borderBottom:'1px solid var(--border)', background:'rgba(255,255,255,0.02)', whiteSpace:'nowrap' }}>
+                <th key={c} style={{ padding:'6px 10px', textAlign:'left', color:'var(--text3)', fontWeight:500, fontSize:10, textTransform:'uppercase', letterSpacing:'.05em', borderBottom:'1px solid var(--border)', background:'var(--bg2)', whiteSpace:'nowrap' }}>
                   {c.replace(/_/g, ' ')}
                 </th>
               ))}
@@ -120,7 +123,7 @@ function ResultTable({ columns, data, rowCount }) {
 }
 
 // ── Message bubble ────────────────────────────────────────────────────────────
-function Message({ msg }) {
+function Message({ msg, theme }) {
   if (msg.role === 'user') return (
     <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:14 }}>
       <div style={{ maxWidth:'80%', background:'var(--blue)', color:'#fff', borderRadius:'14px 14px 4px 14px', padding:'9px 13px', fontSize:13, lineHeight:1.5 }}>
@@ -141,17 +144,37 @@ function Message({ msg }) {
       </div>
       <div style={{ flex:1, minWidth:0 }}>
         {msg.loading ? (
-          <TypingDots />
+          <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+            <TypingDots />
+            {msg.loadingText && (
+              <span style={{ fontSize:10, color:'var(--text3)' }}>{msg.loadingText}</span>
+            )}
+          </div>
         ) : msg.error ? (
           <div style={{ background:'var(--red-dim)', border:'1px solid rgba(240,80,80,0.2)', borderRadius:8, padding:'8px 12px', fontSize:12, color:'var(--red)' }}>
             ⚠ {msg.error}
           </div>
         ) : (
           <>
+            {/* Think Mode analysis — shown above the data */}
+            {msg.analysis && (
+              <div style={{
+                marginBottom:10, padding:'10px 12px', borderRadius:8, fontSize:13,
+                lineHeight:1.65, color:'var(--text)',
+                background:'var(--bg2)', border:'1px solid var(--border2)',
+                borderLeft:'3px solid var(--blue)',
+              }}>
+                <div style={{ fontSize:10, fontWeight:600, color:'var(--blue)', textTransform:'uppercase', letterSpacing:'.06em', marginBottom:5 }}>
+                  🧠 Think Mode
+                </div>
+                {msg.analysis.replace(/\*\*/g, '').replace(/\*/g, '').replace(/_{2}/g, '').replace(/_/g, '')}
+              </div>
+            )}
+
             <div style={{ fontSize:13, color:'var(--text)', lineHeight:1.6 }}>{msg.content}</div>
             {msg.data?.data?.length > 0 && (
               <>
-                <ResultChart columns={msg.data.columns} data={msg.data.data} />
+                <ResultChart columns={msg.data.columns} data={msg.data.data} theme={theme} />
                 <ResultTable columns={msg.data.columns} data={msg.data.data} rowCount={msg.data.row_count} />
               </>
             )}
@@ -171,8 +194,19 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
   const [messages, setMessages] = useState([])
   const [input, setInput]       = useState('')
   const [loading, setLoading]   = useState(false)
+  const [thinkMode, setThinkMode] = useState(false)
   const bottomRef = useRef(null)
   const inputRef  = useRef(null)
+
+  // ── Theme ───────────────────────────────────────────────────────────────────
+  const [theme, setTheme] = useState(() => localStorage.getItem('dm_embed_theme') || 'light')
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+    localStorage.setItem('dm_embed_theme', theme)
+  }, [theme])
+
+  const toggleTheme = () => setTheme(t => t === 'dark' ? 'light' : 'dark')
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior:'smooth' })
@@ -184,15 +218,17 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
     setInput('')
     inputRef.current?.focus()
 
-    const userMsg  = { role:'user', content:q,    id: Date.now() }
-    const thinkMsg = { role:'ai',  loading:true,  id: Date.now() + 1 }
+    const userMsg  = { role:'user', content:q,           id: Date.now() }
+    const thinkMsg = { role:'ai',  loading:true,
+                       loadingText: thinkMode ? 'Querying data…' : null,
+                       id: Date.now() + 1 }
     setMessages(m => [...m, userMsg, thinkMsg])
     setLoading(true)
 
     notifyParent('dm:query', { question: q })
 
     try {
-      const data = await embedRunQuery(q)
+      const data = await embedRunQuery(q, 'gemini', thinkMode)
       const rowCount = data.row_count
       const numCol   = data.columns?.find(c => typeof data.data?.[0]?.[c] === 'number')
       let summary = `Found ${rowCount} result${rowCount !== 1 ? 's' : ''}`
@@ -203,7 +239,9 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
       if (rowCount === 0) summary = 'No matching records found for your query.'
 
       setMessages(m => m.map(msg =>
-        msg.id === thinkMsg.id ? { role:'ai', content:summary, data, id:thinkMsg.id } : msg
+        msg.id === thinkMsg.id
+          ? { role:'ai', content: summary, data, analysis: data.analysis || null, id: thinkMsg.id }
+          : msg
       ))
     } catch (e) {
       if (e.response?.status === 401) {
@@ -238,13 +276,31 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
           </div>
           <span style={{ fontSize:13, fontWeight:600, color:'var(--text)' }}>{productTitle}</span>
         </div>
-        <button
-          onClick={onLogout}
-          title="Disconnect account"
-          style={{ background:'none', border:'none', color:'var(--text3)', fontSize:11, cursor:'pointer', padding:'2px 6px' }}
-        >
-          ⏏ Disconnect
-        </button>
+        <div style={{ display:'flex', alignItems:'center', gap:4 }}>
+          {/* Light / dark toggle */}
+          <button
+            onClick={toggleTheme}
+            title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            style={{
+              background:'var(--bg3)', border:'1px solid var(--border2)',
+              borderRadius:20, cursor:'pointer', padding:'3px 8px',
+              display:'flex', alignItems:'center', gap:5,
+              fontSize:11, color:'var(--text2)', transition:'background .15s',
+            }}
+          >
+            {theme === 'dark'
+              ? <><span style={{ fontSize:12 }}>☀️</span> Light</>
+              : <><span style={{ fontSize:12 }}>🌙</span> Dark</>
+            }
+          </button>
+          <button
+            onClick={onLogout}
+            title="Disconnect account"
+            style={{ background:'none', border:'none', color:'var(--text3)', fontSize:11, cursor:'pointer', padding:'2px 6px' }}
+          >
+            ⏏ Disconnect
+          </button>
+        </div>
       </div>
 
       {/* Messages area */}
@@ -269,7 +325,7 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
           </div>
         ) : (
           <div style={{ padding:'0 14px' }}>
-            {messages.map(msg => <Message key={msg.id} msg={msg} />)}
+            {messages.map(msg => <Message key={msg.id} msg={msg} theme={theme} />)}
             <div ref={bottomRef} />
           </div>
         )}
@@ -277,6 +333,29 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
 
       {/* Input */}
       <div style={{ flexShrink:0, padding:'10px 12px', borderTop: hasMessages ? '1px solid var(--border)' : 'none' }}>
+        {/* Think Mode toggle */}
+        <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:6 }}>
+          <button
+            onClick={() => setThinkMode(m => !m)}
+            title="Think Mode: runs a second AI call to analyse the data and answer your question directly"
+            style={{
+              display:'flex', alignItems:'center', gap:5,
+              padding:'4px 10px', borderRadius:20, fontSize:11, fontWeight:500,
+              background: thinkMode ? 'rgba(79,142,247,0.12)' : 'var(--bg2)',
+              color: thinkMode ? 'var(--blue)' : 'var(--text3)',
+              border: `1px solid ${thinkMode ? 'var(--blue)' : 'var(--border)'}`,
+              cursor:'pointer', transition:'all .15s',
+            }}
+          >
+            🧠 Think Mode {thinkMode ? 'ON' : 'OFF'}
+          </button>
+          {thinkMode && (
+            <span style={{ fontSize:10, color:'var(--text3)' }}>
+              Uses 2 AI calls · deducts extra tokens
+            </span>
+          )}
+        </div>
+
         <div style={{ display:'flex', gap:8, background:'var(--bg1)', border:'1px solid var(--border2)', borderRadius:12, padding:'6px 6px 6px 12px' }}>
           <textarea
             ref={inputRef}

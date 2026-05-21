@@ -1,12 +1,16 @@
 /**
- * EmbedOnboarding.jsx — 3-step first-time setup wizard for iframe users.
+ * EmbedOnboarding.jsx — 4-step first-time setup wizard for iframe users.
  *
- * Step 0: Validate Salesplay API token  (POST /providers/validate)
- * Step 1: Create DataMind account       (name / email / password)
- * Step 2: Connect + sync               (POST /embed/init → polls /providers/{id}/status)
+ * Step 0: Validate provider API token     (POST /embed/validate-token)
+ * Step 1: Create / log in to DataMind account
+ * Step 2: Choose a plan (or continue free trial)
+ * Step 3: Connect + sync                  (POST /embed/init → polls status)
  */
-import React, { useState } from 'react'
-import { embedValidateToken, embedInit, embedLogin, embedConnectProvider, embedGetProviderStatus } from './embedApi'
+import React, { useState, useEffect } from 'react'
+import {
+  embedValidateToken, embedInit, embedLogin, embedConnectProvider,
+  embedGetProviderStatus, embedGetPlans, embedSubscribePlan,
+} from './embedApi'
 import { notifyParent } from './EmbedApp'
 
 // ── Shared styles ─────────────────────────────────────────────────────────────
@@ -18,9 +22,11 @@ const inp = {
 
 const primaryBtn = (disabled) => ({
   width:'100%', padding:'11px', borderRadius:8, fontSize:13, fontWeight:600,
-  background: disabled ? 'rgba(79,142,247,0.3)' : 'linear-gradient(135deg,#4f8ef7,#7c6af7)',
-  color:'#fff', border:'none', cursor: disabled ? 'not-allowed' : 'pointer',
-  marginTop:6, opacity: disabled ? 0.6 : 1,
+  background: disabled ? 'var(--bg3)' : 'linear-gradient(135deg,#4f8ef7,#7c6af7)',
+  color: disabled ? 'var(--text3)' : '#fff',
+  border: disabled ? '1px solid var(--border2)' : 'none',
+  cursor: disabled ? 'not-allowed' : 'pointer',
+  marginTop:6,
   display:'flex', alignItems:'center', justifyContent:'center', gap:6,
 })
 
@@ -29,11 +35,11 @@ const ghostBtn = {
   fontSize:12, cursor:'pointer', marginTop:10, width:'100%',
 }
 
-// ── Step progress bar ─────────────────────────────────────────────────────────
+// ── Step progress bar (4 steps) ───────────────────────────────────────────────
 function StepBar({ step }) {
   return (
     <div style={{ display:'flex', gap:6, marginBottom:20 }}>
-      {[0,1,2].map(i => (
+      {[0,1,2,3].map(i => (
         <div key={i} style={{
           flex:1, height:3, borderRadius:2, transition:'background .2s',
           background: i <= step ? 'var(--blue)' : 'var(--bg3)',
@@ -66,52 +72,60 @@ function Spin() {
 export default function EmbedOnboarding({ context, partnerKey, onComplete }) {
   const [step, setStep]               = useState(0)
 
-  // Step 0 state
+  // Step 0
   const [apiToken, setApiToken]       = useState('')
   const [validating, setValidating]   = useState(false)
   const [tokenResult, setTokenResult] = useState(null)
 
-  // Step 1 state
-  const [mode, setMode]               = useState('register')  // 'register' | 'login'
+  // Step 1
+  const [mode, setMode]               = useState('register')
   const [name, setName]               = useState('')
   const [email, setEmail]             = useState('')
   const [password, setPassword]       = useState('')
 
-  // Step 2 state
+  // Step 2 — plan selection
+  const [plans, setPlans]             = useState([])
+  const [selectedPlanId, setSelectedPlanId] = useState(null)
+
+  // Step 3 — connect + sync
   const [connecting, setConnecting]   = useState(false)
   const [syncMsg, setSyncMsg]         = useState('Connecting your account…')
   const [syncPct, setSyncPct]         = useState(0)
   const [syncRows, setSyncRows]       = useState(0)
   const [error, setError]             = useState('')
 
-  const providerName  = context?.partner_name || 'Salesplay'
-  const productTitle  = context?.branding?.product_name || 'DataMind AI'
+  const providerName = context?.partner_name || 'Salesplay'
+  const productTitle = context?.branding?.product_name || 'DataMind AI'
 
-  // ── Step 0: validate Salesplay API token ────────────────────────────────────
+  // Fetch plans when entering step 2
+  useEffect(() => {
+    if (step === 2 && plans.length === 0) {
+      embedGetPlans()
+        .then(d => setPlans(d.plans || []))
+        .catch(() => {})
+    }
+  }, [step])
+
+  // ── Step 0: validate API token ───────────────────────────────────────────────
   async function handleValidateToken() {
     if (!apiToken.trim()) return
-    setValidating(true)
-    setTokenResult(null)
+    setValidating(true); setTokenResult(null)
     try {
       const r = await embedValidateToken(partnerKey, apiToken.trim())
       setTokenResult(r)
     } catch (e) {
-      setTokenResult({ ok: false, error: e.response?.data?.detail || e.message })
-    } finally {
-      setValidating(false)
-    }
+      setTokenResult({ ok: false, error: e.response?.data?.error || e.message })
+    } finally { setValidating(false) }
   }
 
-  // ── Step 2: create account + connect + start sync ───────────────────────────
+  // ── Step 3: create account + optionally subscribe + connect + sync ───────────
   async function handleConnect() {
-    setConnecting(true)
-    setError('')
+    setConnecting(true); setError('')
     setSyncMsg('Creating your account…')
 
     let token
     try {
       if (mode === 'register') {
-        // /embed/init: creates account + connects provider + starts sync in one call
         const result = await embedInit({
           partner_key: partnerKey,
           api_token:   apiToken.trim(),
@@ -122,20 +136,25 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete }) {
         token = result.token
         localStorage.setItem('dm_embed_token', token)
       } else {
-        // Login path: authenticate, then connect provider
         setSyncMsg('Logging in…')
         const loginResult = await embedLogin(email.trim().toLowerCase(), password)
         token = loginResult.token
         localStorage.setItem('dm_embed_token', token)
-        setSyncMsg('Connecting Salesplay…')
+        setSyncMsg(`Connecting ${providerName}…`)
         await embedConnectProvider(context.provider_id, { api_token: apiToken.trim() }, token)
+      }
+
+      // Subscribe to selected plan if the user chose one
+      if (selectedPlanId) {
+        setSyncMsg('Activating your plan…')
+        try { await embedSubscribePlan(selectedPlanId) } catch { /* non-fatal */ }
       }
 
       setSyncMsg('Syncing your data…')
       notifyParent('dm:onboarding_sync_started')
       pollSync(context.provider_id, token)
     } catch (e) {
-      setError(e.response?.data?.detail || e.message || 'Connection failed. Please try again.')
+      setError(e.response?.data?.error || e.response?.data?.detail || e.message || 'Connection failed. Please try again.')
       setConnecting(false)
     }
   }
@@ -159,12 +178,9 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete }) {
         } else if (r.status === 'error') {
           clearInterval(interval)
           setError(`Sync failed: ${r.last_error || 'Unknown error'}. You can still use chat — data may be incomplete.`)
-          // Still complete — users can ask questions even with partial data
           setTimeout(() => onComplete(token, { email: email.trim().toLowerCase(), name }), 1500)
         }
       } catch {
-        // Network blip — keep polling. After 3 min (90 × 2s) assume sync is
-        // running fine in the background and let the user into the chat.
         if (attempts > 90) {
           clearInterval(interval)
           onComplete(token, { email: email.trim().toLowerCase(), name })
@@ -173,7 +189,7 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete }) {
     }, 2000)
   }
 
-  // ── Render ──────────────────────────────────────────────────────────────────
+  // ── Render ───────────────────────────────────────────────────────────────────
   return (
     <div style={{ height:'100%', overflowY:'auto', padding:'20px 16px', display:'flex', flexDirection:'column' }}>
 
@@ -193,7 +209,7 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete }) {
 
       <StepBar step={step} />
 
-      {/* ── STEP 0: Salesplay API token ──────────────────────────────────────── */}
+      {/* ── STEP 0: Provider API token ───────────────────────────────────────── */}
       {step === 0 && (
         <div>
           <div style={{ fontSize:14, fontWeight:600, color:'var(--text)', marginBottom:6 }}>
@@ -250,25 +266,13 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete }) {
           </div>
 
           {mode === 'register' && (
-            <input
-              type="text"
-              placeholder="Your name"
-              value={name}
-              onChange={e => setName(e.target.value)}
-              style={inp}
-            />
+            <input type="text" placeholder="Your name" value={name}
+              onChange={e => setName(e.target.value)} style={inp} />
           )}
+          <input type="email" placeholder="Email address" value={email}
+            onChange={e => setEmail(e.target.value)} style={inp} />
           <input
-            type="email"
-            placeholder="Email address"
-            value={email}
-            onChange={e => setEmail(e.target.value)}
-            style={inp}
-          />
-          <input
-            type="password"
-            placeholder="Password (min 8 chars)"
-            value={password}
+            type="password" placeholder="Password (min 8 chars)" value={password}
             onChange={e => setPassword(e.target.value)}
             onKeyDown={e => {
               const ok = email.trim() && password.length >= 1 && (mode === 'login' || name.trim())
@@ -295,31 +299,88 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete }) {
                 </>
             }
           </div>
-
           <button onClick={() => setStep(0)} style={ghostBtn}>← Back</button>
         </div>
       )}
 
-      {/* ── STEP 2: Connect + sync ───────────────────────────────────────────── */}
+      {/* ── STEP 2: Choose a plan ─────────────────────────────────────────────── */}
       {step === 2 && (
         <div>
+          {/* Trial badge */}
+          <div style={{
+            textAlign:'center', marginBottom:16,
+            background:'var(--green-dim)', color:'var(--green)',
+            border:'1px solid rgba(52,209,122,0.25)',
+            borderRadius:8, padding:'8px 12px', fontSize:12, fontWeight:600,
+          }}>
+            ✓ Your 14-day free trial has started
+          </div>
+
+          <div style={{ fontSize:15, fontWeight:700, color:'var(--text)', textAlign:'center', marginBottom:4 }}>
+            Choose a plan
+          </div>
+          <div style={{ fontSize:12, color:'var(--text3)', textAlign:'center', marginBottom:16 }}>
+            Lock in your plan now or continue exploring with your trial.
+          </div>
+
+          {/* Plan cards */}
+          <div style={{ display:'flex', flexDirection:'column', gap:8, marginBottom:12 }}>
+            {plans.length === 0
+              ? [
+                  { id: 1, name: 'Starter', tokens_limit: 500,  price_cents: 500  },
+                  { id: 2, name: 'Growth',  tokens_limit: 1500, price_cents: 1000 },
+                  { id: 3, name: 'Pro',     tokens_limit: 10000, price_cents: 2500 },
+                ].map(plan => (
+                  <PlanCard key={plan.id} plan={plan} selected={selectedPlanId === plan.id} onSelect={() => setSelectedPlanId(plan.id)} />
+                ))
+              : plans.map(plan => (
+                  <PlanCard key={plan.id} plan={plan} selected={selectedPlanId === plan.id} onSelect={() => setSelectedPlanId(plan.id)} />
+                ))
+            }
+          </div>
+
+          {selectedPlanId && (
+            <button onClick={() => setStep(3)} style={primaryBtn(false)}>
+              Continue with selected plan →
+            </button>
+          )}
+
+          <button
+            onClick={() => { setSelectedPlanId(null); setStep(3) }}
+            style={{
+              width:'100%', padding:'11px', borderRadius:8, fontSize:13,
+              background:'none', border:'1px solid var(--border)',
+              color:'var(--text2)', cursor:'pointer', marginTop: selectedPlanId ? 8 : 6,
+            }}
+          >
+            Continue with free trial →
+          </button>
+
+          <button onClick={() => setStep(1)} style={ghostBtn}>← Back</button>
+        </div>
+      )}
+
+      {/* ── STEP 3: Connect + sync ───────────────────────────────────────────── */}
+      {step === 3 && (
+        <div>
           <div style={{ fontSize:14, fontWeight:600, color:'var(--text)', marginBottom:6 }}>
-            {connecting ? 'Syncing your data…' : 'Ready to connect'}
+            {connecting ? 'Setting up your account…' : 'Ready to connect'}
           </div>
 
           {!connecting && !error && (
             <>
               <div style={{ fontSize:12, color:'var(--text2)', marginBottom:14, lineHeight:1.6 }}>
                 DataMind will sync your {providerName} receipts, products, and customers.
-                This takes 1–3 minutes for most accounts. Your 14-day free trial starts now.
+                This takes 1–3 minutes for most accounts.
               </div>
 
-              {/* Summary */}
               <div style={{ background:'var(--bg2)', border:'1px solid var(--border)', borderRadius:8, padding:'12px', marginBottom:16 }}>
                 {[
-                  ['Account', mode === 'register' ? `${name} (${email})` : email],
+                  ['Account',  mode === 'register' ? `${name} (${email})` : email],
                   ['Data source', providerName],
-                  ['Plan', '14-day free trial'],
+                  ['Plan', selectedPlanId
+                    ? (plans.find(p => p.id === selectedPlanId)?.name || 'Selected plan')
+                    : '14-day free trial'],
                 ].map(([k, v]) => (
                   <div key={k} style={{ display:'flex', justifyContent:'space-between', padding:'5px 0', borderBottom:'1px solid var(--border)', fontSize:12 }}>
                     <span style={{ color:'var(--text3)' }}>{k}</span>
@@ -331,7 +392,7 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete }) {
               <button onClick={handleConnect} style={primaryBtn(false)}>
                 Connect & Start Sync →
               </button>
-              <button onClick={() => setStep(1)} style={ghostBtn}>← Back</button>
+              <button onClick={() => setStep(2)} style={ghostBtn}>← Back</button>
             </>
           )}
 
@@ -339,7 +400,6 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete }) {
             <div style={{ textAlign:'center' }}>
               <div style={{ fontSize:12, color:'var(--text2)', marginBottom:14, minHeight:18 }}>{syncMsg}</div>
 
-              {/* Progress bar */}
               <div style={{ height:4, background:'var(--bg3)', borderRadius:2, overflow:'hidden', marginBottom:10 }}>
                 {syncPct > 0
                   ? <div style={{ height:'100%', width:`${syncPct}%`, background:'var(--blue)', borderRadius:2, transition:'width .6s ease' }} />
@@ -377,6 +437,43 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete }) {
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+// ── Plan card subcomponent ─────────────────────────────────────────────────────
+function PlanCard({ plan, selected, onSelect }) {
+  const price = `$${(plan.price_cents / 100).toFixed(0)}/mo`
+  const tokens = plan.tokens_limit >= 1000
+    ? `${(plan.tokens_limit / 1000).toFixed(0)}K`
+    : plan.tokens_limit
+  return (
+    <div
+      onClick={onSelect}
+      style={{
+        display:'flex', alignItems:'center', justifyContent:'space-between',
+        padding:'12px 14px', borderRadius:8, cursor:'pointer',
+        border: `1px solid ${selected ? 'var(--blue)' : 'var(--border)'}`,
+        background: selected ? 'rgba(79,142,247,0.08)' : 'var(--bg2)',
+        transition:'border-color .15s, background .15s',
+      }}
+    >
+      <div>
+        <div style={{ fontSize:13, fontWeight:600, color:'var(--text)' }}>{plan.name}</div>
+        <div style={{ fontSize:11, color:'var(--text3)', marginTop:2 }}>{tokens} Tokens / mo</div>
+      </div>
+      <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+        <span style={{ fontSize:14, fontWeight:700, color:'var(--text)' }}>{price}</span>
+        <div style={{
+          width:18, height:18, borderRadius:'50%',
+          border: `2px solid ${selected ? 'var(--blue)' : 'var(--border)'}`,
+          background: selected ? 'var(--blue)' : 'transparent',
+          display:'flex', alignItems:'center', justifyContent:'center',
+          transition:'all .15s',
+        }}>
+          {selected && <div style={{ width:6, height:6, borderRadius:'50%', background:'#fff' }} />}
+        </div>
+      </div>
     </div>
   )
 }

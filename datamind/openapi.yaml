@@ -1,0 +1,349 @@
+openapi: 3.0.3
+info:
+  title: DataMind AI API
+  version: "1.0"
+  description: |
+    ## URL structure
+
+    | Prefix | Who uses it | Auth |
+    |---|---|---|
+    | `/v1/*` | End-users (React app / mobile) | `Authorization: Bearer <jwt>` |
+    | `/v1/partner/*` | Partner backends (server-to-server) | `X-API-Key: <partner_key>` |
+    | `/embed/*` | Iframe embed flow | `pk` query param |
+    | `/health` | Load balancers / uptime monitors | None |
+
+    This spec documents the **Partner API** (`/v1/partner/*`).
+    The full user API is visible at `/docs` when the server is running.
+
+    **Partner API access:** Pro plan only. Starter or Growth users receive `402`.
+
+  x-ratelimit-note: |
+    Rate limits are per-key (Partner API) or per-IP (User API), configurable via .env.
+    Exceeded limits return 429. Every response includes X-Request-ID for tracing.
+    Every 429 includes Retry-After (seconds until window resets).
+
+servers:
+  - url: https://api.datamind.ai
+    description: Production
+  - url: http://localhost:8000
+    description: Local development
+
+security:
+  - ApiKeyAuth: []
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Partner key from the DataMind partner dashboard.
+
+  headers:
+    X-Request-ID:
+      description: Unique request identifier for tracing. Echo this value in support requests.
+      schema: { type: string, format: uuid }
+    Retry-After:
+      description: Seconds to wait before retrying after a 429 response.
+      schema: { type: integer, example: 60 }
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        ok:   { type: boolean, example: false }
+        error: { type: string, example: "Invalid or inactive API key." }
+      required: [ok, error]
+
+    IntegrationItem:
+      type: object
+      properties:
+        provider_id:  { type: string, example: loyverse }
+        status:       { type: string, enum: [active, syncing, error, paused], example: active }
+        last_sync:    { type: string, format: date-time, nullable: true }
+        row_count:    { type: integer, example: 14200 }
+        connected_at: { type: string, format: date-time, nullable: true }
+
+    IntegrationsResponse:
+      type: object
+      properties:
+        ok:    { type: boolean, example: true }
+        data:  { type: array, items: { $ref: '#/components/schemas/IntegrationItem' } }
+        total: { type: integer, example: 2 }
+
+    SyncResponse:
+      type: object
+      properties:
+        ok:        { type: boolean, example: true }
+        status:    { type: string, example: started }
+        provider:  { type: string, example: loyverse }
+        sync_type: { type: string, enum: [delta, full], example: delta }
+
+    RecordsResponse:
+      type: object
+      properties:
+        ok:          { type: boolean, example: true }
+        provider:    { type: string, example: loyverse }
+        record_type: { type: string, example: products }
+        data:        { type: array, items: { type: object } }
+        total:       { type: integer, example: 3400 }
+        limit:       { type: integer, example: 100 }
+        offset:      { type: integer, example: 0 }
+
+    AnalyticsResponse:
+      type: object
+      properties:
+        ok:        { type: boolean, example: true }
+        source:    { type: string, example: partner_api }
+        provider:  { type: string, example: loyverse }
+        title:     { type: string, nullable: true, example: "RFM Analysis" }
+        row_count: { type: integer, nullable: true, example: 520 }
+        truncated: { type: boolean, nullable: true, example: false }
+        columns:   { type: array, items: { type: string }, nullable: true }
+        data:      { type: array, items: { type: object }, nullable: true }
+
+    UsageResponse:
+      type: object
+      properties:
+        ok:               { type: boolean, example: true }
+        plan:             { type: string, nullable: true, example: Pro }
+        status:           { type: string, nullable: true, example: active }
+        tokens_used:      { type: number, example: 42.5 }
+        tokens_remaining: { type: number, example: 957.5 }
+        tokens_limit:     { type: number, example: 1000.0 }
+        tokens_pct:       { type: number, example: 4.25 }
+        trial_ends_at:    { type: string, format: date, nullable: true }
+        period_start:     { type: string, format: date, nullable: true }
+        period_end:       { type: string, format: date, nullable: true }
+
+paths:
+
+  /v1/partner/integrations:
+    get:
+      operationId: listIntegrations
+      summary: List user integrations
+      description: |
+        Returns all provider integrations (SalesPlay, Loyverse, etc.) connected for the given user.
+        **Rate limit:** 30/minute per IP (configurable via `RATE_LIMIT_V1`).
+      parameters:
+        - name: user_email
+          in: query
+          required: true
+          schema: { type: string, format: email }
+          description: End-user email address.
+      responses:
+        "200":
+          description: OK
+          headers:
+            X-Request-ID: { $ref: '#/components/headers/X-Request-ID' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationsResponse' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "402": { $ref: '#/components/responses/PlanRequired' }
+        "422": { $ref: '#/components/responses/ValidationError' }
+        "429": { $ref: '#/components/responses/RateLimited' }
+
+  /v1/partner/sync/{provider}:
+    post:
+      operationId: triggerSync
+      summary: Trigger a manual sync
+      description: |
+        Triggers a delta (default) or full sync for a user's integration.
+        Returns immediately — sync runs in background.
+        **Rate limits:**
+        - IP-level: 30/minute (configurable via `RATE_LIMIT_V1`)
+        - Per-user: 1 sync per provider per user per 5 minutes
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema: { type: string, enum: [loyverse, salesplay] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_email]
+              properties:
+                user_email: { type: string, format: email }
+                full:       { type: boolean, default: false, description: "true = full re-sync" }
+      responses:
+        "200":
+          description: Sync started
+          headers:
+            X-Request-ID: { $ref: '#/components/headers/X-Request-ID' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SyncResponse' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "402": { $ref: '#/components/responses/PlanRequired' }
+        "404": { $ref: '#/components/responses/NotFound' }
+        "429": { $ref: '#/components/responses/RateLimited' }
+
+  /v1/partner/records/{provider}/{record_type}:
+    get:
+      operationId: getRecords
+      summary: Fetch synced records
+      description: |
+        Paginated records from the unified integration store.
+        Supports filtering by `store_id` and date range.
+        **Rate limit:** 30/minute per IP (configurable via `RATE_LIMIT_V1`).
+
+        **Providers:** `loyverse`, `salesplay`
+
+        **Record types:** `products`, `receipts`, `customers`, `employees`,
+        `categories`, `variants`, `payment_line_items`, `receipt_line_items`
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema: { type: string, enum: [loyverse, salesplay] }
+        - name: record_type
+          in: path
+          required: true
+          schema: { type: string }
+          example: products
+        - name: user_email
+          in: query
+          required: true
+          schema: { type: string, format: email }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: store_id
+          in: query
+          required: false
+          schema: { type: string }
+          description: Filter records to a specific store or shop ID.
+        - name: from
+          in: query
+          required: false
+          schema: { type: string, format: date }
+          description: ISO date lower bound on record creation date.
+      responses:
+        "200":
+          description: OK
+          headers:
+            X-Request-ID: { $ref: '#/components/headers/X-Request-ID' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RecordsResponse' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "402": { $ref: '#/components/responses/PlanRequired' }
+        "404": { $ref: '#/components/responses/NotFound' }
+        "422": { $ref: '#/components/responses/ValidationError' }
+        "429": { $ref: '#/components/responses/RateLimited' }
+
+  /v1/partner/analytics/{template_id}:
+    get:
+      operationId: runAnalytics
+      summary: Run an analytics template
+      description: |
+        Runs a pre-built analytics template against a user's integration and returns
+        the result. Deducts tokens from the user's balance.
+        **Rate limit:** 30/minute per IP (configurable via `RATE_LIMIT_V1`).
+
+        **Available templates** (depends on provider):
+        `customer_rfm`, `customer_cohort`, `basket_analysis`, `growth_metrics`,
+        `cashier_performance`, `product_velocity`, `payment_methods`, `location_comparison`
+      parameters:
+        - name: template_id
+          in: path
+          required: true
+          schema: { type: string }
+          example: customer_rfm
+        - name: user_email
+          in: query
+          required: true
+          schema: { type: string, format: email }
+        - name: provider
+          in: query
+          required: true
+          schema: { type: string, enum: [loyverse, salesplay] }
+      responses:
+        "200":
+          description: Analytics result
+          headers:
+            X-Request-ID: { $ref: '#/components/headers/X-Request-ID' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalyticsResponse' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "402": { $ref: '#/components/responses/PlanRequired' }
+        "404": { $ref: '#/components/responses/NotFound' }
+        "429": { $ref: '#/components/responses/RateLimited' }
+
+  /v1/partner/usage:
+    get:
+      operationId: getUsage
+      summary: Get token usage
+      description: |
+        Returns token and credit usage for a user. Same data as `GET /billing/usage`
+        but authenticated via partner API key.
+        **Rate limit:** 30/minute per IP (configurable via `RATE_LIMIT_V1`).
+      parameters:
+        - name: user_email
+          in: query
+          required: true
+          schema: { type: string, format: email }
+      responses:
+        "200":
+          description: OK
+          headers:
+            X-Request-ID: { $ref: '#/components/headers/X-Request-ID' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UsageResponse' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "402": { $ref: '#/components/responses/PlanRequired' }
+        "429": { $ref: '#/components/responses/RateLimited' }
+
+  components:
+    responses:
+      Unauthorized:
+        description: Missing or invalid X-API-Key.
+        headers:
+          X-Request-ID: { $ref: '#/components/headers/X-Request-ID' }
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Error' }
+            example: { ok: false, error: "Invalid or inactive API key." }
+      PlanRequired:
+        description: User is not on the Pro plan.
+        headers:
+          X-Request-ID: { $ref: '#/components/headers/X-Request-ID' }
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Error' }
+            example: { ok: false, error: "Upgrade to Pro to use this feature." }
+      NotFound:
+        description: Integration or template not found.
+        headers:
+          X-Request-ID: { $ref: '#/components/headers/X-Request-ID' }
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Error' }
+      RateLimited:
+        description: |
+          Rate limit exceeded. Two causes:
+          1. IP-level limit (RATE_LIMIT_V1 env var, default 30/minute) — applies to all /v1/ calls.
+          2. Per-user sync limit (1 sync per provider per user per 5 minutes) — applies to POST /v1/sync only.
+        headers:
+          X-Request-ID: { $ref: '#/components/headers/X-Request-ID' }
+          Retry-After:  { $ref: '#/components/headers/Retry-After' }
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Error' }
+            example: { ok: false, error: "Too many requests. Please slow down." }
+      ValidationError:
+        description: Invalid query parameters.
+        headers:
+          X-Request-ID: { $ref: '#/components/headers/X-Request-ID' }
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Error' }
