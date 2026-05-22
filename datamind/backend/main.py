@@ -144,6 +144,136 @@ def _set_query_timeout(cursor) -> None:
     except Exception as e:
         log.warning("Failed to set SQL timeout", var=_sql_timeout_var, error=str(e))
 
+def _enforce_tenant_isolation(sql: str, tenant_id: str) -> str:
+    """
+    SEC-15: Server-side tenant isolation enforcement for shared sp_*/ly_* tables.
+
+    The LLM is instructed to add WHERE tenant_id = '...' but sometimes omits it
+    or adds it only for the primary table while leaving JOINed tables unscoped.
+    This function post-processes the generated SQL to guarantee every shared-table
+    reference is filtered to the correct tenant BEFORE execution.
+
+    Strategy:
+      1. Find all sp_*/ly_* table references with their aliases (FROM and JOIN).
+      2. For each alias not already scoped with alias.tenant_id = '...':
+         - If it's the FROM table: inject into the WHERE clause (or create one).
+         - If it's a JOINed table: inject AND alias.tenant_id = '...' into the ON clause.
+      3. Raise ValueError if ANY other tenant_id literal appears in the SQL
+         (prevents prompt-injection attacks requesting another tenant's data).
+    """
+    import re
+
+    if not tenant_id:
+        return sql
+
+    safe_tid = tenant_id.replace("'", "\\'")
+    expected_literal = f"'{safe_tid}'"
+
+    # Security: reject if a *different* tenant_id literal appears in the SQL.
+    # e.g. user tries: "show me data where tenant_id = 'other_user_prefix'"
+    tid_val_re = re.compile(r"tenant_id\s*=\s*'([^']*)'", re.IGNORECASE)
+    for m in tid_val_re.finditer(sql):
+        found_tid = m.group(1)
+        if found_tid != tenant_id:
+            raise ValueError(
+                f"Query references tenant_id '{found_tid}' which does not match "
+                f"your account. Cross-tenant queries are not allowed."
+            )
+
+    # Find all sp_*/ly_* table references: (FROM|JOIN) table_name [AS] alias
+    # Captures: group1=clause, group2=table, group3=alias (may be None)
+    table_re = re.compile(
+        r'\b(FROM|(?:INNER|LEFT|RIGHT|CROSS|FULL)?\s*JOIN)\s+'
+        r'(`?(?:sp|ly)_\w+`?)'
+        r'(?:\s+(?:AS\s+)?(`?\w+`?))?',
+        re.IGNORECASE,
+    )
+
+    # Build list of (alias, clause_type, match_end_pos)
+    refs = []
+    for m in table_re.finditer(sql):
+        clause = m.group(1).strip().upper()
+        clause_type = "FROM" if clause == "FROM" else "JOIN"
+        table_raw = m.group(2).strip('`')
+        alias_raw = (m.group(3) or m.group(2)).strip('`')
+        refs.append((alias_raw, clause_type, m.end()))
+
+    if not refs:
+        return sql  # No shared tables referenced — nothing to enforce.
+
+    # Determine which aliases are already correctly scoped
+    already_scoped = set()
+    for alias, _, _ in refs:
+        pattern = re.compile(
+            rf'\b{re.escape(alias)}\.tenant_id\s*=\s*{re.escape(expected_literal)}',
+            re.IGNORECASE,
+        )
+        if pattern.search(sql):
+            already_scoped.add(alias)
+
+    # Also consider bare "tenant_id = '...'" (no alias prefix) as scoping the FROM table
+    bare_scoped = bool(re.search(
+        rf'\btenant_id\s*=\s*{re.escape(expected_literal)}', sql, re.IGNORECASE
+    ))
+    from_alias = next((a for a, ct, _ in refs if ct == "FROM"), None)
+    if bare_scoped and from_alias:
+        already_scoped.add(from_alias)
+
+    unscoped = [(a, ct, pos) for (a, ct, pos) in refs if a not in already_scoped]
+    if not unscoped:
+        return sql  # All references already scoped — nothing to do.
+
+    log.warning(
+        "Tenant isolation: injecting missing tenant_id filters",
+        tenant_id=tenant_id,
+        unscoped_aliases=[a for a, _, _ in unscoped],
+    )
+
+    # ── Step 1: Inject AND alias.tenant_id = '...' into each JOIN ON clause ──
+    # Process in reverse order so injections don't shift positions.
+    for alias, clause_type, match_end in sorted(unscoped, key=lambda x: x[2], reverse=True):
+        if clause_type != "JOIN":
+            continue
+        # Find the ON keyword after this JOIN match
+        on_re = re.compile(r'\bON\b', re.IGNORECASE)
+        on_m = on_re.search(sql, match_end)
+        if on_m:
+            # Find the end of the ON condition (before next JOIN/WHERE/GROUP/ORDER/LIMIT/HAVING)
+            end_re = re.compile(
+                r'\b(?:INNER\s+JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|CROSS\s+JOIN|JOIN|WHERE|GROUP\s+BY|ORDER\s+BY|HAVING|LIMIT)\b',
+                re.IGNORECASE,
+            )
+            end_m = end_re.search(sql, on_m.end())
+            insert_at = end_m.start() if end_m else len(sql)
+            # Find last non-whitespace before insert_at to place AND cleanly
+            inject = f" AND {alias}.tenant_id = {expected_literal}"
+            sql = sql[:insert_at].rstrip() + inject + " " + sql[insert_at:].lstrip()
+
+    # ── Step 2: Inject tenant_id into WHERE clause for FROM table (if unscoped) ──
+    from_unscoped = [a for a, ct, _ in unscoped if ct == "FROM"]
+    if from_unscoped:
+        alias = from_unscoped[0]
+        cond = f"{alias}.tenant_id = {expected_literal}"
+        where_re = re.compile(r'\bWHERE\b', re.IGNORECASE)
+        where_m = where_re.search(sql)
+        if where_m:
+            # Insert as first condition after WHERE
+            insert_at = where_m.end()
+            sql = sql[:insert_at] + f" {cond} AND " + sql[insert_at:].lstrip()
+        else:
+            # No WHERE clause — insert before GROUP BY / ORDER BY / LIMIT / HAVING
+            end_re = re.compile(
+                r'\b(?:GROUP\s+BY|ORDER\s+BY|HAVING|LIMIT)\b', re.IGNORECASE
+            )
+            end_m = end_re.search(sql)
+            if end_m:
+                sql = sql[:end_m.start()] + f"WHERE {cond} " + sql[end_m.start():]
+            else:
+                sql = sql.rstrip(';').rstrip() + f" WHERE {cond}"
+
+    return sql
+
+
 if _FORCE_HTTPS:
     from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
     app.add_middleware(HTTPSRedirectMiddleware)
@@ -1269,6 +1399,13 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                            user_email=user["email"], history_months=history["months"],
                            tenant_id=nl_tenant_id if s.get("db_configs") is None else None,
                            row_limit=row_limit)
+        # SEC-15: enforce tenant isolation — inject missing tenant_id filters
+        # and reject queries that reference any other tenant's data.
+        if nl_tenant_id and s.get("db_configs") is None:
+            try:
+                sql = _enforce_tenant_isolation(sql, nl_tenant_id)
+            except ValueError as e:
+                raise HTTPException(status_code=403, detail=str(e))
         _guard_sql(sql)  # SEC-04: reject any mutating statement the LLM may have generated
         cursor = conn.cursor()
         _set_query_timeout(cursor)
