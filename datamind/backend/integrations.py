@@ -42,6 +42,19 @@ _sync_active: set = set()
 # Default 5 syncs × 3 connections = 15 connections (safe with pool_size=20).
 _MAX_CONCURRENT_SYNCS = int(os.getenv("MAX_CONCURRENT_SYNCS", "5"))
 
+# Cache for get_integration() — result is static between syncs.
+# Every analytics click called get_integration() for a fresh DB query even though
+# table_prefix / status / display_label never change between syncs.
+_integration_cache: dict = {}            # (user_email, provider_id) → (row, expires_at)
+_integration_cache_lock = threading.Lock()
+_INTEGRATION_CACHE_TTL = int(os.getenv("INTEGRATION_CACHE_TTL", "300"))  # 5 minutes
+
+
+def _invalidate_integration_cache(user_email: str, provider_id: str) -> None:
+    """Bust a single integration entry. Call on connect, disconnect, or sync completion."""
+    with _integration_cache_lock:
+        _integration_cache.pop((user_email, provider_id), None)
+
 
 # ── Credential encryption ──────────────────────────────────────────────────────
 
@@ -640,7 +653,22 @@ def _create_views_for_integration(conn, table_prefix: str, provider_id: str):
 # ── Core integration operations ───────────────────────────────────────────────
 
 def get_integration(user_email: str, provider_id: str) -> Optional[Dict]:
-    """Fetch a user's integration record (without credentials)."""
+    """Fetch a user's integration record (without credentials).
+
+    Result is cached for INTEGRATION_CACHE_TTL seconds — table_prefix and status
+    don't change between syncs so repeated reads from analytics/forecast endpoints
+    are served from memory without hitting the DB.
+    """
+    key = (user_email, provider_id)
+    with _integration_cache_lock:
+        entry = _integration_cache.get(key)
+    if entry:
+        row, exp = entry
+        if time.monotonic() < exp:
+            return row
+        with _integration_cache_lock:
+            _integration_cache.pop(key, None)
+
     conn = _get_internal_conn()
     cursor = conn.cursor(dictionary=True)
     cursor.execute("""
@@ -651,6 +679,10 @@ def get_integration(user_email: str, provider_id: str) -> Optional[Dict]:
     """, (user_email, provider_id))
     row = cursor.fetchone()
     conn.close()
+
+    if row is not None:
+        with _integration_cache_lock:
+            _integration_cache[key] = (row, time.monotonic() + _INTEGRATION_CACHE_TTL)
     return row
 
 
@@ -719,6 +751,7 @@ def connect_integration(
     conn.commit()
     integration_id = cursor.lastrowid or _get_integration_id(cursor, user_email, provider_id)
     conn.close()
+    _invalidate_integration_cache(user_email, provider_id)  # status changed to active
 
     # Trigger full sync in background
     _start_sync_thread(integration_id, user_email, provider_id, sync_type="full",
