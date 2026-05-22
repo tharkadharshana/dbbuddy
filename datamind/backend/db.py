@@ -25,17 +25,32 @@ def get_connection(db_config: dict = None):
 
 def get_table_schemas(conn, tables: Optional[List[str]]) -> Dict[str, Any]:
     cursor = conn.cursor()
+    cursor.execute("SELECT DATABASE()")
+    db_name = cursor.fetchone()[0]
+
     if tables is None:
         cursor.execute("SHOW TABLES")
         tables = [row[0] for row in cursor.fetchall()]
-    schemas = {}
-    for table in tables:
-        cursor.execute(f"DESCRIBE `{table}`")
-        columns = cursor.fetchall()
-        schemas[table] = [
-            {"name": col[0], "type": col[1], "null": col[2], "key": col[3], "default": col[4]}
-            for col in columns
-        ]
+
+    if not tables:
+        return {}
+
+    placeholders = ", ".join(["%s"] * len(tables))
+    cursor.execute(
+        f"""
+        SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY, COLUMN_DEFAULT
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = %s AND TABLE_NAME IN ({placeholders})
+        ORDER BY TABLE_NAME, ORDINAL_POSITION
+        """,
+        [db_name, *tables],
+    )
+    schemas: Dict[str, Any] = {t: [] for t in tables}
+    for table_name, col_name, col_type, is_null, col_key, col_default in cursor.fetchall():
+        if table_name in schemas:
+            schemas[table_name].append(
+                {"name": col_name, "type": col_type, "null": is_null, "key": col_key, "default": col_default}
+            )
     return schemas
 
 
