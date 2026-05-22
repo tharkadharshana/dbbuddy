@@ -689,27 +689,18 @@ def charge_tokens(user_email: str, tokens: float, operation_type: str,
                   llm_tokens: int = 0, rows_returned: int = 0):
     """Write one row to usage_log and increment tokens_used for the active billing period.
 
-    Called by charge_ai_usage (for LLM ops) and directly by each analytics endpoint
-    (for non-LLM ops).  Both paths funnel here so tokens_used is always the
-    single source of truth for the unified Token balance.
+    Both writes happen in a single connection and transaction — previously this
+    used two separate pool borrows which doubled connection pressure per request.
     """
-    # 1. Append to unified audit log
+    conn = _get_conn()
     try:
-        conn = _get_conn()
-        cur  = conn.cursor()
+        cur = conn.cursor(dictionary=True)
+        # 1. Audit log
         cur.execute("""
             INSERT INTO usage_log (user_email, tokens, operation_type, llm_tokens, rows_charged)
             VALUES (%s, %s, %s, %s, %s)
         """, (user_email, tokens, operation_type, llm_tokens, rows_returned))
-        conn.commit()
-        cur.close(); conn.close()
-    except Exception as e:
-        log.error("charge_tokens: usage_log insert failed", email=user_email, error=str(e))
-
-    # 2. Increment tokens_used for the active subscription period
-    try:
-        conn = _get_conn()
-        cur  = conn.cursor(dictionary=True)
+        # 2. Increment token balance for active subscription period
         cur.execute("""
             SELECT period_start FROM user_subscriptions
             WHERE user_email = %s AND status IN ('trial', 'active')
@@ -722,10 +713,19 @@ def charge_tokens(user_email: str, tokens: float, operation_type: str,
                 VALUES (%s, %s, %s)
                 ON DUPLICATE KEY UPDATE tokens_used = tokens_used + %s
             """, (user_email, sub["period_start"], tokens, tokens))
-            conn.commit()
-        cur.close(); conn.close()
+        conn.commit()
     except Exception as e:
-        log.error("charge_tokens: subscription_usage update failed", email=user_email, error=str(e))
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        log.error("charge_tokens failed", email=user_email, error=str(e))
+    finally:
+        try:
+            cur.close()
+        except Exception:
+            pass
+        conn.close()
 
 
 def charge_ai_usage(user_email: str, tokens: int, model: str, endpoint: str, api_key_cost: float = 0.0):
