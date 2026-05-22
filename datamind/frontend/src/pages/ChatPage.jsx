@@ -180,10 +180,22 @@ export default function ChatPage({
   const [convId, setConvId]       = useState(activeConvId || null)
   const bottomRef = useRef(null)
   const inputRef  = useRef(null)
+  // Track the convId that this component owns internally (created during send).
+  // Used to distinguish "sidebar selected a different conversation" (should reload
+  // messages) from "send() just created this conversation" (must NOT reload —
+  // that would wipe the in-flight thinking bubble).
+  const localConvIdRef = useRef(convId)
 
-  // When the parent selects a different conversation, load its messages.
+  // When the parent navigates to a different conversation (sidebar click), load it.
+  // Guard: skip if activeConvId matches the conversation we already own locally —
+  // this prevents send() → onConvCreated() → setActiveConvId() from re-triggering
+  // a message reload that wipes the in-flight result.
   useEffect(() => {
+    if (activeConvId === localConvIdRef.current) return  // we own this conv — don't reset
+
+    localConvIdRef.current = activeConvId || null
     setConvId(activeConvId || null)
+
     if (!activeConvId) {
       setMessages([])
       return
@@ -191,10 +203,9 @@ export default function ChatPage({
     getConversationMessages(activeConvId)
       .then(res => {
         const loaded = (res.messages || []).map((m, i) => ({
-          id:       m.id || i,
-          role:     m.role === 'user' ? 'user' : 'ai',
-          content:  m.content,
-          // data_snapshot is a compact object — no full result set; display content only
+          id:      m.id || i,
+          role:    m.role === 'user' ? 'user' : 'ai',
+          content: m.content,
         }))
         setMessages(loaded)
       })
@@ -219,8 +230,9 @@ export default function ChatPage({
       try {
         await createConversation(newId)
         currentConvId = newId
+        localConvIdRef.current = newId  // claim ownership before notifying parent
         setConvId(newId)
-        onConvCreated?.(newId)
+        onConvCreated?.()  // parent only refreshes list — does NOT setActiveConvId
       } catch {
         // If creation fails, continue without conversation memory (graceful degradation)
         currentConvId = null
@@ -358,7 +370,8 @@ export default function ChatPage({
                 onClick={() => {
                   setMessages([])
                   setConvId(null)
-                  onConvCreated?.(null)
+                  localConvIdRef.current = null
+                  onConvCreated?.()
                 }}
                 style={{ fontSize:11, color:'var(--text3)', background:'none', border:'none', cursor:'pointer' }}
               >
