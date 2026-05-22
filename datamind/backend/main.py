@@ -104,7 +104,8 @@ app.add_middleware(SlowAPIMiddleware)
 # SEC-14: HTTPS enforcement — only active when FORCE_HTTPS=true (production).
 # In local dev (Windows) this env var is unset so redirects never fire.
 # On Red Hat: set FORCE_HTTPS=true in the systemd environment file.
-_FORCE_HTTPS = os.getenv("FORCE_HTTPS", "").lower() == "true"
+_FORCE_HTTPS    = os.getenv("FORCE_HTTPS", "").lower() == "true"
+_SQL_TIMEOUT_MS = int(os.getenv("SQL_TIMEOUT_MS", "30000"))  # hard-kill runaway LLM queries
 
 if _FORCE_HTTPS:
     from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
@@ -1231,6 +1232,7 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                            tenant_id=nl_tenant_id if s.get("db_configs") is None else None)
         _guard_sql(sql)  # SEC-04: reject any mutating statement the LLM may have generated
         cursor = conn.cursor()
+        cursor.execute(f"SET SESSION max_execution_time={_SQL_TIMEOUT_MS}")
         cursor.execute(sql)
         columns = [desc[0] for desc in cursor.description]
         rows = cursor.fetchall()
