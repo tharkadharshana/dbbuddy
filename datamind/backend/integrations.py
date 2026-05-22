@@ -298,6 +298,48 @@ def bootstrap_integration_tables():
             PRIMARY KEY (tenant_id, id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """)
+    # ── Conversation memory tables ────────────────────────────────────────────
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS conversations (
+            id            VARCHAR(64)  NOT NULL,
+            user_email    VARCHAR(255) NOT NULL,
+            title         VARCHAR(255) NOT NULL DEFAULT 'New conversation',
+            summary       TEXT,
+            message_count INT          NOT NULL DEFAULT 0,
+            created_at    DATETIME     NOT NULL DEFAULT NOW(),
+            updated_at    DATETIME     NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (id),
+            INDEX idx_conv_user_updated (user_email, updated_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS conversation_messages (
+            id              BIGINT       NOT NULL AUTO_INCREMENT,
+            conversation_id VARCHAR(64)  NOT NULL,
+            role            VARCHAR(16)  NOT NULL,
+            content         TEXT         NOT NULL,
+            sql_query       TEXT,
+            row_count       INT          NOT NULL DEFAULT 0,
+            data_snapshot   JSON,
+            created_at      DATETIME     NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (id),
+            INDEX idx_cmsg_conv (conversation_id, created_at),
+            FOREIGN KEY (conversation_id)
+                REFERENCES conversations(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS conversation_summaries (
+            id              BIGINT      NOT NULL AUTO_INCREMENT,
+            conversation_id VARCHAR(64) NOT NULL,
+            summary_text    TEXT        NOT NULL,
+            covers_up_to_id BIGINT      NOT NULL,
+            created_at      DATETIME    NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (id),
+            INDEX idx_csum_conv (conversation_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """)
+
     conn.commit()
 
     # Reset any integrations stuck in 'syncing' from a previous server crash.
