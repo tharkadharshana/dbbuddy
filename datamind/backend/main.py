@@ -2078,11 +2078,22 @@ def run_integration_analytics(
             raise HTTPException(status_code=404, detail="Integration not connected")
 
         table_prefix = integration["table_prefix"]
-        conn = _get_internal_conn()
 
+        # Check result cache BEFORE borrowing a DB connection.
+        # Cached or not, the user is always billed — _charge_op fires either way.
+        if provider_id == "salesplay":
+            from providers.salesplay.analytics import run_salesplay_analytics, _cache_get
+            cached_result = _cache_get(table_prefix, req.template_id)
+            if cached_result is not None:
+                result = {**cached_result, "source": "integration", "provider": provider_id, "cached": True}
+                _apply_row_limit(result, _row_limit)
+                _charge_op(user["email"], _ANALYTICS_OP.get(req.template_id, "prebuilt_template"),
+                           result.get("row_count", 0))
+                return result
+
+        conn = _get_internal_conn()
         try:
             if provider_id == "salesplay":
-                from providers.salesplay.analytics import run_salesplay_analytics
                 result = run_salesplay_analytics(conn, table_prefix, req.template_id)
             elif provider_id == "loyverse":
                 from providers.loyverse.analytics import run_loyverse_analytics
@@ -2092,6 +2103,7 @@ def run_integration_analytics(
 
             result["source"]   = "integration"
             result["provider"] = provider_id
+            result["cached"]   = False
             _apply_row_limit(result, _row_limit)
             _charge_op(user["email"], _ANALYTICS_OP.get(req.template_id, "prebuilt_template"),
                        result.get("row_count", 0))
