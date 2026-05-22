@@ -188,12 +188,59 @@ def get_user_settings(email: str) -> dict:
     return user.get("settings", {})
 
 
+# ── API key helpers ───────────────────────────────────────────────────────────
+
+_API_KEY_PREFIX = "dm_live_"
+
+
+def _lookup_api_key(raw_key: str) -> Optional[str]:
+    """
+    Return the user_email for an active dm_live_ API key, or None if invalid.
+    Also stamps last_used_at so activity is visible in the UI.
+    """
+    if not raw_key.startswith(_API_KEY_PREFIX):
+        return None
+    conn = _get_conn()
+    try:
+        cur = conn.cursor(dictionary=True)
+        cur.execute(
+            "SELECT user_email FROM user_api_keys WHERE api_key=%s AND active=1",
+            (raw_key,),
+        )
+        row = cur.fetchone()
+        if row:
+            cur.execute(
+                "UPDATE user_api_keys SET last_used_at=NOW() WHERE api_key=%s",
+                (raw_key,),
+            )
+            conn.commit()
+            return row["user_email"]
+        return None
+    finally:
+        cur.close()
+        conn.close()
+
+
 # ── FastAPI dependency ────────────────────────────────────────────────────────
 
 def current_user(creds: HTTPAuthorizationCredentials = Depends(bearer)):
     if not creds:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    email = decode_token(creds.credentials)
+
+    token = creds.credentials
+
+    # Personal API key path (dm_live_...) — Pro users programmatic access.
+    if token.startswith(_API_KEY_PREFIX):
+        email = _lookup_api_key(token)
+        if not email:
+            raise HTTPException(status_code=401, detail="Invalid or revoked API key")
+        user = get_user(email)
+        if not user:
+            raise HTTPException(status_code=401, detail="User not found")
+        return user
+
+    # Standard JWT path — browser sessions.
+    email = decode_token(token)
     if not email:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     user = get_user(email)
