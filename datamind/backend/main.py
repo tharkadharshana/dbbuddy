@@ -1390,7 +1390,8 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
     api_key = _resolve_api_key(user, llm)
     history = get_plan_history_limit(user["email"])
     s = user.get("settings", {})
-    nl_tenant_id = None  # set only for integration users; used by SEC-15 enforcement below
+    nl_tenant_id = None    # set only for SalesPlay integration users; used by SEC-15 enforcement
+    loyverse_hints: list = []  # provider-specific schema hints passed to the LLM
     if s.get("db_configs"):
         # Own-DB user — their database is exclusively theirs; show all tables.
         conn = get_connection(_resolve_db(user))
@@ -1406,23 +1407,37 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                 detail="No data source connected. Please connect a provider first."
             )
 
-        # Map each provider to its shared normalized tables.
-        # The LLM will query these directly with WHERE tenant_id = '...'
-        # instead of going through JSON views — eliminates the 8-minute JOIN queries.
-        _PROVIDER_SHARED_TABLES = {
-            "salesplay": [
-                "sp_receipts", "sp_receipt_line_items", "sp_products",
-                "sp_customers", "sp_categories", "sp_shops", "sp_payment_types",
-            ],
-            "loyverse": [
-                "ly_receipts", "ly_receipt_line_items", "ly_products",
-                "ly_customers", "ly_categories",
-            ],
-        }
+        # SalesPlay uses shared sp_* tables scoped by tenant_id.
+        # Loyverse uses per-user views named {prefix}_* (no tenant_id column needed —
+        # tenant isolation is baked into each view's WHERE clause at creation time).
+        _SALESPLAY_SHARED_TABLES = [
+            "sp_receipts", "sp_receipt_line_items", "sp_products",
+            "sp_customers", "sp_categories", "sp_shops", "sp_payment_types",
+        ]
+        _LOYVERSE_VIEW_SUFFIXES = [
+            "receipts", "receipt_line_items", "products",
+            "customers", "categories", "stores", "employees", "payment_line_items",
+        ]
         tables_filter = []
-        nl_tenant_id = prefixes[0] if prefixes else None  # primary tenant for hint
-        for pid in provider_ids:
-            tables_filter.extend(_PROVIDER_SHARED_TABLES.get(pid, []))
+        nl_tenant_id = None   # only set for SalesPlay (shared sp_* tables)
+        loyverse_hints = []   # per-prefix hints for Loyverse schema quirks
+        for conn_info in user_conns:
+            pid    = conn_info.get("provider_id", "")
+            prefix = conn_info.get("table_prefix", "")
+            if pid == "salesplay":
+                tables_filter.extend(_SALESPLAY_SHARED_TABLES)
+                if not nl_tenant_id:
+                    nl_tenant_id = prefix  # first SalesPlay prefix drives SEC-15 enforcement
+            elif pid == "loyverse" and prefix:
+                # Per-user views — already tenant-scoped, no tenant_id column.
+                tables_filter.extend([f"{prefix}_{s}" for s in _LOYVERSE_VIEW_SUFFIXES])
+                loyverse_hints.append(
+                    f"The {prefix}_customers table has pre-aggregated total_spent and "
+                    f"total_visits columns — use these directly for customer spending/"
+                    f"frequency analysis instead of joining {prefix}_receipts. "
+                    f"The {prefix}_receipt_line_items table already has item_name and "
+                    f"category_id — prefer these over joining {prefix}_products."
+                )
 
         # Deduplicate in case user has multiple integrations of same type
         tables_filter = list(dict.fromkeys(tables_filter))
@@ -1470,7 +1485,8 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                            user_email=user["email"], history_months=history["months"],
                            tenant_id=nl_tenant_id if s.get("db_configs") is None else None,
                            row_limit=row_limit,
-                           conversation_history=conv_history)
+                           conversation_history=conv_history,
+                           extra_schema_hints=" ".join(loyverse_hints) if loyverse_hints else "")
         # SEC-15: enforce tenant isolation for integration users.
         # nl_tenant_id is set in the else-branch above; None for own-DB users.
         if nl_tenant_id:
