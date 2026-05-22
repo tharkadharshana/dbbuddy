@@ -277,9 +277,9 @@ def bootstrap_billing_tables():
 
         # Seed plans  (name, price_usd, price_cents, ai_credits, db_rows, sort_order)
         plans = [
-            ("Starter", "5.00",   500,   500,  2_000_000,    1),
-            ("Growth",  "10.00", 1000,  1500,  5_000_000,    2),
-            ("Pro",     "25.00", 2500, 10000, 20_000_000,    3),
+            ("Starter", "100.00", 10000,   500,  2_000_000,    1),
+            ("Growth",  "250.00", 25000,  1500,  5_000_000,    2),
+            ("Pro",     "1000.00", 100000, 10000, 20_000_000,    3),
         ]
         for name, price_usd, price_cents, ai_credits, db_rows, sort_order in plans:
             cur.execute("SELECT id FROM subscription_plans WHERE name = %s", (name,))
