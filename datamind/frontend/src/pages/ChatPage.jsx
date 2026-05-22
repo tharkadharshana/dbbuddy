@@ -1,6 +1,6 @@
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { runNLQuery } from '../utils/api'
+import { runNLQuery, createConversation, getConversationMessages } from '../utils/api'
 import { Spinner, UsageMeter, AIQuotaWall } from '../components/UI'
 
 const TT = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)', borderRadius:8, fontSize:12, color:'#f0f1fa' }
@@ -166,45 +166,105 @@ function Message({ msg, llm }) {
   )
 }
 
-export default function ChatPage({ llm, setLlm, connection, sub, onNavigate, onQueryComplete }) {
+export default function ChatPage({
+  llm, setLlm, connection, sub, onNavigate,
+  onQueryComplete,
+  activeConvId,      // UUID of the selected conversation (null = new)
+  onConvCreated,     // called with new convId after first message
+  onConversationChange, // called after each exchange to refresh sidebar
+}) {
   const [messages, setMessages]   = useState([])
   const [input, setInput]         = useState('')
   const [loading, setLoading]     = useState(false)
   const [thinkMode, setThinkMode] = useState(false)
+  const [convId, setConvId]       = useState(activeConvId || null)
   const bottomRef = useRef(null)
   const inputRef  = useRef(null)
+  // Track the convId that this component owns internally (created during send).
+  // Used to distinguish "sidebar selected a different conversation" (should reload
+  // messages) from "send() just created this conversation" (must NOT reload —
+  // that would wipe the in-flight thinking bubble).
+  const localConvIdRef = useRef(convId)
+
+  // When the parent navigates to a different conversation (sidebar click), load it.
+  // Guard: skip if activeConvId matches the conversation we already own locally —
+  // this prevents send() → onConvCreated() → setActiveConvId() from re-triggering
+  // a message reload that wipes the in-flight result.
+  useEffect(() => {
+    if (activeConvId === localConvIdRef.current) return  // we own this conv — don't reset
+
+    localConvIdRef.current = activeConvId || null
+    setConvId(activeConvId || null)
+
+    if (!activeConvId) {
+      setMessages([])
+      return
+    }
+    getConversationMessages(activeConvId)
+      .then(res => {
+        const loaded = (res.messages || []).map((m, i) => ({
+          id:      m.id || i,
+          role:    m.role === 'user' ? 'user' : 'ai',
+          content: m.content,
+        }))
+        setMessages(loaded)
+      })
+      .catch(() => setMessages([]))
+  }, [activeConvId])
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior:'smooth' })
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
   async function send(text) {
     const q = (text || input).trim()
     if (!q || loading) return
     setInput('')
-    const userMsg  = { role:'user', content:q, id: Date.now() }
-    const thinkMsg = { role:'ai', loading:true, id: Date.now()+1 }
+
+    // Lazy conversation creation: generate a UUID on the first send if none exists.
+    let currentConvId = convId
+    if (!currentConvId) {
+      const newId = crypto.randomUUID
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+      try {
+        await createConversation(newId)
+        currentConvId = newId
+        localConvIdRef.current = newId  // claim ownership before notifying parent
+        setConvId(newId)
+        onConvCreated?.()  // parent only refreshes list — does NOT setActiveConvId
+      } catch {
+        // If creation fails, continue without conversation memory (graceful degradation)
+        currentConvId = null
+      }
+    }
+
+    const userMsg  = { role: 'user', content: q, id: Date.now() }
+    const thinkMsg = { role: 'ai', loading: true, id: Date.now() + 1 }
     setMessages(m => [...m, userMsg, thinkMsg])
     setLoading(true)
     try {
-      const data = await runNLQuery(q, llm, thinkMode)
+      const data = await runNLQuery(q, llm, thinkMode, currentConvId)
       const rowCount = data.row_count
       const numCol   = data.columns?.find(c => typeof data.data?.[0]?.[c] === 'number')
       let summary = `Found ${rowCount} result${rowCount !== 1 ? 's' : ''}`
       if (numCol && data.data?.[0]) {
         const total = data.data.reduce((s, r) => s + (r[numCol] || 0), 0)
-        summary += ` · Total ${numCol.replace(/_/g,' ')}: ${total.toLocaleString(undefined, {maximumFractionDigits:2})}`
+        summary += ` · Total ${numCol.replace(/_/g, ' ')}: ${total.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
       }
-      if (rowCount === 0) summary = "No matching records found for your query."
+      if (rowCount === 0) summary = 'No matching records found for your query.'
 
       setMessages(m => m.map(msg =>
         msg.id === thinkMsg.id
-          ? { role:'ai', content: summary, data, analysis: data.analysis || null, id: thinkMsg.id }
+          ? { role: 'ai', content: summary, data, analysis: data.analysis || null, id: thinkMsg.id }
           : msg
       ))
+      onConversationChange?.()
     } catch(e) {
       const err = e.response?.data?.error || e.response?.data?.detail || e.message
-      setMessages(m => m.map(msg => msg.id === thinkMsg.id ? { role:'ai', error:err, id:thinkMsg.id } : msg))
+      setMessages(m => m.map(msg =>
+        msg.id === thinkMsg.id ? { role: 'ai', error: err, id: thinkMsg.id } : msg
+      ))
     } finally {
       setLoading(false)
       onQueryComplete?.()
@@ -306,8 +366,16 @@ export default function ChatPage({ llm, setLlm, connection, sub, onNavigate, onQ
           </div>
           {hasMessages && (
             <div style={{ textAlign:'center', marginTop:8 }}>
-              <button onClick={() => setMessages([])} style={{ fontSize:11, color:'var(--text3)', background:'none', border:'none', cursor:'pointer' }}>
-                Clear conversation
+              <button
+                onClick={() => {
+                  setMessages([])
+                  setConvId(null)
+                  localConvIdRef.current = null
+                  onConvCreated?.()
+                }}
+                style={{ fontSize:11, color:'var(--text3)', background:'none', border:'none', cursor:'pointer' }}
+              >
+                New conversation
               </button>
             </div>
           )}

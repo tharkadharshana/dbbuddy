@@ -1,4 +1,5 @@
-import React, { useState } from 'react'
+import React, { useState, useRef } from 'react'
+import { deleteConversation } from '../utils/api'
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
 const IC = {
@@ -62,6 +63,150 @@ function NavGroup({ label, icon, items, active, setActive, defaultOpen=false }) 
   )
 }
 
+function ChatNavItem({ active, setActive, conversations, activeConvId, onConvSelect, onCreate, onConvDelete }) {
+  const [open, setOpen] = useState(false)
+  const [hoverId, setHoverId] = useState(null)
+  const [deletingId, setDeletingId] = useState(null)
+  const isChatActive = active === 'chat'
+
+  function fmtDate(iso) {
+    if (!iso) return ''
+    const d = new Date(iso)
+    const now = new Date()
+    const diffDays = Math.floor((now - d) / 86400000)
+    if (diffDays === 0) return 'Today'
+    if (diffDays === 1) return 'Yesterday'
+    if (diffDays < 7) return `${diffDays}d ago`
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  }
+
+  async function handleDelete(e, convId) {
+    e.stopPropagation()
+    if (!window.confirm('Delete this conversation?')) return
+    setDeletingId(convId)
+    try {
+      await deleteConversation(convId)
+      onConvDelete?.(convId)
+    } catch { /* silent */ }
+    finally { setDeletingId(null) }
+  }
+
+  return (
+    <div style={{ marginBottom: 2 }}>
+      {/* Main row */}
+      <div style={{ display: 'flex', alignItems: 'center', borderRadius: 'var(--r-sm)', overflow: 'hidden' }}>
+        <div
+          onClick={() => setActive('chat')}
+          style={{
+            flex: 1, display: 'flex', alignItems: 'center', gap: 10,
+            padding: '8px 12px', cursor: 'pointer',
+            background: isChatActive ? 'var(--blue-dim)' : 'transparent',
+            color: isChatActive ? 'var(--blue)' : 'var(--text2)',
+            fontWeight: isChatActive ? 600 : 400, fontSize: 13,
+          }}
+        >
+          <span style={{ flexShrink: 0 }}>{IC.chat}</span>
+          <span style={{ flex: 1 }}>Ask Your Data</span>
+        </div>
+        {/* Expand/collapse toggle */}
+        <div
+          onClick={() => setOpen(o => !o)}
+          title={open ? 'Hide chat history' : 'Show chat history'}
+          style={{
+            padding: '8px 10px', cursor: 'pointer',
+            color: open ? 'var(--blue)' : 'var(--text3)',
+            background: isChatActive ? 'var(--blue-dim)' : 'transparent',
+            fontSize: 11,
+            transform: open ? 'rotate(180deg)' : 'none',
+            transition: 'transform .2s, color .15s',
+            flexShrink: 0,
+          }}
+        >
+          {IC.chevron}
+        </div>
+      </div>
+
+      {/* Conversation list — shown when expanded */}
+      {open && (
+        <div style={{ marginLeft: 14, marginTop: 2, borderLeft: '1px solid var(--border)', paddingLeft: 10 }}>
+          {/* New conversation button */}
+          <div
+            onClick={() => { setActive('chat'); onCreate?.() }}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              padding: '5px 8px', borderRadius: 'var(--r-sm)', cursor: 'pointer',
+              color: 'var(--text3)', fontSize: 12, marginBottom: 4,
+            }}
+            onMouseEnter={e => e.currentTarget.style.color = 'var(--blue)'}
+            onMouseLeave={e => e.currentTarget.style.color = 'var(--text3)'}
+          >
+            <span style={{ fontSize: 15, lineHeight: 1 }}>+</span>
+            <span>New conversation</span>
+          </div>
+
+          {/* Conversation rows */}
+          {conversations.length === 0 ? (
+            <div style={{ fontSize: 11, color: 'var(--text3)', padding: '4px 8px 8px', lineHeight: 1.5 }}>
+              No history yet.<br />Ask your first question.
+            </div>
+          ) : (
+            <div style={{ maxHeight: 280, overflowY: 'auto' }}>
+              {conversations.map(conv => {
+                const isActive   = conv.id === activeConvId
+                const isHovered  = conv.id === hoverId
+                const isDeleting = conv.id === deletingId
+                return (
+                  <div
+                    key={conv.id}
+                    onClick={() => { setActive('chat'); onConvSelect?.(conv.id) }}
+                    onMouseEnter={() => setHoverId(conv.id)}
+                    onMouseLeave={() => setHoverId(null)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 6,
+                      padding: '5px 8px', borderRadius: 'var(--r-sm)',
+                      cursor: 'pointer', marginBottom: 1,
+                      background: isActive ? 'var(--blue-dim)' : isHovered ? 'var(--bg2)' : 'transparent',
+                      borderLeft: isActive ? '2px solid var(--blue)' : '2px solid transparent',
+                    }}
+                  >
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{
+                        fontSize: 12, fontWeight: isActive ? 600 : 400,
+                        color: isActive ? 'var(--blue)' : 'var(--text2)',
+                        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                      }}>
+                        {conv.title || 'New conversation'}
+                      </div>
+                      <div style={{ fontSize: 10, color: 'var(--text3)' }}>
+                        {fmtDate(conv.updated_at)}
+                      </div>
+                    </div>
+                    {(isHovered || isDeleting) && (
+                      <button
+                        onClick={(e) => handleDelete(e, conv.id)}
+                        disabled={isDeleting}
+                        style={{
+                          flexShrink: 0, width: 18, height: 18,
+                          borderRadius: 3, background: 'transparent', border: 'none',
+                          color: 'var(--text3)', cursor: isDeleting ? 'not-allowed' : 'pointer',
+                          fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          padding: 0,
+                        }}
+                      >
+                        {isDeleting ? '…' : '×'}
+                      </button>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function NavItem({ id, label, icon, active, setActive, badge }) {
   return (
     <div onClick={() => setActive(id)} style={{
@@ -78,7 +223,8 @@ function NavItem({ id, label, icon, active, setActive, badge }) {
   )
 }
 
-export default function Sidebar({ active, setActive, connection, cacheStatus, totalRows, theme, setTheme }) {
+export default function Sidebar({ active, setActive, connection, cacheStatus, totalRows, theme, setTheme,
+                                   conversations, activeConvId, onConvSelect, onConvCreate, onConvDelete }) {
   const cacheOk      = cacheStatus?.cached
   const cacheBuilding= cacheStatus?.build?.status === 'building'
 
@@ -143,7 +289,14 @@ export default function Sidebar({ active, setActive, connection, cacheStatus, to
 
       {/* Navigation */}
       <nav style={{ flex:1, overflowY:'auto', padding:'10px 8px' }}>
-        <NavItem id="chat"        label="Ask Your Data"  icon={IC.chat}     active={active} setActive={setActive} />
+        <ChatNavItem
+          active={active} setActive={setActive}
+          conversations={conversations || []}
+          activeConvId={activeConvId}
+          onConvSelect={onConvSelect}
+          onCreate={onConvCreate}
+          onConvDelete={onConvDelete}
+        />
         <div style={{ height:1, background:'var(--border)', margin:'8px 4px' }} />
         <div style={{ fontSize:10, color:'var(--text3)', fontWeight:600, textTransform:'uppercase', letterSpacing:'.09em', padding:'4px 12px 6px' }}>Analytics</div>
         <NavGroup label="Analytics" icon={IC.chart}  items={ANALYTICS_SUB}  active={active} setActive={setActive} defaultOpen={true} />

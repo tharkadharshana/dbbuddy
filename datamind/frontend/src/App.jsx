@@ -13,7 +13,7 @@ import UsagePage         from './pages/UsagePage'
 import DocsPage          from './pages/DocsPage'
 import Sidebar           from './components/Sidebar'
 import UsageLimitBanner  from './components/UsageLimitBanner'
-import { fetchTables, fetchCacheStatus, fetchSettings, fetchConnectedProviders, fetchProviderStats, fetchSubscription } from './utils/api'
+import { fetchTables, fetchCacheStatus, fetchSettings, fetchConnectedProviders, fetchProviderStats, fetchSubscription, listConversations } from './utils/api'
 
 export default function App() {
   const [user, setUser]       = useState(() => {
@@ -27,6 +27,8 @@ export default function App() {
   const [theme, setTheme]       = useState(() => localStorage.getItem('dm_theme') || 'dark')
   const [totalRows, setTotalRows] = useState(0)
   const [sub, setSub]             = useState(null)
+  const [conversations, setConversations]   = useState([])
+  const [activeConvId, setActiveConvId]     = useState(null)
   const subIntervalRef = useRef(null)
   const pollRef = useRef(null)
 
@@ -41,12 +43,20 @@ export default function App() {
     checkSetup()
     pollCacheStatus()
     loadSub()
+    loadConversations()
     subIntervalRef.current = setInterval(loadSub, 5 * 1 * 1000)
     return () => clearInterval(subIntervalRef.current)
   }, [user])
 
   async function loadSub() {
     try { setSub(await fetchSubscription()) } catch { /* silent */ }
+  }
+
+  async function loadConversations() {
+    try {
+      const data = await listConversations()
+      setConversations(data.conversations || [])
+    } catch { /* silent */ }
   }
 
   async function checkSetup({ suppressOnboarding = false } = {}) {
@@ -119,14 +129,34 @@ export default function App() {
 
   const noScroll = ['chat', 'discover', 'reports'].includes(page)
 
+  const handleConvSelect = (convId) => {
+    setActiveConvId(convId)
+    setPage('chat')
+  }
+
+  const handleConvCreated = () => {
+    // Only refresh the sidebar list — do NOT setActiveConvId here.
+    // ChatPage manages its own convId internally during an active send().
+    // Calling setActiveConvId would change the prop, trigger the useEffect
+    // inside ChatPage, and wipe the in-flight "thinking…" message.
+    loadConversations()
+  }
+
+  const handleConvDeleted = (convId) => {
+    if (activeConvId === convId) setActiveConvId(null)
+    loadConversations()
+  }
+
   const pageEl = {
-    chat:        <ChatPage llm={llm} setLlm={setLlm} connection={connection} sub={sub} onNavigate={setPage} onQueryComplete={loadSub} />,
+    chat:        <ChatPage llm={llm} setLlm={setLlm} connection={connection} sub={sub} onNavigate={setPage}
+                           onQueryComplete={loadSub} activeConvId={activeConvId}
+                           onConvCreated={handleConvCreated} onConversationChange={loadConversations} />,
     discover:    <DiscoverPage llm={llm} setLlm={setLlm} sub={sub} onNavigate={setPage} onQueryComplete={loadSub} />,
     forecast:    <ForecastPage sub={sub} onNavigate={setPage} onQueryComplete={loadSub} />,
     anomaly:     <AnomalyPage sub={sub} onNavigate={setPage} onQueryComplete={loadSub} />,
     reports:     <ReportsPage llm={llm} setLlm={setLlm} sub={sub} onNavigate={setPage} onQueryComplete={loadSub} />,
     connections: <ConnectionsPage onConnectionChange={checkSetup} sub={sub} />,
-    settings:    <SettingsPage user={user} onLogout={handleLogout} onNavigate={setPage} />,
+    settings:    <SettingsPage user={user} onLogout={handleLogout} onNavigate={setPage} sub={sub} />,
     billing:     <BillingPage onSubChange={loadSub} />,
     docs:        <DocsPage />,
   }[page] ?? <ChatPage llm={llm} setLlm={setLlm} connection={connection} />
@@ -135,12 +165,17 @@ export default function App() {
     <div style={{ display:'flex', height:'100vh', overflow:'hidden', background:'var(--bg)' }}>
       <Sidebar
         active={page}
-        setActive={setPage}
+        setActive={(p) => { setPage(p); if (p !== 'chat') setActiveConvId(null) }}
         connection={connection}
         cacheStatus={cacheStatus}
         totalRows={totalRows}
         theme={theme}
         setTheme={setTheme}
+        conversations={conversations}
+        activeConvId={activeConvId}
+        onConvSelect={handleConvSelect}
+        onConvCreate={() => { setActiveConvId(null); setPage('chat') }}
+        onConvDelete={handleConvDeleted}
       />
       <main style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', minWidth:0 }}>
         <UsageLimitBanner sub={sub} onNavigate={setPage} />

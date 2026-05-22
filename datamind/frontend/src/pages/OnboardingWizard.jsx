@@ -40,9 +40,9 @@ function StatusBox({ ok, message }) {
 const TOTAL_STEPS = 4
 
 const PLAN_HIGHLIGHTS = {
-  Starter: { tokens: '500 Tokens / mo',    price: '$100' },
-  Growth:  { tokens: '1,500 Tokens / mo',  price: '$250' },
-  Pro:     { tokens: '10,000 Tokens / mo', price: '$1,000' },
+  Starter: { tokens: '100 Tokens / mo',   price: '$5' },
+  Growth:  { tokens: '250 Tokens / mo',   price: '$10' },
+  Pro:     { tokens: '1,000 Tokens / mo', price: '$25' },
 }
 
 export default function OnboardingWizard({ onComplete, theme, setTheme }) {

@@ -33,6 +33,7 @@ from analytics import (
     run_employee_performance, run_product_velocity,
     run_payment_breakdown, run_location_comparison,
 )
+import conversations as _conv
 from integrations import (
     bootstrap_integration_tables,
     connect_provider, disconnect_provider,
@@ -272,6 +273,64 @@ def _enforce_tenant_isolation(sql: str, tenant_id: str) -> str:
                 sql = sql.rstrip(';').rstrip() + f" WHERE {cond}"
 
     return sql
+
+
+def _enforce_date_filter(sql: str, history_months: int) -> str:
+    """
+    Enforce the plan's data-history window on every NL query for integration users.
+
+    Problem: follow-up questions ("what can I do to increase this?") let the LLM
+    generate SQL without a date filter, pulling ALL historical data even though
+    the user's plan only allows N months. The LLM prompt hint is advisory —
+    this function is mandatory server-side enforcement.
+
+    Strategy:
+      - If the SQL already contains a created_at comparison (the LLM handled it),
+        return unchanged.
+      - Otherwise find the primary sp_*/ly_* FROM table alias and inject
+        AND alias.created_at >= DATE_SUB(CURDATE(), INTERVAL N MONTH)
+        into the WHERE clause (or create one if absent).
+
+    Only applied to integration users (sp_*/ly_* tables) where the date column
+    is always created_at. Not applied to own-DB users — unknown schema.
+    """
+    if not history_months:
+        return sql
+
+    # If LLM already applied a date filter on created_at, trust it.
+    if re.search(r'\bcreated_at\s*[><=]', sql, re.IGNORECASE):
+        return sql
+
+    # Find the primary FROM sp_*/ly_* table with its alias.
+    table_re = re.compile(
+        r'\bFROM\s+(`?(?:sp|ly)_\w+`?)(?:\s+(?:AS\s+)?(`?\w+`?))?',
+        re.IGNORECASE,
+    )
+    m = table_re.search(sql)
+    if not m:
+        return sql  # no shared table found — nothing to inject
+
+    alias = (m.group(2) or m.group(1)).strip('`')
+    date_cond = (
+        f"{alias}.created_at >= DATE_SUB(CURDATE(), INTERVAL {history_months} MONTH)"
+    )
+
+    log.debug("Date filter enforced", alias=alias, history_months=history_months)
+
+    where_re = re.compile(r'\bWHERE\b', re.IGNORECASE)
+    where_m = where_re.search(sql)
+    if where_m:
+        insert_at = where_m.end()
+        return sql[:insert_at] + f" {date_cond} AND " + sql[insert_at:].lstrip()
+
+    end_re = re.compile(
+        r'\b(?:GROUP\s+BY|ORDER\s+BY|HAVING|LIMIT)\b', re.IGNORECASE
+    )
+    end_m = end_re.search(sql)
+    if end_m:
+        return sql[:end_m.start()] + f"WHERE {date_cond} " + sql[end_m.start():]
+
+    return sql.rstrip(';').rstrip() + f" WHERE {date_cond}"
 
 
 if _FORCE_HTTPS:
@@ -1315,9 +1374,10 @@ def _run_think_analysis(question: str, columns: list, data: list,
 
 
 class NLQueryRequest(BaseModel):
-    question: str
-    llm: str = "gemini"
-    think_mode: bool = False
+    question:        str
+    llm:             str  = "gemini"
+    think_mode:      bool = False
+    conversation_id: str  = None  # optional — enables conversation memory
 
 
 @v1.post("/query")
@@ -1378,6 +1438,17 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                   tenant_id=nl_tenant_id)
         conn = _get_internal_conn()
 
+    # Load conversation history — compact multi-turn string injected into the
+    # LLM prompt so follow-up questions ("explain this value") work correctly.
+    conv_id = req.conversation_id or None
+    conv_history = ""
+    if conv_id:
+        try:
+            conv_history = _conv.get_history_for_prompt(conv_id)
+        except Exception as _he:
+            log.warning("Could not load conversation history",
+                        conv_id=conv_id, error=str(_he))
+
     try:
         schemas = get_table_schemas(conn, tables_filter)
         all_fkeys = get_foreign_keys(conn)
@@ -1399,7 +1470,8 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
         sql = query_to_sql(req.question, schemas, llm, fkeys, api_key=api_key,
                            user_email=user["email"], history_months=history["months"],
                            tenant_id=nl_tenant_id if s.get("db_configs") is None else None,
-                           row_limit=row_limit)
+                           row_limit=row_limit,
+                           conversation_history=conv_history)
         # SEC-15: enforce tenant isolation for integration users.
         # nl_tenant_id is set in the else-branch above; None for own-DB users.
         if nl_tenant_id:
@@ -1417,6 +1489,10 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                     status_code=500,
                     detail="Could not generate a safely scoped query. Please rephrase your question."
                 )
+            # Enforce data-history window for integration users.
+            # The LLM hint is advisory; this is mandatory. Prevents follow-up
+            # questions from pulling all-time data beyond the plan's allowed window.
+            sql = _enforce_date_filter(sql, history["months"])
         _guard_sql(sql)  # SEC-04: reject any mutating statement the LLM may have generated
         cursor = conn.cursor()
         _set_query_timeout(cursor)
@@ -1426,7 +1502,8 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
         data = [{k: _safe(v) for k, v in dict(zip(columns, row)).items()} for row in rows]
         if len(data) > row_limit:
             data = data[:row_limit]
-        log.info("NL query complete", user=user["email"], rows=len(data))
+        log.info("NL query complete", user=user["email"], rows=len(data),
+                 conv_id=conv_id or "stateless")
         _charge_op(user["email"], "nl_query_rows", len(data))
 
         analysis = None
@@ -1440,9 +1517,49 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                 log.warning("Think mode analysis failed", user=user["email"], error=str(_te))
                 analysis = "Analysis unavailable — the AI could not process the results."
 
+        # Build a human-readable answer summary for conversation storage.
+        answer_summary = f"Found {len(data)} result{'s' if len(data) != 1 else ''}."
+        if columns and data:
+            num_col = next(
+                (c for c in columns if isinstance(data[0].get(c), (int, float))), None
+            )
+            if num_col:
+                try:
+                    total = sum(float(r.get(num_col, 0) or 0) for r in data)
+                    answer_summary += f" {num_col.replace('_', ' ')} = {total:,.2f}"
+                except Exception:
+                    pass
+
+        # Persist exchange to conversation memory (best-effort, never blocks response).
+        if conv_id:
+            try:
+                stat_col = next(
+                    (c for c in columns if isinstance(data[0].get(c), (int, float))), None
+                ) if data else None
+                _conv.save_message(conv_id, "user", req.question)
+                _conv.save_message(
+                    conv_id, "assistant", answer_summary,
+                    sql_query=sql, row_count=len(data),
+                    columns=columns, data=data, stat_col=stat_col,
+                )
+                convo = _conv.get_conversation(conv_id, user["email"])
+                msg_count = convo["message_count"] if convo else 0
+                if msg_count == 2:
+                    _conv.trigger_title_generation(
+                        conv_id, req.question, answer_summary,
+                        llm, api_key, user["email"],
+                    )
+                from conversations import _SUMMARY_THRESHOLD
+                if msg_count >= _SUMMARY_THRESHOLD and msg_count % 5 == 0:
+                    _conv.trigger_summarisation(conv_id, llm, api_key, user["email"])
+            except Exception as _ce:
+                log.warning("Failed to save conversation exchange",
+                            conv_id=conv_id, error=str(_ce))
+
         return {
             "sql": sql, "columns": columns, "data": data, "row_count": len(data),
             "analysis": analysis, "think_mode": req.think_mode,
+            "conversation_id": conv_id,
         }
     except HTTPException:
         raise
@@ -1451,6 +1568,177 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
         raise _server_error("Query execution failed. Please try rephrasing your question.")
     finally:
         conn.close()  # always returned to pool (or closed for own-DB users)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DEVELOPER API KEY MANAGEMENT  (Pro plan only)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _require_pro(user_email: str):
+    """Raise 403 if the user is not on the Pro plan."""
+    ok, reason = check_plan_feature(user_email, "partner_api")
+    if not ok:
+        raise HTTPException(status_code=403,
+                            detail="Developer API access requires the Pro plan.")
+
+
+def _generate_api_key() -> str:
+    import secrets
+    return f"dm_live_{secrets.token_urlsafe(32)}"
+
+
+@v1.get("/developer/key")
+@_limiter.limit(RL_READ)
+def get_developer_key(request: Request, user: dict = Depends(current_user)):
+    """Return the user's active API key (masked except the prefix and last 4 chars)."""
+    _require_pro(user["email"])
+    conn = _get_internal_conn()
+    try:
+        cur = conn.cursor(dictionary=True)
+        cur.execute(
+            """
+            SELECT api_key, name, created_at, last_used_at
+            FROM user_api_keys
+            WHERE user_email=%s AND active=1
+            ORDER BY id DESC LIMIT 1
+            """,
+            (user["email"],),
+        )
+        row = cur.fetchone()
+        if not row:
+            return {"ok": True, "key": None}
+        key = row["api_key"]
+        masked = key[:12] + "•" * (len(key) - 16) + key[-4:]
+        return {
+            "ok": True,
+            "key": {
+                "masked":       masked,
+                "prefix":       key[:12],
+                "name":         row["name"],
+                "created_at":   str(row["created_at"]),
+                "last_used_at": str(row["last_used_at"]) if row["last_used_at"] else None,
+            },
+        }
+    finally:
+        cur.close()
+        conn.close()
+
+
+@v1.post("/developer/key")
+@_limiter.limit(RL_WRITE)
+def generate_developer_key(request: Request, user: dict = Depends(current_user)):
+    """
+    Generate a new API key for the user.
+    Any existing active key is deactivated first.
+    The full key is returned ONCE — store it safely.
+    """
+    _require_pro(user["email"])
+    new_key = _generate_api_key()
+    conn = _get_internal_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE user_api_keys SET active=0 WHERE user_email=%s AND active=1",
+            (user["email"],),
+        )
+        cur.execute(
+            """
+            INSERT INTO user_api_keys (user_email, api_key, name, active)
+            VALUES (%s, %s, 'Default', 1)
+            """,
+            (user["email"], new_key),
+        )
+        conn.commit()
+        log.info("API key generated", user=user["email"])
+        return {"ok": True, "key": new_key}
+    finally:
+        cur.close()
+        conn.close()
+
+
+@v1.delete("/developer/key")
+@_limiter.limit(RL_WRITE)
+def revoke_developer_key(request: Request, user: dict = Depends(current_user)):
+    """Revoke (deactivate) the user's active API key."""
+    _require_pro(user["email"])
+    conn = _get_internal_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE user_api_keys SET active=0 WHERE user_email=%s AND active=1",
+            (user["email"],),
+        )
+        conn.commit()
+        revoked = cur.rowcount > 0
+        return {"ok": True, "revoked": revoked}
+    finally:
+        cur.close()
+        conn.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CONVERSATION MEMORY
+# ══════════════════════════════════════════════════════════════════════════════
+
+class CreateConversationRequest(BaseModel):
+    id: str  # UUID generated by the frontend
+
+
+@v1.post("/conversations")
+@_limiter.limit(RL_WRITE)
+def api_create_conversation(request: Request, body: CreateConversationRequest,
+                            user: dict = Depends(current_user)):
+    if not body.id or len(body.id) > 64:
+        raise HTTPException(status_code=422, detail="Invalid conversation id.")
+    try:
+        row = _conv.create_conversation(user["email"], body.id)
+        return {"ok": True, "conversation": row}
+    except Exception as e:
+        log.error("create_conversation failed", user=user["email"], error=str(e))
+        raise _server_error("Could not create conversation.")
+
+
+@v1.get("/conversations")
+@_limiter.limit(RL_READ)
+def api_list_conversations(request: Request, user: dict = Depends(current_user)):
+    try:
+        return {"ok": True, "conversations": _conv.list_conversations(user["email"])}
+    except Exception as e:
+        log.error("list_conversations failed", user=user["email"], error=str(e))
+        raise _server_error("Could not load conversations.")
+
+
+@v1.get("/conversations/{conv_id}/messages")
+@_limiter.limit(RL_READ)
+def api_get_conversation_messages(request: Request, conv_id: str,
+                                  user: dict = Depends(current_user)):
+    try:
+        convo = _conv.get_conversation(conv_id, user["email"])
+        if not convo:
+            raise HTTPException(status_code=404, detail="Conversation not found.")
+        msgs = _conv.get_messages(conv_id, user["email"])
+        return {"ok": True, "conversation": convo, "messages": msgs}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("get_conversation_messages failed", user=user["email"], error=str(e))
+        raise _server_error("Could not load messages.")
+
+
+@v1.delete("/conversations/{conv_id}")
+@_limiter.limit(RL_WRITE)
+def api_delete_conversation(request: Request, conv_id: str,
+                            user: dict = Depends(current_user)):
+    try:
+        deleted = _conv.delete_conversation(conv_id, user["email"])
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Conversation not found.")
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("delete_conversation failed", user=user["email"], error=str(e))
+        raise _server_error("Could not delete conversation.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════

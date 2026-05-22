@@ -275,11 +275,31 @@ def bootstrap_billing_tables():
             VALUES ('ai_credit_rate', '1.0')
         """)
 
+        # Personal API keys for Pro users — programmatic access to /v1/* endpoints.
+        # Keys are stored in plaintext (prefix dm_live_ makes them identifiable).
+        # Each user can have at most one active key at a time; regenerating
+        # deactivates the old one (active=0) and inserts a new row.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_api_keys (
+                id           INT           NOT NULL AUTO_INCREMENT,
+                user_email   VARCHAR(255)  NOT NULL,
+                api_key      VARCHAR(128)  NOT NULL,
+                name         VARCHAR(100)  NOT NULL DEFAULT 'Default',
+                active       TINYINT(1)   NOT NULL DEFAULT 1,
+                created_at   DATETIME     NOT NULL DEFAULT NOW(),
+                last_used_at DATETIME,
+                PRIMARY KEY (id),
+                UNIQUE KEY uq_key (api_key),
+                INDEX idx_uak_email  (user_email),
+                INDEX idx_uak_active (user_email, active)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """)
+
         # Seed plans  (name, price_usd, price_cents, ai_credits, db_rows, sort_order)
         plans = [
-            ("Starter", "100.00", 10000,   500,  2_000_000,    1),
-            ("Growth",  "250.00", 25000,  1500,  5_000_000,    2),
-            ("Pro",     "1000.00", 100000, 10000, 20_000_000,    3),
+            ("Starter", "5.00",   500,   100,  2_000_000,    1),
+            ("Growth",  "10.00", 1000,   250,  5_000_000,    2),
+            ("Pro",     "25.00", 2500,  1000, 20_000_000,    3),
         ]
         for name, price_usd, price_cents, ai_credits, db_rows, sort_order in plans:
             cur.execute("SELECT id FROM subscription_plans WHERE name = %s", (name,))
@@ -299,9 +319,9 @@ def bootstrap_billing_tables():
                     VALUES (%s,%s,%s,%s,%s,14,30,1,%s)
                 """, (name, price_usd, price_cents, ai_credits, db_rows, sort_order))
 
-        # Seed unified token limits
-        _TOKEN_LIMITS = {"Starter": 500.0, "Growth": 1500.0, "Pro": 10000.0}
-        for _pname, _tlimit in _TOKEN_LIMITS.items():
+        # Seed unified token limits — must match _TOKEN_LIMITS dict below
+        _TOKEN_LIMITS_SEED = {"Starter": 100.0, "Growth": 250.0, "Pro": 1000.0}
+        for _pname, _tlimit in _TOKEN_LIMITS_SEED.items():
             cur.execute(
                 "UPDATE subscription_plans SET tokens_limit=%s WHERE name=%s",
                 (_tlimit, _pname),
@@ -555,12 +575,16 @@ def get_user_subscription(user_email: str) -> Dict:
         conn.close()
 
 
+# In-memory token limit enforcement — must stay in sync with the bootstrap seed above.
+_TOKEN_LIMITS: dict = {"Starter": 100.0, "Growth": 250.0, "Pro": 1000.0}
+
 # Plans that include each gated feature.
 _PLAN_FEATURE_GATE: dict = {
     "forecast":          {"Growth", "Pro"},
     "anomaly_detection": {"Growth", "Pro"},
-    "external_api":      {"Starter", "Growth", "Pro"},
-    "partner_api":       {"Pro"},
+    "external_api":      {"Pro"},           # Partner / External API — Pro only
+    "partner_api":       {"Pro"},           # Partner API endpoints — Pro only
+    "web_widget":        {"Pro"},           # Embed iframe widget — Pro only
 }
 
 # Data-history window per plan: months to look back, and row fallback when no date column.

@@ -310,7 +310,7 @@ def validate_llm_key(llm: str, api_key: str) -> Dict[str, Any]:
 def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "gemini",
                  fkeys: list = None, api_key: str = "", user_email: str = None,
                  history_months: int = None, tenant_id: str = None,
-                 row_limit: int = 500) -> str:
+                 row_limit: int = 500, conversation_history: str = "") -> str:
     schema_text = schema_to_text(_filter_sensitive_schema(schemas), fkeys)
     history_hint = (
         f" Only return data from the last {history_months} month(s) — add "
@@ -336,7 +336,16 @@ def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "gemini",
         f"without needing to join sp_receipts."
         if tenant_id else ""
     )
+    # Conversation history is prepended so the LLM understands follow-up
+    # questions ("explain this", "drill down", "compare to last month") without
+    # generating a broad unrelated SQL query.
+    history_section = (
+        f"[Previous conversation — use this to understand follow-up questions]\n"
+        f"{conversation_history}\n\n"
+        if conversation_history else ""
+    )
     system = (
+        history_section +
         "You are an expert MySQL query writer. "
         "Given a database schema (with foreign key relationships) and a plain English question, "
         "write a valid MySQL SELECT query that may JOIN multiple tables as needed. "
