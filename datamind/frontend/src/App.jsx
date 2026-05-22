@@ -41,7 +41,7 @@ export default function App() {
     checkSetup()
     pollCacheStatus()
     loadSub()
-    subIntervalRef.current = setInterval(loadSub, 5 * 60 * 1000)
+    subIntervalRef.current = setInterval(loadSub, 5 * 1 * 1000)
     return () => clearInterval(subIntervalRef.current)
   }, [user])
 
@@ -120,11 +120,11 @@ export default function App() {
   const noScroll = ['chat', 'discover', 'reports'].includes(page)
 
   const pageEl = {
-    chat:        <ChatPage llm={llm} setLlm={setLlm} connection={connection} sub={sub} onNavigate={setPage} />,
-    discover:    <DiscoverPage llm={llm} setLlm={setLlm} sub={sub} onNavigate={setPage} />,
-    forecast:    <ForecastPage sub={sub} onNavigate={setPage} />,
-    anomaly:     <AnomalyPage sub={sub} onNavigate={setPage} />,
-    reports:     <ReportsPage llm={llm} setLlm={setLlm} sub={sub} onNavigate={setPage} />,
+    chat:        <ChatPage llm={llm} setLlm={setLlm} connection={connection} sub={sub} onNavigate={setPage} onQueryComplete={loadSub} />,
+    discover:    <DiscoverPage llm={llm} setLlm={setLlm} sub={sub} onNavigate={setPage} onQueryComplete={loadSub} />,
+    forecast:    <ForecastPage sub={sub} onNavigate={setPage} onQueryComplete={loadSub} />,
+    anomaly:     <AnomalyPage sub={sub} onNavigate={setPage} onQueryComplete={loadSub} />,
+    reports:     <ReportsPage llm={llm} setLlm={setLlm} sub={sub} onNavigate={setPage} onQueryComplete={loadSub} />,
     connections: <ConnectionsPage onConnectionChange={checkSetup} sub={sub} />,
     settings:    <SettingsPage user={user} onLogout={handleLogout} onNavigate={setPage} />,
     billing:     <BillingPage onSubChange={loadSub} />,

@@ -5,6 +5,8 @@ Subscription plans, usage tracking, and add-on purchases for DataMind AI.
 All tables live in DataMind's internal DB (same env vars as integrations.py).
 """
 import os
+import time as _time
+import threading as _threading
 from typing import Optional, Dict, List, Tuple
 from datetime import date, timedelta
 import mysql.connector
@@ -13,9 +15,42 @@ from pool import get_internal_conn as _get_conn
 
 log = get_logger(__name__)
 
+# ── Per-request billing cache ──────────────────────────────────────────────────
+# get_user_subscription() is called on every compute request (check_ai_limit +
+# charge_tokens). It runs 5+ DB queries including a COUNT(*) on integration_records.
+# At 1,000 concurrent users that's 5,000+ DB queries just for billing on every tick.
+#
+# Cache subscription state for 60s per user. Acceptable lag: a user who hits their
+# token limit continues for at most 60s before being blocked. Tokens are still written
+# correctly (charge_tokens always writes to DB); only the read-side check is cached.
+# Cache is busted immediately on subscribe/cancel so plan changes take effect instantly.
+
+_sub_cache: dict = {}
+_sub_cache_lock = _threading.Lock()
+_SUB_CACHE_TTL = int(os.getenv("SUB_CACHE_TTL", "60"))  # seconds, configurable via .env
+
+def _sub_cache_get(email: str):
+    with _sub_cache_lock:
+        entry = _sub_cache.get(email)
+    if entry:
+        result, exp = entry
+        if _time.monotonic() < exp:
+            return result
+        with _sub_cache_lock:
+            _sub_cache.pop(email, None)
+    return None
+
+def _sub_cache_set(email: str, result: dict):
+    with _sub_cache_lock:
+        _sub_cache[email] = (result, _time.monotonic() + _SUB_CACHE_TTL)
+
+def invalidate_sub_cache(email: str):
+    """Call after subscribe/cancel/plan-change so next request reads fresh data."""
+    with _sub_cache_lock:
+        _sub_cache.pop(email, None)
+
 # Track consecutive billing-check failures so we can alert when the DB is
 # persistently unavailable (fail-open is intentional but should not be silent).
-import threading as _threading
 _billing_fail_count = 0
 _billing_fail_lock  = _threading.Lock()
 _BILLING_FAIL_WARN_EVERY = 10  # log an escalated warning every N consecutive failures
@@ -242,9 +277,9 @@ def bootstrap_billing_tables():
 
         # Seed plans  (name, price_usd, price_cents, ai_credits, db_rows, sort_order)
         plans = [
-            ("Starter", "5.00",   500,   500,  2_000_000,    1),
-            ("Growth",  "10.00", 1000,  1500,  5_000_000,    2),
-            ("Pro",     "25.00", 2500, 10000, 20_000_000,    3),
+            ("Starter", "100.00", 10000,   500,  2_000_000,    1),
+            ("Growth",  "250.00", 25000,  1500,  5_000_000,    2),
+            ("Pro",     "1000.00", 100000, 10000, 20_000_000,    3),
         ]
         for name, price_usd, price_cents, ai_credits, db_rows, sort_order in plans:
             cur.execute("SELECT id FROM subscription_plans WHERE name = %s", (name,))
@@ -345,6 +380,7 @@ def start_trial(user_email: str, plan_name: str = "Starter"):
             VALUES (%s, %s, 'trial', %s, %s)
         """, (user_email, plan["id"], today, period_end))
         conn.commit()
+        invalidate_sub_cache(user_email)
         log.info("Trial started", email=user_email, plan=plan_name)
     except Exception as e:
         conn.rollback()
@@ -407,6 +443,7 @@ def subscribe_to_plan(user_email: str, plan_id: int):
             VALUES (%s, %s, 'active', %s, %s)
         """, (user_email, plan_id, today, period_end))
         conn.commit()
+        invalidate_sub_cache(user_email)  # force fresh read on next request
         log.info("Subscription activated", email=user_email, plan_id=plan_id)
     except Exception as e:
         conn.rollback()
@@ -417,7 +454,15 @@ def subscribe_to_plan(user_email: str, plan_id: int):
 
 
 def get_user_subscription(user_email: str) -> Dict:
-    """Return full subscription state including usage and add-on balances."""
+    """Return full subscription state including usage and add-on balances.
+
+    Result is cached for _SUB_CACHE_TTL seconds to avoid hammering the DB
+    on every compute request. Cache is busted by invalidate_sub_cache().
+    """
+    cached = _sub_cache_get(user_email)
+    if cached is not None:
+        return cached
+
     conn = _get_conn()
     conn.autocommit = False
     cur = conn.cursor(dictionary=True)
@@ -503,6 +548,8 @@ def get_user_subscription(user_email: str) -> Dict:
             "can_use_ai":            tokens_total == 0 or tokens_used < tokens_total,
             "can_use_db":            db_base_used < db_total,
         }
+        _sub_cache_set(user_email, result)
+        return result
     finally:
         cur.close()
         conn.close()
@@ -564,20 +611,13 @@ def get_plan_history_limit(user_email: str) -> dict:
       row_limit   — max rows to return when no date column is available
       cutoff_date — concrete date object (today minus months*30 days)
     """
+    # Re-use the cached subscription rather than a separate DB query.
+    # get_user_subscription() is already called by check_ai_limit() on the same request,
+    # so this hits the in-process cache (no DB round-trip).
     from datetime import date, timedelta
     try:
-        conn = _get_conn()
-        cur  = conn.cursor(dictionary=True)
-        cur.execute("""
-            SELECT sp.name AS plan_name
-            FROM user_subscriptions us
-            JOIN subscription_plans sp ON sp.id = us.plan_id
-            WHERE us.user_email = %s AND us.status IN ('trial','active')
-            ORDER BY us.id DESC LIMIT 1
-        """, (user_email,))
-        row = cur.fetchone()
-        cur.close(); conn.close()
-        plan_name = (row or {}).get("plan_name", "Starter")
+        sub = get_user_subscription(user_email)
+        plan_name = sub.get("plan_name") or "Starter"
     except Exception:
         plan_name = "Starter"
     limits = _PLAN_HISTORY.get(plan_name, _PLAN_HISTORY["Starter"])
@@ -649,27 +689,18 @@ def charge_tokens(user_email: str, tokens: float, operation_type: str,
                   llm_tokens: int = 0, rows_returned: int = 0):
     """Write one row to usage_log and increment tokens_used for the active billing period.
 
-    Called by charge_ai_usage (for LLM ops) and directly by each analytics endpoint
-    (for non-LLM ops).  Both paths funnel here so tokens_used is always the
-    single source of truth for the unified Token balance.
+    Both writes happen in a single connection and transaction — previously this
+    used two separate pool borrows which doubled connection pressure per request.
     """
-    # 1. Append to unified audit log
+    conn = _get_conn()
     try:
-        conn = _get_conn()
-        cur  = conn.cursor()
+        cur = conn.cursor(dictionary=True)
+        # 1. Audit log
         cur.execute("""
             INSERT INTO usage_log (user_email, tokens, operation_type, llm_tokens, rows_charged)
             VALUES (%s, %s, %s, %s, %s)
         """, (user_email, tokens, operation_type, llm_tokens, rows_returned))
-        conn.commit()
-        cur.close(); conn.close()
-    except Exception as e:
-        log.error("charge_tokens: usage_log insert failed", email=user_email, error=str(e))
-
-    # 2. Increment tokens_used for the active subscription period
-    try:
-        conn = _get_conn()
-        cur  = conn.cursor(dictionary=True)
+        # 2. Increment token balance for active subscription period
         cur.execute("""
             SELECT period_start FROM user_subscriptions
             WHERE user_email = %s AND status IN ('trial', 'active')
@@ -682,10 +713,19 @@ def charge_tokens(user_email: str, tokens: float, operation_type: str,
                 VALUES (%s, %s, %s)
                 ON DUPLICATE KEY UPDATE tokens_used = tokens_used + %s
             """, (user_email, sub["period_start"], tokens, tokens))
-            conn.commit()
-        cur.close(); conn.close()
+        conn.commit()
     except Exception as e:
-        log.error("charge_tokens: subscription_usage update failed", email=user_email, error=str(e))
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        log.error("charge_tokens failed", email=user_email, error=str(e))
+    finally:
+        try:
+            cur.close()
+        except Exception:
+            pass
+        conn.close()
 
 
 def charge_ai_usage(user_email: str, tokens: int, model: str, endpoint: str, api_key_cost: float = 0.0):

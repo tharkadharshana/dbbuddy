@@ -104,7 +104,175 @@ app.add_middleware(SlowAPIMiddleware)
 # SEC-14: HTTPS enforcement — only active when FORCE_HTTPS=true (production).
 # In local dev (Windows) this env var is unset so redirects never fire.
 # On Red Hat: set FORCE_HTTPS=true in the systemd environment file.
-_FORCE_HTTPS = os.getenv("FORCE_HTTPS", "").lower() == "true"
+_FORCE_HTTPS    = os.getenv("FORCE_HTTPS", "").lower() == "true"
+_SQL_TIMEOUT_MS = int(os.getenv("SQL_TIMEOUT_MS", "30000"))  # hard-kill runaway LLM queries
+
+# Cached name of the session timeout variable for this MySQL/MariaDB server.
+# "max_execution_time" (MySQL 5.7.8+, milliseconds)
+# "max_statement_time"  (MariaDB, seconds)
+# None = server doesn't support either — timeouts are skipped silently.
+_sql_timeout_var: str | None = "unknown"  # "unknown" triggers first-use probe
+_sql_timeout_lock = __import__("threading").Lock()
+
+
+def _set_query_timeout(cursor) -> None:
+    """Apply SQL_TIMEOUT_MS to the current session, probing which variable the server uses."""
+    global _sql_timeout_var
+    if _sql_timeout_var is None:
+        return  # server supports neither — skip
+    if _sql_timeout_var == "unknown":
+        with _sql_timeout_lock:
+            if _sql_timeout_var == "unknown":  # re-check inside lock
+                for var, val in [
+                    ("max_execution_time", _SQL_TIMEOUT_MS),           # MySQL (ms)
+                    ("max_statement_time", _SQL_TIMEOUT_MS / 1000.0),  # MariaDB (seconds)
+                ]:
+                    try:
+                        cursor.execute(f"SET SESSION {var}={val}")
+                        _sql_timeout_var = var
+                        log.info("SQL timeout variable detected", var=var, value=val)
+                        return
+                    except Exception:
+                        pass
+                _sql_timeout_var = None
+                log.warning("SQL timeout not supported by this MySQL/MariaDB server — runaway queries will not be auto-killed")
+                return
+    # Variable already known
+    try:
+        val = _SQL_TIMEOUT_MS if _sql_timeout_var == "max_execution_time" else _SQL_TIMEOUT_MS / 1000.0
+        cursor.execute(f"SET SESSION {_sql_timeout_var}={val}")
+    except Exception as e:
+        log.warning("Failed to set SQL timeout", var=_sql_timeout_var, error=str(e))
+
+def _enforce_tenant_isolation(sql: str, tenant_id: str) -> str:
+    """
+    SEC-15: Server-side tenant isolation enforcement for shared sp_*/ly_* tables.
+
+    The LLM is instructed to add WHERE tenant_id = '...' but sometimes omits it
+    or adds it only for the primary table while leaving JOINed tables unscoped.
+    This function post-processes the generated SQL to guarantee every shared-table
+    reference is filtered to the correct tenant BEFORE execution.
+
+    Strategy:
+      1. Find all sp_*/ly_* table references with their aliases (FROM and JOIN).
+      2. For each alias not already scoped with alias.tenant_id = '...':
+         - If it's the FROM table: inject into the WHERE clause (or create one).
+         - If it's a JOINed table: inject AND alias.tenant_id = '...' into the ON clause.
+      3. Raise ValueError if ANY other tenant_id literal appears in the SQL
+         (prevents prompt-injection attacks requesting another tenant's data).
+    """
+    import re
+
+    if not tenant_id:
+        return sql
+
+    safe_tid = tenant_id.replace("'", "\\'")
+    expected_literal = f"'{safe_tid}'"
+
+    # Security: reject if a *different* tenant_id literal appears in the SQL.
+    # e.g. user tries: "show me data where tenant_id = 'other_user_prefix'"
+    tid_val_re = re.compile(r"tenant_id\s*=\s*'([^']*)'", re.IGNORECASE)
+    for m in tid_val_re.finditer(sql):
+        found_tid = m.group(1)
+        if found_tid != tenant_id:
+            raise ValueError(
+                f"Query references tenant_id '{found_tid}' which does not match "
+                f"your account. Cross-tenant queries are not allowed."
+            )
+
+    # Find all sp_*/ly_* table references: (FROM|JOIN) table_name [AS] alias
+    # Captures: group1=clause, group2=table, group3=alias (may be None)
+    table_re = re.compile(
+        r'\b(FROM|(?:INNER|LEFT|RIGHT|CROSS|FULL)?\s*JOIN)\s+'
+        r'(`?(?:sp|ly)_\w+`?)'
+        r'(?:\s+(?:AS\s+)?(`?\w+`?))?',
+        re.IGNORECASE,
+    )
+
+    # Build list of (alias, clause_type, match_end_pos)
+    refs = []
+    for m in table_re.finditer(sql):
+        clause = m.group(1).strip().upper()
+        clause_type = "FROM" if clause == "FROM" else "JOIN"
+        table_raw = m.group(2).strip('`')
+        alias_raw = (m.group(3) or m.group(2)).strip('`')
+        refs.append((alias_raw, clause_type, m.end()))
+
+    if not refs:
+        return sql  # No shared tables referenced — nothing to enforce.
+
+    # Determine which aliases are already correctly scoped
+    already_scoped = set()
+    for alias, _, _ in refs:
+        pattern = re.compile(
+            rf'\b{re.escape(alias)}\.tenant_id\s*=\s*{re.escape(expected_literal)}',
+            re.IGNORECASE,
+        )
+        if pattern.search(sql):
+            already_scoped.add(alias)
+
+    # Also consider bare "tenant_id = '...'" (no alias prefix) as scoping the FROM table
+    bare_scoped = bool(re.search(
+        rf'\btenant_id\s*=\s*{re.escape(expected_literal)}', sql, re.IGNORECASE
+    ))
+    from_alias = next((a for a, ct, _ in refs if ct == "FROM"), None)
+    if bare_scoped and from_alias:
+        already_scoped.add(from_alias)
+
+    unscoped = [(a, ct, pos) for (a, ct, pos) in refs if a not in already_scoped]
+    if not unscoped:
+        return sql  # All references already scoped — nothing to do.
+
+    log.warning(
+        "Tenant isolation: injecting missing tenant_id filters",
+        tenant_id=tenant_id,
+        unscoped_aliases=[a for a, _, _ in unscoped],
+    )
+
+    # ── Step 1: Inject AND alias.tenant_id = '...' into each JOIN ON clause ──
+    # Process in reverse order so injections don't shift positions.
+    for alias, clause_type, match_end in sorted(unscoped, key=lambda x: x[2], reverse=True):
+        if clause_type != "JOIN":
+            continue
+        # Find the ON keyword after this JOIN match
+        on_re = re.compile(r'\bON\b', re.IGNORECASE)
+        on_m = on_re.search(sql, match_end)
+        if on_m:
+            # Find the end of the ON condition (before next JOIN/WHERE/GROUP/ORDER/LIMIT/HAVING)
+            end_re = re.compile(
+                r'\b(?:INNER\s+JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|CROSS\s+JOIN|JOIN|WHERE|GROUP\s+BY|ORDER\s+BY|HAVING|LIMIT)\b',
+                re.IGNORECASE,
+            )
+            end_m = end_re.search(sql, on_m.end())
+            insert_at = end_m.start() if end_m else len(sql)
+            # Find last non-whitespace before insert_at to place AND cleanly
+            inject = f" AND {alias}.tenant_id = {expected_literal}"
+            sql = sql[:insert_at].rstrip() + inject + " " + sql[insert_at:].lstrip()
+
+    # ── Step 2: Inject tenant_id into WHERE clause for FROM table (if unscoped) ──
+    from_unscoped = [a for a, ct, _ in unscoped if ct == "FROM"]
+    if from_unscoped:
+        alias = from_unscoped[0]
+        cond = f"{alias}.tenant_id = {expected_literal}"
+        where_re = re.compile(r'\bWHERE\b', re.IGNORECASE)
+        where_m = where_re.search(sql)
+        if where_m:
+            # Insert as first condition after WHERE
+            insert_at = where_m.end()
+            sql = sql[:insert_at] + f" {cond} AND " + sql[insert_at:].lstrip()
+        else:
+            # No WHERE clause — insert before GROUP BY / ORDER BY / LIMIT / HAVING
+            end_re = re.compile(
+                r'\b(?:GROUP\s+BY|ORDER\s+BY|HAVING|LIMIT)\b', re.IGNORECASE
+            )
+            end_m = end_re.search(sql)
+            if end_m:
+                sql = sql[:end_m.start()] + f"WHERE {cond} " + sql[end_m.start():]
+            else:
+                sql = sql.rstrip(';').rstrip() + f" WHERE {cond}"
+
+    return sql
+
 
 if _FORCE_HTTPS:
     from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
@@ -1163,45 +1331,51 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
     api_key = _resolve_api_key(user, llm)
     history = get_plan_history_limit(user["email"])
     s = user.get("settings", {})
+    nl_tenant_id = None  # set only for integration users; used by SEC-15 enforcement below
     if s.get("db_configs"):
         # Own-DB user — their database is exclusively theirs; show all tables.
         conn = get_connection(_resolve_db(user))
         tables_filter = None
     else:
         # Integration user (embed or main app).
-        # Resolve which tables belong to THIS user before opening the query conn.
         user_conns = get_user_connections(user["email"])
         prefixes = [c.get("table_prefix", "") for c in user_conns if c.get("table_prefix")]
+        provider_ids = [c.get("provider_id", "") for c in user_conns if c.get("provider_id")]
         if not prefixes:
             raise HTTPException(
                 status_code=422,
                 detail="No data source connected. Please connect a provider first."
             )
-        # Use a short-lived pool connection just to resolve table names, then
-        # release it before opening the query connection.
-        _meta_conn = _get_internal_conn()
-        try:
-            _meta_cur = _meta_conn.cursor()
-            tables_filter = []
-            for prefix in prefixes:
-                _meta_cur.execute(
-                    "SELECT TABLE_NAME FROM information_schema.TABLES "
-                    "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME LIKE %s "
-                    "ORDER BY TABLE_NAME",
-                    (f"{prefix}%",)
-                )
-                tables_filter.extend(r[0] for r in _meta_cur.fetchall())
-            _meta_cur.close()
-        finally:
-            _meta_conn.close()  # always returned to pool
+
+        # Map each provider to its shared normalized tables.
+        # The LLM will query these directly with WHERE tenant_id = '...'
+        # instead of going through JSON views — eliminates the 8-minute JOIN queries.
+        _PROVIDER_SHARED_TABLES = {
+            "salesplay": [
+                "sp_receipts", "sp_receipt_line_items", "sp_products",
+                "sp_customers", "sp_categories", "sp_shops", "sp_payment_types",
+            ],
+            "loyverse": [
+                "ly_receipts", "ly_receipt_line_items", "ly_products",
+                "ly_customers", "ly_categories",
+            ],
+        }
+        tables_filter = []
+        nl_tenant_id = prefixes[0] if prefixes else None  # primary tenant for hint
+        for pid in provider_ids:
+            tables_filter.extend(_PROVIDER_SHARED_TABLES.get(pid, []))
+
+        # Deduplicate in case user has multiple integrations of same type
+        tables_filter = list(dict.fromkeys(tables_filter))
 
         if not tables_filter:
             raise HTTPException(
                 status_code=422,
                 detail="Data sync not complete yet. Please wait for sync to finish."
             )
-        log.debug("NL query scoped to user tables",
-                  user=user["email"], table_count=len(tables_filter))
+        log.debug("NL query scoped to shared tables",
+                  user=user["email"], table_count=len(tables_filter),
+                  tenant_id=nl_tenant_id)
         conn = _get_internal_conn()
 
     try:
@@ -1221,15 +1395,35 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
         else:
             fkeys = all_fkeys
 
+        row_limit = history["row_limit"]
         sql = query_to_sql(req.question, schemas, llm, fkeys, api_key=api_key,
-                           user_email=user["email"], history_months=history["months"])
+                           user_email=user["email"], history_months=history["months"],
+                           tenant_id=nl_tenant_id if s.get("db_configs") is None else None,
+                           row_limit=row_limit)
+        # SEC-15: enforce tenant isolation for integration users.
+        # nl_tenant_id is set in the else-branch above; None for own-DB users.
+        if nl_tenant_id:
+            try:
+                sql = _enforce_tenant_isolation(sql, nl_tenant_id)
+            except ValueError as e:
+                raise HTTPException(status_code=403, detail=str(e))
+            # Fail-closed: if tenant_id literal is STILL absent after injection
+            # (e.g. highly unusual SQL structure the regex couldn't handle),
+            # refuse to execute rather than leak cross-tenant data.
+            if nl_tenant_id not in sql:
+                log.error("Tenant isolation enforcement failed — refusing to execute",
+                          user=user["email"], tenant_id=nl_tenant_id, sql=sql[:300])
+                raise HTTPException(
+                    status_code=500,
+                    detail="Could not generate a safely scoped query. Please rephrase your question."
+                )
         _guard_sql(sql)  # SEC-04: reject any mutating statement the LLM may have generated
         cursor = conn.cursor()
+        _set_query_timeout(cursor)
         cursor.execute(sql)
         columns = [desc[0] for desc in cursor.description]
         rows = cursor.fetchall()
         data = [{k: _safe(v) for k, v in dict(zip(columns, row)).items()} for row in rows]
-        row_limit = history["row_limit"]
         if len(data) > row_limit:
             data = data[:row_limit]
         log.info("NL query complete", user=user["email"], rows=len(data))
@@ -2072,11 +2266,22 @@ def run_integration_analytics(
             raise HTTPException(status_code=404, detail="Integration not connected")
 
         table_prefix = integration["table_prefix"]
-        conn = _get_internal_conn()
 
+        # Check result cache BEFORE borrowing a DB connection.
+        # Cached or not, the user is always billed — _charge_op fires either way.
+        if provider_id == "salesplay":
+            from providers.salesplay.analytics import run_salesplay_analytics, _cache_get
+            cached_result = _cache_get(table_prefix, req.template_id)
+            if cached_result is not None:
+                result = {**cached_result, "source": "integration", "provider": provider_id, "cached": True}
+                _apply_row_limit(result, _row_limit)
+                _charge_op(user["email"], _ANALYTICS_OP.get(req.template_id, "prebuilt_template"),
+                           result.get("row_count", 0))
+                return result
+
+        conn = _get_internal_conn()
         try:
             if provider_id == "salesplay":
-                from providers.salesplay.analytics import run_salesplay_analytics
                 result = run_salesplay_analytics(conn, table_prefix, req.template_id)
             elif provider_id == "loyverse":
                 from providers.loyverse.analytics import run_loyverse_analytics
@@ -2086,6 +2291,7 @@ def run_integration_analytics(
 
             result["source"]   = "integration"
             result["provider"] = provider_id
+            result["cached"]   = False
             _apply_row_limit(result, _row_limit)
             _charge_op(user["email"], _ANALYTICS_OP.get(req.template_id, "prebuilt_template"),
                        result.get("row_count", 0))

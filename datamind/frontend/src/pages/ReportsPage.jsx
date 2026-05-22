@@ -205,7 +205,7 @@ function RenderedReport({ report }) {
 
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
-export default function ReportsPage({ llm, setLlm, sub, onNavigate }) {
+export default function ReportsPage({ llm, setLlm, sub, onNavigate, onQueryComplete }) {
   const [title, setTitle]         = useState('')
   const [selected, setSelected]   = useState([])
   const [format, setFormat]       = useState('full')
@@ -232,7 +232,7 @@ export default function ReportsPage({ llm, setLlm, sub, onNavigate }) {
       setReports(r => [report, ...r])
       setActiveReport(report)
     } catch(e) { setError(e.response?.data?.detail || e.message) }
-    finally { setLoading(false) }
+    finally { setLoading(false); onQueryComplete?.() }
   }
 
   const categories = [...new Set(ALL_SECTIONS.map(s => s.category))]

@@ -1,41 +1,109 @@
-import mysql.connector
+import hashlib
 import os
+import threading
+import mysql.connector
+import mysql.connector.pooling
 from typing import List, Optional, Dict, Any
+
+# Per-user-DB connection pools.
+# Each unique (host, port, db, user, password) gets a small pool of
+# USER_DB_POOL_SIZE connections. Capped at MAX_USER_DB_POOLS active pools
+# to prevent unbounded growth; overflow users fall back to raw connections.
+_USER_DB_POOL_SIZE = int(os.getenv("USER_DB_POOL_SIZE", "3"))
+_MAX_USER_DB_POOLS = int(os.getenv("MAX_USER_DB_POOLS", "50"))
+_user_pools: Dict[str, mysql.connector.pooling.MySQLConnectionPool] = {}
+_user_pools_lock = threading.Lock()
+
+
+def _config_key(cfg: dict) -> str:
+    raw = f"{cfg.get('host')}:{cfg.get('port')}:{cfg.get('database')}:{cfg.get('user')}:{cfg.get('password')}"
+    return hashlib.md5(raw.encode(), usedforsecurity=False).hexdigest()[:16]
+
+
+def _get_or_create_user_pool(db_config: dict):
+    key = _config_key(db_config)
+    with _user_pools_lock:
+        if key in _user_pools:
+            return _user_pools[key]
+        if len(_user_pools) >= _MAX_USER_DB_POOLS:
+            return None  # too many pools — caller will use a raw connection
+
+    # Create pool outside the lock (slow operation)
+    try:
+        pool = mysql.connector.pooling.MySQLConnectionPool(
+            pool_name          = f"udb_{key}",
+            pool_size          = _USER_DB_POOL_SIZE,
+            pool_reset_session = True,
+            host               = db_config.get("host", "localhost"),
+            port               = int(db_config.get("port", 3306)),
+            database           = db_config.get("database", ""),
+            user               = db_config.get("user", "root"),
+            password           = db_config.get("password", ""),
+            connection_timeout = 10,
+        )
+    except Exception:
+        return None  # pool creation failed — caller falls back to raw connection
+
+    with _user_pools_lock:
+        if key not in _user_pools:
+            _user_pools[key] = pool
+        return _user_pools[key]
 
 
 def get_connection(db_config: dict = None):
     if db_config:
+        pool = _get_or_create_user_pool(db_config)
+        if pool is not None:
+            try:
+                return pool.get_connection()
+            except Exception:
+                pass  # pool exhausted or broken — fall through to raw connection
         return mysql.connector.connect(
-            host=db_config.get("host", "localhost"),
-            port=int(db_config.get("port", 3306)),
-            database=db_config.get("database", ""),
-            user=db_config.get("user", "root"),
-            password=db_config.get("password", ""),
-            connection_timeout=10,
+            host               = db_config.get("host", "localhost"),
+            port               = int(db_config.get("port", 3306)),
+            database           = db_config.get("database", ""),
+            user               = db_config.get("user", "root"),
+            password           = db_config.get("password", ""),
+            connection_timeout = 10,
         )
     return mysql.connector.connect(
-        host=os.getenv("DB_HOST", "localhost"),
-        port=int(os.getenv("DB_PORT", "3306")),
-        database=os.getenv("DB_NAME", ""),
-        user=os.getenv("DB_USER", "root"),
-        password=os.getenv("DB_PASSWORD", ""),
-        connection_timeout=10,
+        host               = os.getenv("DB_HOST", "localhost"),
+        port               = int(os.getenv("DB_PORT", "3306")),
+        database           = os.getenv("DB_NAME", ""),
+        user               = os.getenv("DB_USER", "root"),
+        password           = os.getenv("DB_PASSWORD", ""),
+        connection_timeout = 10,
     )
 
 
 def get_table_schemas(conn, tables: Optional[List[str]]) -> Dict[str, Any]:
     cursor = conn.cursor()
+    cursor.execute("SELECT DATABASE()")
+    db_name = cursor.fetchone()[0]
+
     if tables is None:
         cursor.execute("SHOW TABLES")
         tables = [row[0] for row in cursor.fetchall()]
-    schemas = {}
-    for table in tables:
-        cursor.execute(f"DESCRIBE `{table}`")
-        columns = cursor.fetchall()
-        schemas[table] = [
-            {"name": col[0], "type": col[1], "null": col[2], "key": col[3], "default": col[4]}
-            for col in columns
-        ]
+
+    if not tables:
+        return {}
+
+    placeholders = ", ".join(["%s"] * len(tables))
+    cursor.execute(
+        f"""
+        SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY, COLUMN_DEFAULT
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = %s AND TABLE_NAME IN ({placeholders})
+        ORDER BY TABLE_NAME, ORDINAL_POSITION
+        """,
+        [db_name, *tables],
+    )
+    schemas: Dict[str, Any] = {t: [] for t in tables}
+    for table_name, col_name, col_type, is_null, col_key, col_default in cursor.fetchall():
+        if table_name in schemas:
+            schemas[table_name].append(
+                {"name": col_name, "type": col_type, "null": is_null, "key": col_key, "default": col_default}
+            )
     return schemas
 
 

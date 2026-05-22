@@ -43,7 +43,7 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 
 from logger import get_logger
-from providers.upsert import upsert_record, lookup_map
+from providers.upsert import upsert_record, upsert_to_shared, lookup_map
 
 log = get_logger(__name__)
 
@@ -246,6 +246,7 @@ def sync_shops(client: SalesPlayAPIClient, conn, prefix: str, user_email: str,
         if upsert_record(conn, prefix, user_email, "salesplay", "shop", record,
                          id_field="id", ext_updated_field="updated_at", budget=budget):
             count += 1
+        upsert_to_shared(conn, "sp_shops", prefix, record)
 
     log.info("Synced shops", prefix=prefix, count=count)
     return count
@@ -275,6 +276,15 @@ def sync_categories(client: SalesPlayAPIClient, conn, prefix: str, user_email: s
                          id_field="id", ext_created_field="created_at",
                          ext_updated_field="updated_at", budget=budget):
             count += 1
+        upsert_to_shared(conn, "sp_categories", prefix, record)
+        # Back-fill category_name into sp_products so JOIN queries don't need it
+        if record.get("category_name") and record.get("id"):
+            _cur = conn.cursor()
+            _cur.execute(
+                "UPDATE sp_products SET category_name=%s WHERE tenant_id=%s AND category_id=%s",
+                (record["category_name"], prefix, record["id"]),
+            )
+            _cur.close()
 
     log.info("Synced categories", prefix=prefix, count=count)
     return count
@@ -362,6 +372,7 @@ def sync_payment_types(client: SalesPlayAPIClient, conn, prefix: str, user_email
                          id_field="id", ext_created_field="created_at",
                          ext_updated_field="updated_at", budget=budget):
             count += 1
+        upsert_to_shared(conn, "sp_payment_types", prefix, record)
 
     log.info("Synced payment_types", prefix=prefix, count=count)
     return count
@@ -407,6 +418,7 @@ def sync_customers(client: SalesPlayAPIClient, conn, prefix: str, user_email: st
                          id_field="id", ext_created_field="created_at",
                          ext_updated_field="updated_at", budget=budget):
             count += 1
+        upsert_to_shared(conn, "sp_customers", prefix, record)
 
     log.info("Synced customers", prefix=prefix, count=count)
     return count
@@ -450,10 +462,23 @@ def sync_products(client: SalesPlayAPIClient, conn, prefix: str, user_email: str
             "created_at":   _dt(p.get("created_at")),
             "updated_at":   _dt(p.get("updated_at") or p.get("updated_date")),
         }
+        # Enrich with category_name from already-synced sp_categories
+        cat_id = record.get("category_id")
+        if cat_id:
+            _cur = conn.cursor()
+            _cur.execute(
+                "SELECT category_name FROM sp_categories WHERE tenant_id=%s AND id=%s",
+                (prefix, cat_id),
+            )
+            cat_row = _cur.fetchone()
+            _cur.close()
+            record["category_name"] = cat_row[0] if cat_row else None
+
         if upsert_record(conn, prefix, user_email, "salesplay", "product", record,
                          id_field="id", ext_created_field="created_at",
                          ext_updated_field="updated_at", budget=budget):
             count += 1
+        upsert_to_shared(conn, "sp_products", prefix, record)
 
     log.info("Synced products", prefix=prefix, count=count)
     return count
@@ -553,6 +578,7 @@ def sync_receipts(client: SalesPlayAPIClient, conn, prefix: str, user_email: str
                          ext_created_field="created_at",
                          ext_updated_field="updated_at", budget=budget):
             receipt_count += 1
+        upsert_to_shared(conn, "sp_receipts", prefix, receipt_record)
 
         # Line items ("line_products" per API docs — NOT "line_items")
         for idx, item in enumerate(r.get("line_products") or []):
@@ -581,11 +607,24 @@ def sync_receipts(client: SalesPlayAPIClient, conn, prefix: str, user_email: str
                 "total_discount":   line_disc,
                 "total_money":      line_total,
                 "cost":             _dec(item.get("product_cost") or item.get("cost"), 0),
-                "created_at":       receipt_dt,
+                "created_at":       receipt_dt,  # denormalized from receipt for date filtering
             }
+
+            # Enrich line_item with category_name so analytics needs no JOIN to products
+            if prod_id:
+                _cur = conn.cursor()
+                _cur.execute(
+                    "SELECT category_name FROM sp_products WHERE tenant_id=%s AND id=%s",
+                    (prefix, prod_id),
+                )
+                prod_row = _cur.fetchone()
+                _cur.close()
+                li_record["category_name"] = prod_row[0] if prod_row else None
+
             # Line items don't consume budget separately — counted via receipt budget above
             upsert_record(conn, prefix, user_email, "salesplay", "receipt_line_item",
                           li_record, id_field="id", ext_created_field="created_at")
+            upsert_to_shared(conn, "sp_receipt_line_items", prefix, li_record)
             line_count += 1
 
     log.info("Synced receipts", prefix=prefix,

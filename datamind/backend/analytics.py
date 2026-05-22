@@ -1,8 +1,41 @@
+import hashlib
+import os
+import time
+import threading
 import pandas as pd
 import numpy as np
 from typing import List, Tuple, Any, Dict
 import datetime
 import decimal
+
+# ── ML result cache ───────────────────────────────────────────────────────────
+# Training Prophet / IsolationForest takes 2-10 seconds. Cache the result for
+# MODEL_CACHE_TTL seconds — same input data → instant response.
+_model_cache: dict = {}
+_model_cache_lock = threading.Lock()
+_MODEL_CACHE_TTL = int(os.getenv("MODEL_CACHE_TTL", "600"))
+
+
+def _rows_hash(rows: List[Tuple], *extra) -> str:
+    h = hashlib.md5(str(rows).encode() + str(extra).encode(), usedforsecurity=False)
+    return h.hexdigest()
+
+
+def _mcache_get(key: str):
+    with _model_cache_lock:
+        entry = _model_cache.get(key)
+    if entry:
+        result, exp = entry
+        if time.monotonic() < exp:
+            return result
+        with _model_cache_lock:
+            _model_cache.pop(key, None)
+    return None
+
+
+def _mcache_set(key: str, result) -> None:
+    with _model_cache_lock:
+        _model_cache[key] = (result, time.monotonic() + _MODEL_CACHE_TTL)
 
 
 def _safe_float(v):
@@ -26,6 +59,11 @@ def _safe(v):
 # ── Forecasting ───────────────────────────────────────────────────────────────
 
 def run_forecast(rows: List[Tuple], periods: int = 90) -> Dict:
+    cache_key = f"forecast:{_rows_hash(rows, periods)}"
+    cached = _mcache_get(cache_key)
+    if cached is not None:
+        return cached
+
     try:
         from prophet import Prophet
     except ImportError:
@@ -58,18 +96,25 @@ def run_forecast(rows: List[Tuple], periods: int = 90) -> Dict:
     next_30_avg = round(np.mean([f["yhat"] for f in fc_out[:30]]), 2) if fc_out else 0
     growth_pct = round((next_30_avg - last_val) / last_val * 100, 1) if last_val else 0
 
-    return {
+    result = {
         "historical": hist_out,
         "forecast": fc_out,
         "weekly_seasonality": weekly_avg,
         "periods": periods,
         "summary": {"last_actual": last_val, "next_30_avg": next_30_avg, "predicted_growth_pct": growth_pct}
     }
+    _mcache_set(cache_key, result)
+    return result
 
 
 # ── Anomaly Detection ─────────────────────────────────────────────────────────
 
 def run_anomaly_detection(rows: List[Tuple], has_date: bool = True) -> Dict:
+    cache_key = f"anomaly:{_rows_hash(rows, has_date)}"
+    cached = _mcache_get(cache_key)
+    if cached is not None:
+        return cached
+
     try:
         from sklearn.ensemble import IsolationForest
     except ImportError:
@@ -105,7 +150,9 @@ def run_anomaly_detection(rows: List[Tuple], has_date: bool = True) -> Dict:
     anomaly_list = [{"date": r["date_str"], "value": round(r["value"], 2), "anomaly_score": r["anomaly_score"], "zscore": r["zscore"], "severity": severity(r["zscore"])} for _, r in anomalies_df.iterrows()]
     series = [{"date": r["date_str"], "value": round(r["value"], 2), "score": r["anomaly_score"], "is_anomaly": r["anomaly_label"] == -1} for _, r in df.iterrows()]
 
-    return {"total_points": len(df), "anomaly_count": len(anomaly_list), "anomalies": anomaly_list, "series": series}
+    result = {"total_points": len(df), "anomaly_count": len(anomaly_list), "anomalies": anomaly_list, "series": series}
+    _mcache_set(cache_key, result)
+    return result
 
 
 # ── RFM Segmentation ──────────────────────────────────────────────────────────

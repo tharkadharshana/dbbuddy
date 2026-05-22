@@ -63,6 +63,44 @@ def upsert_record(
     return True
 
 
+def upsert_to_shared(conn, table: str, tenant_id: str, record: dict,
+                     pk_field: str = "id") -> None:
+    """
+    Write a record into a shared normalized table (sp_receipts, sp_products, etc.).
+
+    Prepends tenant_id automatically so callers don't have to.
+    Uses ON DUPLICATE KEY UPDATE so re-syncs overwrite cleanly.
+    Skips None values for non-PK columns to avoid overwriting good data with NULL.
+    """
+    if not record.get(pk_field):
+        return
+
+    row = {"tenant_id": tenant_id}
+    for k, v in record.items():
+        # Always include PK; skip other None values to avoid nulling out good columns
+        if v is not None or k == pk_field:
+            row[k] = v
+
+    cols         = list(row.keys())
+    vals         = [row[c] for c in cols]
+    placeholders = ", ".join(["%s"] * len(cols))
+    col_names    = ", ".join(f"`{c}`" for c in cols)
+    updates      = ", ".join(
+        f"`{c}` = VALUES(`{c}`)"
+        for c in cols if c not in ("tenant_id", pk_field)
+    )
+    if not updates:
+        return
+
+    cursor = conn.cursor()
+    cursor.execute(
+        f"INSERT INTO `{table}` ({col_names}) VALUES ({placeholders})"
+        f" ON DUPLICATE KEY UPDATE {updates}, synced_at = NOW()",
+        vals,
+    )
+    cursor.close()
+
+
 def lookup_map(conn, tenant_id: str, provider_id: str, record_type: str,
                id_field: str, name_field: str) -> Dict[str, str]:
     """

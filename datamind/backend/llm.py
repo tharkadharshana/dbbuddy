@@ -263,8 +263,9 @@ def call_llm(prompt: str, system: str = "", llm: str = "gemini",
                 log.info("LLM fallback succeeded", requested=requested, used=provider, user=user_email)
             if user_email:
                 try:
-                    from billing import charge_ai_usage
+                    from billing import charge_ai_usage, invalidate_sub_cache
                     charge_ai_usage(user_email, tokens or 0, provider, "llm_call")
+                    invalidate_sub_cache(user_email)
                 except Exception as _ce:
                     log.warning("charge_ai_usage failed silently", error=str(_ce))
             return result
@@ -308,7 +309,8 @@ def validate_llm_key(llm: str, api_key: str) -> Dict[str, Any]:
 
 def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "gemini",
                  fkeys: list = None, api_key: str = "", user_email: str = None,
-                 history_months: int = None) -> str:
+                 history_months: int = None, tenant_id: str = None,
+                 row_limit: int = 500) -> str:
     schema_text = schema_to_text(_filter_sensitive_schema(schemas), fkeys)
     history_hint = (
         f" Only return data from the last {history_months} month(s) — add "
@@ -316,13 +318,31 @@ def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "gemini",
         f"using the most relevant date/time column. If no date column exists, add LIMIT {history_months * 1000}."
         if history_months else ""
     )
+    limit_hint = (
+        f" Always end the query with LIMIT {row_limit} unless the user explicitly asked for all rows. "
+        f"Never generate a query without a LIMIT clause."
+    )
+    # For integration users querying shared sp_* tables, every table has a
+    # tenant_id column that MUST be scoped in WHERE and JOIN conditions.
+    tenant_hint = (
+        f" IMPORTANT: All sp_* tables are shared across multiple customers. "
+        f"The current user's tenant_id is '{tenant_id}'. Rules:\n"
+        f"1. Main WHERE clause must always include: WHERE tenant_id = '{tenant_id}'\n"
+        f"2. Every JOIN must scope the joined table too: "
+        f"JOIN sp_foo f ON f.id = a.foo_id AND f.tenant_id = '{tenant_id}'\n"
+        f"3. sp_receipt_line_items already has product_name and category_name columns — "
+        f"prefer using these directly instead of joining sp_products when possible.\n"
+        f"4. COUNT(DISTINCT receipt_id) on sp_receipt_line_items gives receipt count "
+        f"without needing to join sp_receipts."
+        if tenant_id else ""
+    )
     system = (
         "You are an expert MySQL query writer. "
         "Given a database schema (with foreign key relationships) and a plain English question, "
         "write a valid MySQL SELECT query that may JOIN multiple tables as needed. "
         "Return ONLY the raw SQL — no markdown, no backticks, no explanation. "
         "Never use DROP, DELETE, INSERT, UPDATE, or any mutating statement."
-        + history_hint
+        + history_hint + tenant_hint + limit_hint
     )
     prompt = f"Schema:\n{schema_text}\n\nQuestion: {question}\n\nSQL:"
     log.info("Generating SQL from NL question", llm=llm, question=question[:80])

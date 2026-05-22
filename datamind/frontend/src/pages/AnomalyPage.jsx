@@ -6,7 +6,7 @@ import { runAutoAnomalies, runAnomalies, fetchTables, fetchTableColumns } from '
 const TT = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)', borderRadius:8, fontSize:12, color:'#f0f1fa' }
 const SEV_COLOR = { high:'red', medium:'amber', low:'blue' }
 
-export default function AnomalyPage({ sub, onNavigate }) {
+export default function AnomalyPage({ sub, onNavigate, onQueryComplete }) {
   const [mode, setMode]       = useState('auto')
   const [loading, setLoading] = useState(false)
   const [result, setResult]   = useState(null)
@@ -45,7 +45,7 @@ export default function AnomalyPage({ sub, onNavigate }) {
         : await runAnomalies(form.table, form.value_column, form.date_column||null)
       setResult(data)
     } catch(e) { setError(e.response?.data?.error || e.response?.data?.detail || e.message) }
-    finally { setLoading(false) }
+    finally { setLoading(false); onQueryComplete?.() }
   }
 
   const chartData = result?.series.map(s => ({ date:s.date, score:s.score, anomaly: s.is_anomaly ? s.score : null })) || []

@@ -1,12 +1,60 @@
 """
 SalesPlay analytics templates.
-Table naming: schema.sql creates tables WITHOUT underscore separator,
-e.g. prefix="dm_abc123_salesplay" → tables are "dm_abc123_salesplayreceipts"
-All SQL here uses {prefix}tablename (no extra underscore).
+
+Queries target the shared normalized sp_* tables (tenant_id partitioned)
+instead of JSON views over integration_records. This eliminates the Block
+Nested Loop full-table-scan JOINs that caused top_products to take 507s
+and category_performance 680s.
+
+Before: JOIN between views → 37,848 × 37,848 comparisons, no usable index
+After:  Single-table GROUP BY with WHERE tenant_id='...' → uses (tenant_id,
+        created_at) composite index → milliseconds
+
+category_name is stored denormalized in sp_receipt_line_items at sync time,
+so the 4-table JOIN (receipts × line_items × products × categories) is gone.
 """
 
+import os
 import decimal
 import datetime
+import time as _time
+
+# ── TTL result cache ──────────────────────────────────────────────────────────
+# Simple in-memory cache per (tenant_id, template_id). Results are valid for
+# CACHE_TTL seconds. Busted automatically after each sync via cache_bust().
+
+_result_cache: dict = {}
+_CACHE_TTL = int(os.getenv("ANALYTICS_CACHE_TTL", "300"))  # configurable via .env
+
+
+def _cache_get(tenant_id: str, template_id: str):
+    key = (tenant_id, template_id)
+    entry = _result_cache.get(key)
+    if entry:
+        result, expires_at = entry
+        if _time.monotonic() < expires_at:
+            return result
+        del _result_cache[key]
+    return None
+
+
+def _cache_set(tenant_id: str, template_id: str, result: dict):
+    _result_cache[(tenant_id, template_id)] = (result, _time.monotonic() + _CACHE_TTL)
+
+
+def cache_bust(tenant_id: str) -> None:
+    """Invalidate all cached results for a tenant. Call after sync completes."""
+    for key in list(_result_cache):
+        if key[0] == tenant_id:
+            del _result_cache[key]
+
+
+# ── Analytics templates ───────────────────────────────────────────────────────
+# All queries use {tenant_id} placeholder — filled at runtime.
+# Single-table queries use sp_receipts (receipts are already denormalized with
+# shop_name, customer_name, payment_type_name).
+# Multi-entity queries use sp_receipt_line_items which carries product_name and
+# category_name denormalized at sync time — no JOINs needed.
 
 TEMPLATES = {
     "revenue_trend": {
@@ -20,8 +68,9 @@ TEMPLATES = {
                 ROUND(SUM(total_money), 2)  AS revenue,
                 COUNT(*)                    AS transactions,
                 ROUND(AVG(total_money), 2)  AS avg_ticket
-            FROM {prefix}receipts
-            WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
+            FROM sp_receipts
+            WHERE tenant_id = '{tenant_id}'
+              AND created_at >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
               AND receipt_type = 'SALE'
             GROUP BY DATE(created_at)
             ORDER BY date
@@ -35,18 +84,15 @@ TEMPLATES = {
         "type": "table",
         "sql": """
             SELECT
-                p.product_name                          AS product,
-                COALESCE(cat.category_name, '—')        AS category,
-                SUM(li.quantity)                        AS units_sold,
-                ROUND(SUM(li.total_money), 2)           AS revenue,
-                ROUND(AVG(li.price), 2)                 AS avg_price
-            FROM {prefix}receipt_line_items li
-            JOIN {prefix}products  p   ON li.product_id  = p.id
-            JOIN {prefix}receipts  r   ON li.receipt_id  = r.id
-            LEFT JOIN {prefix}categories cat ON p.category_id = cat.id
-            WHERE r.created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
-              AND r.receipt_type = 'SALE'
-            GROUP BY p.id, p.product_name, cat.category_name
+                product_name                            AS product,
+                COALESCE(category_name, '—')            AS category,
+                SUM(quantity)                           AS units_sold,
+                ROUND(SUM(total_money), 2)              AS revenue,
+                ROUND(AVG(price), 2)                    AS avg_price
+            FROM sp_receipt_line_items
+            WHERE tenant_id = '{tenant_id}'
+              AND created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+            GROUP BY product_name, category_name
             ORDER BY revenue DESC
             LIMIT 20
         """
@@ -59,15 +105,17 @@ TEMPLATES = {
         "type": "table",
         "sql": """
             SELECT
-                c.customer_name                         AS customer,
-                DATEDIFF(CURDATE(), MAX(r.created_at))  AS days_since_last_purchase,
-                COUNT(DISTINCT r.id)                    AS total_orders,
-                ROUND(SUM(r.total_money), 2)            AS lifetime_value,
-                ROUND(AVG(r.total_money), 2)            AS avg_order_value
-            FROM {prefix}customers c
-            JOIN {prefix}receipts  r ON c.id = r.customer_id
-            WHERE r.receipt_type = 'SALE'
-            GROUP BY c.id, c.customer_name
+                customer_name                           AS customer,
+                DATEDIFF(CURDATE(), MAX(created_at))    AS days_since_last_purchase,
+                COUNT(DISTINCT id)                      AS total_orders,
+                ROUND(SUM(total_money), 2)              AS lifetime_value,
+                ROUND(AVG(total_money), 2)              AS avg_order_value
+            FROM sp_receipts
+            WHERE tenant_id = '{tenant_id}'
+              AND receipt_type = 'SALE'
+              AND customer_name IS NOT NULL
+              AND customer_name != ''
+            GROUP BY customer_name
             ORDER BY lifetime_value DESC
             LIMIT 50
         """
@@ -84,8 +132,9 @@ TEMPLATES = {
                 COUNT(*)                                AS transaction_count,
                 ROUND(SUM(total_money), 2)              AS total_revenue,
                 ROUND(AVG(total_money), 2)              AS avg_transaction
-            FROM {prefix}receipts
-            WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+            FROM sp_receipts
+            WHERE tenant_id = '{tenant_id}'
+              AND created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
               AND receipt_type = 'SALE'
             GROUP BY payment_type_name
             ORDER BY total_revenue DESC
@@ -103,8 +152,9 @@ TEMPLATES = {
                 COUNT(*)                    AS transactions,
                 ROUND(SUM(total_money), 2)  AS revenue,
                 ROUND(AVG(total_money), 2)  AS avg_ticket
-            FROM {prefix}receipts
-            WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+            FROM sp_receipts
+            WHERE tenant_id = '{tenant_id}'
+              AND created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
               AND receipt_type = 'SALE'
             GROUP BY HOUR(created_at)
             ORDER BY hour_of_day
@@ -118,18 +168,15 @@ TEMPLATES = {
         "type": "table",
         "sql": """
             SELECT
-                COALESCE(cat.category_name, 'Uncategorized') AS category,
-                COUNT(DISTINCT p.id)                         AS products_count,
-                SUM(li.quantity)                             AS units_sold,
-                ROUND(SUM(li.total_money), 2)                AS revenue,
-                ROUND(AVG(li.price), 2)                      AS avg_price
-            FROM {prefix}receipt_line_items li
-            JOIN {prefix}products  p   ON li.product_id  = p.id
-            JOIN {prefix}receipts  r   ON li.receipt_id  = r.id
-            LEFT JOIN {prefix}categories cat ON p.category_id = cat.id
-            WHERE r.created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
-              AND r.receipt_type = 'SALE'
-            GROUP BY cat.id, cat.category_name
+                COALESCE(category_name, 'Uncategorized') AS category,
+                COUNT(DISTINCT product_name)             AS products_count,
+                SUM(quantity)                            AS units_sold,
+                ROUND(SUM(total_money), 2)               AS revenue,
+                ROUND(AVG(price), 2)                     AS avg_price
+            FROM sp_receipt_line_items
+            WHERE tenant_id = '{tenant_id}'
+              AND created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+            GROUP BY category_name
             ORDER BY revenue DESC
         """
     },
@@ -146,8 +193,9 @@ TEMPLATES = {
                 ROUND(SUM(total_money), 2)              AS revenue,
                 ROUND(AVG(total_money), 2)              AS avg_ticket,
                 COUNT(DISTINCT customer_id)             AS unique_customers
-            FROM {prefix}receipts
-            WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+            FROM sp_receipts
+            WHERE tenant_id = '{tenant_id}'
+              AND created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
               AND receipt_type = 'SALE'
             GROUP BY DATE(created_at)
             ORDER BY sale_date DESC
@@ -166,8 +214,9 @@ TEMPLATES = {
                 ROUND(SUM(total_money), 2)              AS revenue,
                 ROUND(AVG(total_money), 2)              AS avg_ticket,
                 COUNT(DISTINCT customer_id)             AS unique_customers
-            FROM {prefix}receipts
-            WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+            FROM sp_receipts
+            WHERE tenant_id = '{tenant_id}'
+              AND created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
               AND receipt_type = 'SALE'
             GROUP BY shop_id, shop_name
             ORDER BY revenue DESC
@@ -185,7 +234,7 @@ def _safe(v):
 
 
 def run_salesplay_analytics(conn, table_prefix: str, template_id: str) -> dict:
-    """Run a pre-built SalesPlay analytics template."""
+    """Run a pre-built SalesPlay analytics template against sp_* shared tables."""
     import re as _re
     if not _re.match(r'^[A-Za-z0-9_]+$', table_prefix):
         raise ValueError(f"Invalid table_prefix for analytics: {table_prefix!r}")
@@ -193,8 +242,13 @@ def run_salesplay_analytics(conn, table_prefix: str, template_id: str) -> dict:
     if template_id not in TEMPLATES:
         raise ValueError(f"Template '{template_id}' not found for SalesPlay")
 
+    # Return cached result if still fresh
+    cached = _cache_get(table_prefix, template_id)
+    if cached is not None:
+        return {**cached, "cached": True}
+
     template = TEMPLATES[template_id]
-    sql = template["sql"].format(prefix=table_prefix)
+    sql = template["sql"].format(tenant_id=table_prefix)
 
     cursor = conn.cursor()
     cursor.execute(sql)
@@ -204,11 +258,14 @@ def run_salesplay_analytics(conn, table_prefix: str, template_id: str) -> dict:
 
     data = [{col: _safe(val) for col, val in zip(cols, row)} for row in rows]
 
-    return {
-        "title": template["title"],
+    result = {
+        "title":       template["title"],
         "description": template["description"],
-        "type": template["type"],
-        "columns": cols,
-        "data": data,
-        "row_count": len(data),
+        "type":        template["type"],
+        "columns":     cols,
+        "data":        data,
+        "row_count":   len(data),
+        "cached":      False,
     }
+    _cache_set(table_prefix, template_id, result)
+    return result

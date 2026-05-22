@@ -37,6 +37,24 @@ _sync_progress: Dict[int, Dict] = {}
 # Prevents double-sync from scheduler + manual trigger racing on the same integration.
 _sync_active: set = set()
 
+# Max concurrent sync threads. Each sync borrows 3 pool connections.
+# MAX_CONCURRENT_SYNCS × 3 must leave headroom in DB_POOL_SIZE.
+# Default 5 syncs × 3 connections = 15 connections (safe with pool_size=20).
+_MAX_CONCURRENT_SYNCS = int(os.getenv("MAX_CONCURRENT_SYNCS", "5"))
+
+# Cache for get_integration() — result is static between syncs.
+# Every analytics click called get_integration() for a fresh DB query even though
+# table_prefix / status / display_label never change between syncs.
+_integration_cache: dict = {}            # (user_email, provider_id) → (row, expires_at)
+_integration_cache_lock = threading.Lock()
+_INTEGRATION_CACHE_TTL = int(os.getenv("INTEGRATION_CACHE_TTL", "300"))  # 5 minutes
+
+
+def _invalidate_integration_cache(user_email: str, provider_id: str) -> None:
+    """Bust a single integration entry. Call on connect, disconnect, or sync completion."""
+    with _integration_cache_lock:
+        _integration_cache.pop((user_email, provider_id), None)
+
 
 # ── Credential encryption ──────────────────────────────────────────────────────
 
@@ -135,6 +153,149 @@ def bootstrap_integration_tables():
             updated_at      DATETIME(3)  NOT NULL DEFAULT NOW(3) ON UPDATE NOW(3),
             PRIMARY KEY (id),
             UNIQUE KEY uq_state (tenant_id, provider_id, record_type)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """)
+    # ── SalesPlay shared normalized tables ─────────────────────────────────────
+    # Shared across ALL tenants — tenant_id is part of every primary key.
+    # This replaces per-user views over integration_records for analytics queries.
+    # JOINs between these tables use proper B-tree indexes → milliseconds not minutes.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sp_receipts (
+            tenant_id           VARCHAR(64)   NOT NULL,
+            id                  VARCHAR(64)   NOT NULL,
+            receipt_number      VARCHAR(100),
+            shop_id             VARCHAR(64),
+            shop_name           VARCHAR(255),
+            customer_id         VARCHAR(64),
+            customer_name       VARCHAR(255),
+            created_at          DATETIME,
+            updated_at          DATETIME,
+            total_money         DECIMAL(14,4) DEFAULT 0,
+            total_discount      DECIMAL(14,4) DEFAULT 0,
+            total_tax           DECIMAL(14,4) DEFAULT 0,
+            receipt_type        VARCHAR(30)   DEFAULT 'SALE',
+            status              VARCHAR(30)   DEFAULT 'COMPLETED',
+            payment_type_id     VARCHAR(64),
+            payment_type_name   VARCHAR(255),
+            payment_amount      DECIMAL(14,4) DEFAULT 0,
+            synced_at           DATETIME      DEFAULT NOW(),
+            PRIMARY KEY (tenant_id, id),
+            INDEX idx_date     (tenant_id, created_at),
+            INDEX idx_customer (tenant_id, customer_id),
+            INDEX idx_shop     (tenant_id, shop_id),
+            INDEX idx_type     (tenant_id, receipt_type),
+            INDEX idx_id       (id)           -- JOIN lookup without tenant_id
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sp_receipt_line_items (
+            tenant_id       VARCHAR(64)   NOT NULL,
+            id              VARCHAR(128)  NOT NULL,
+            receipt_id      VARCHAR(64)   NOT NULL,
+            product_id      VARCHAR(64),
+            variant_id      VARCHAR(64),
+            product_name    VARCHAR(500),
+            category_name   VARCHAR(255),
+            sku             VARCHAR(100),
+            quantity        DECIMAL(12,4) DEFAULT 0,
+            price           DECIMAL(12,4) DEFAULT 0,
+            gross_total_money DECIMAL(14,4) DEFAULT 0,
+            total_discount  DECIMAL(14,4) DEFAULT 0,
+            total_money     DECIMAL(14,4) DEFAULT 0,
+            cost            DECIMAL(12,4) DEFAULT 0,
+            created_at      DATETIME,
+            synced_at       DATETIME      DEFAULT NOW(),
+            PRIMARY KEY (tenant_id, id),
+            INDEX idx_receipt      (tenant_id, receipt_id),
+            INDEX idx_product      (tenant_id, product_id),
+            INDEX idx_date         (tenant_id, created_at),
+            INDEX idx_bare_receipt (receipt_id),  -- JOIN without tenant_id
+            INDEX idx_bare_product (product_id)   -- JOIN without tenant_id
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sp_products (
+            tenant_id       VARCHAR(64)   NOT NULL,
+            id              VARCHAR(64)   NOT NULL,
+            product_name    VARCHAR(500),
+            description     TEXT,
+            category_id     VARCHAR(64),
+            category_name   VARCHAR(255),
+            reference_id    VARCHAR(100),
+            sku             VARCHAR(100),
+            barcode         VARCHAR(100),
+            price           DECIMAL(12,4) DEFAULT 0,
+            cost            DECIMAL(12,4) DEFAULT 0,
+            is_active       TINYINT(1)    DEFAULT 1,
+            created_at      DATETIME,
+            updated_at      DATETIME,
+            synced_at       DATETIME      DEFAULT NOW(),
+            PRIMARY KEY (tenant_id, id),
+            INDEX idx_cat (tenant_id, category_id),
+            INDEX idx_id  (id)                    -- JOIN without tenant_id
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sp_customers (
+            tenant_id       VARCHAR(64)   NOT NULL,
+            id              VARCHAR(64)   NOT NULL,
+            customer_name   VARCHAR(255),
+            email           VARCHAR(255),
+            phone_number    VARCHAR(50),
+            customer_code   VARCHAR(100),
+            note            TEXT,
+            total_visits    INT           DEFAULT 0,
+            total_spent     DECIMAL(14,4) DEFAULT 0,
+            points_balance  DECIMAL(12,2) DEFAULT 0,
+            created_at      DATETIME,
+            updated_at      DATETIME,
+            synced_at       DATETIME      DEFAULT NOW(),
+            PRIMARY KEY (tenant_id, id),
+            INDEX idx_id    (id)                  -- JOIN without tenant_id
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sp_categories (
+            tenant_id       VARCHAR(64)   NOT NULL,
+            id              VARCHAR(64)   NOT NULL,
+            category_name   VARCHAR(255),
+            color           VARCHAR(20),
+            shop_id         VARCHAR(64),
+            created_at      DATETIME,
+            updated_at      DATETIME,
+            synced_at       DATETIME      DEFAULT NOW(),
+            PRIMARY KEY (tenant_id, id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sp_shops (
+            tenant_id   VARCHAR(64)   NOT NULL,
+            id          VARCHAR(64)   NOT NULL,
+            shop_name   VARCHAR(255),
+            address     VARCHAR(500),
+            phone       VARCHAR(50),
+            email       VARCHAR(255),
+            currency    VARCHAR(10),
+            country     VARCHAR(10),
+            timezone    VARCHAR(100),
+            status      VARCHAR(20),
+            updated_at  DATETIME,
+            synced_at   DATETIME      DEFAULT NOW(),
+            PRIMARY KEY (tenant_id, id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sp_payment_types (
+            tenant_id    VARCHAR(64)   NOT NULL,
+            id           VARCHAR(64)   NOT NULL,
+            payment_name VARCHAR(255),
+            payment_type VARCHAR(50),
+            is_active    TINYINT(1)    DEFAULT 1,
+            shop_id      VARCHAR(64),
+            created_at   DATETIME,
+            updated_at   DATETIME,
+            synced_at    DATETIME      DEFAULT NOW(),
+            PRIMARY KEY (tenant_id, id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """)
     conn.commit()
@@ -492,7 +653,22 @@ def _create_views_for_integration(conn, table_prefix: str, provider_id: str):
 # ── Core integration operations ───────────────────────────────────────────────
 
 def get_integration(user_email: str, provider_id: str) -> Optional[Dict]:
-    """Fetch a user's integration record (without credentials)."""
+    """Fetch a user's integration record (without credentials).
+
+    Result is cached for INTEGRATION_CACHE_TTL seconds — table_prefix and status
+    don't change between syncs so repeated reads from analytics/forecast endpoints
+    are served from memory without hitting the DB.
+    """
+    key = (user_email, provider_id)
+    with _integration_cache_lock:
+        entry = _integration_cache.get(key)
+    if entry:
+        row, exp = entry
+        if time.monotonic() < exp:
+            return row
+        with _integration_cache_lock:
+            _integration_cache.pop(key, None)
+
     conn = _get_internal_conn()
     cursor = conn.cursor(dictionary=True)
     cursor.execute("""
@@ -503,6 +679,10 @@ def get_integration(user_email: str, provider_id: str) -> Optional[Dict]:
     """, (user_email, provider_id))
     row = cursor.fetchone()
     conn.close()
+
+    if row is not None:
+        with _integration_cache_lock:
+            _integration_cache[key] = (row, time.monotonic() + _INTEGRATION_CACHE_TTL)
     return row
 
 
@@ -550,10 +730,10 @@ def connect_integration(
     if not result.ok:
         raise ValueError(f"Credential validation failed: {result.error}")
 
-    # Create compatibility views (unified tables already exist via bootstrap)
+    # Shared sp_* tables are created at bootstrap — no per-connection DDL needed.
+    # _create_views_for_integration() is kept defined for reference but no longer
+    # called; existing views on live connections continue to work harmlessly.
     conn = _get_internal_conn()
-    _create_views_for_integration(conn, table_prefix, provider_id)
-    conn.commit()
 
     # Save integration record
     enc_creds = _encrypt(creds)
@@ -571,6 +751,7 @@ def connect_integration(
     conn.commit()
     integration_id = cursor.lastrowid or _get_integration_id(cursor, user_email, provider_id)
     conn.close()
+    _invalidate_integration_cache(user_email, provider_id)  # status changed to active
 
     # Trigger full sync in background
     _start_sync_thread(integration_id, user_email, provider_id, sync_type="full",
@@ -854,10 +1035,24 @@ def _run_sync_inner(integration_id: int, user_email: str, provider_id: str,
     log.info("Sync worker finished", user=user_email, provider=provider_id,
              status=status, rows=result.rows_fetched)
 
+    # Bust analytics result cache so next query gets fresh post-sync data
+    if result.ok and provider_id == "salesplay":
+        try:
+            from providers.salesplay.analytics import cache_bust
+            cache_bust(table_prefix)
+            log.debug("Analytics cache busted after sync", prefix=table_prefix)
+        except Exception:
+            pass
+
 
 def _start_sync_thread(integration_id: int, user_email: str, provider_id: str,
                        sync_type: str = "delta", progress_callback=None) -> bool:
-    """Start a sync thread. Returns False (and skips) if a sync is already in progress."""
+    """Start a sync thread. Returns False (and skips) if pool is full or already running."""
+    if len(_sync_active) >= _MAX_CONCURRENT_SYNCS:
+        log.warning("Sync skipped — concurrent sync limit reached",
+                    active=len(_sync_active), limit=_MAX_CONCURRENT_SYNCS,
+                    user=user_email, provider=provider_id)
+        return False
     if integration_id in _sync_active:
         log.info("Sync skipped — already in progress",
                  user=user_email, provider=provider_id, integration_id=integration_id)
