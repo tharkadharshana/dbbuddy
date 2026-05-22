@@ -5,7 +5,7 @@ import { Spinner } from '../components/UI'
 // ── Plan definitions ──────────────────────────────────────────────────────────
 const PLAN_FEATURES = {
   Starter: [
-    { text: '500 Tokens / month',        ok: true  },
+    { text: '100 Tokens / month',        ok: true  },
     { text: 'Ask Your Data (AI)',         ok: true  },
     { text: 'All Analytics',             ok: true  },
     { text: 'All Reports',               ok: true  },
@@ -14,7 +14,7 @@ const PLAN_FEATURES = {
     { text: '1 Month data history',      ok: true  },
   ],
   Growth: [
-    { text: '1,500 Tokens / month',      ok: true  },
+    { text: '250 Tokens / month',        ok: true  },
     { text: 'Ask Your Data (AI)',         ok: true  },
     { text: 'All Analytics',             ok: true  },
     { text: 'All Reports',               ok: true  },
@@ -23,7 +23,7 @@ const PLAN_FEATURES = {
     { text: '3 Months data history',     ok: true  },
   ],
   Pro: [
-    { text: '10,000 Tokens / month',     ok: true  },
+    { text: '1,000 Tokens / month',      ok: true  },
     { text: 'Ask Your Data (AI)',         ok: true  },
     { text: 'All Analytics',             ok: true  },
     { text: 'All Reports',               ok: true  },
