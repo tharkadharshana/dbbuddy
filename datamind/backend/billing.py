@@ -275,6 +275,26 @@ def bootstrap_billing_tables():
             VALUES ('ai_credit_rate', '1.0')
         """)
 
+        # Personal API keys for Pro users — programmatic access to /v1/* endpoints.
+        # Keys are stored in plaintext (prefix dm_live_ makes them identifiable).
+        # Each user can have at most one active key at a time; regenerating
+        # deactivates the old one (active=0) and inserts a new row.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_api_keys (
+                id           INT           NOT NULL AUTO_INCREMENT,
+                user_email   VARCHAR(255)  NOT NULL,
+                api_key      VARCHAR(128)  NOT NULL,
+                name         VARCHAR(100)  NOT NULL DEFAULT 'Default',
+                active       TINYINT(1)   NOT NULL DEFAULT 1,
+                created_at   DATETIME     NOT NULL DEFAULT NOW(),
+                last_used_at DATETIME,
+                PRIMARY KEY (id),
+                UNIQUE KEY uq_key (api_key),
+                INDEX idx_uak_email  (user_email),
+                INDEX idx_uak_active (user_email, active)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """)
+
         # Seed plans  (name, price_usd, price_cents, ai_credits, db_rows, sort_order)
         plans = [
             ("Starter", "5.00",   500,   100,  2_000_000,    1),
