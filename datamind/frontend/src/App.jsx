@@ -14,7 +14,6 @@ import DocsPage          from './pages/DocsPage'
 import Sidebar           from './components/Sidebar'
 import UsageLimitBanner  from './components/UsageLimitBanner'
 import { fetchTables, fetchCacheStatus, fetchSettings, fetchConnectedProviders, fetchProviderStats, fetchSubscription, listConversations } from './utils/api'
-import ConversationSidebar from './components/ConversationSidebar'
 
 export default function App() {
   const [user, setUser]       = useState(() => {
@@ -30,7 +29,6 @@ export default function App() {
   const [sub, setSub]             = useState(null)
   const [conversations, setConversations]   = useState([])
   const [activeConvId, setActiveConvId]     = useState(null)
-  const [convSidebarOpen, setConvSidebarOpen] = useState(false)
   const subIntervalRef = useRef(null)
   const pollRef = useRef(null)
 
@@ -173,47 +171,12 @@ export default function App() {
         totalRows={totalRows}
         theme={theme}
         setTheme={setTheme}
+        conversations={conversations}
+        activeConvId={activeConvId}
+        onConvSelect={handleConvSelect}
+        onConvCreate={() => { setActiveConvId(null); setPage('chat') }}
+        onConvDelete={handleConvDeleted}
       />
-
-      {/* Conversation history panel — only on chat page, collapsed by default */}
-      {page === 'chat' && (
-        <>
-          {/* Toggle tab — always visible when on chat page */}
-          <div
-            onClick={() => setConvSidebarOpen(o => !o)}
-            title={convSidebarOpen ? 'Hide chat history' : 'Show chat history'}
-            style={{
-              width: 18,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              borderRight: '1px solid var(--border)',
-              background: 'var(--bg1)',
-              color: 'var(--text3)',
-              fontSize: 11,
-              flexShrink: 0,
-              userSelect: 'none',
-              transition: 'color .15s',
-            }}
-            onMouseEnter={e => e.currentTarget.style.color = 'var(--text)'}
-            onMouseLeave={e => e.currentTarget.style.color = 'var(--text3)'}
-          >
-            {convSidebarOpen ? '‹' : '›'}
-          </div>
-
-          {convSidebarOpen && (
-            <ConversationSidebar
-              conversations={conversations}
-              activeConvId={activeConvId}
-              onSelect={handleConvSelect}
-              onCreate={() => { setActiveConvId(null); setPage('chat') }}
-              onDelete={handleConvDeleted}
-            />
-          )}
-        </>
-      )}
-
       <main style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', minWidth:0 }}>
         <UsageLimitBanner sub={sub} onNavigate={setPage} />
         <div style={{ flex:1, overflow: noScroll ? 'hidden' : 'auto' }}>
