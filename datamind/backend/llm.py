@@ -308,13 +308,18 @@ def validate_llm_key(llm: str, api_key: str) -> Dict[str, Any]:
 
 def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "gemini",
                  fkeys: list = None, api_key: str = "", user_email: str = None,
-                 history_months: int = None, tenant_id: str = None) -> str:
+                 history_months: int = None, tenant_id: str = None,
+                 row_limit: int = 500) -> str:
     schema_text = schema_to_text(_filter_sensitive_schema(schemas), fkeys)
     history_hint = (
         f" Only return data from the last {history_months} month(s) — add "
         f"WHERE date_col >= DATE_SUB(NOW(), INTERVAL {history_months} MONTH) "
         f"using the most relevant date/time column. If no date column exists, add LIMIT {history_months * 1000}."
         if history_months else ""
+    )
+    limit_hint = (
+        f" Always end the query with LIMIT {row_limit} unless the user explicitly asked for all rows. "
+        f"Never generate a query without a LIMIT clause."
     )
     # For integration users querying shared sp_* tables, every table has a
     # tenant_id column that MUST be scoped in WHERE and JOIN conditions.
@@ -336,7 +341,7 @@ def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "gemini",
         "write a valid MySQL SELECT query that may JOIN multiple tables as needed. "
         "Return ONLY the raw SQL — no markdown, no backticks, no explanation. "
         "Never use DROP, DELETE, INSERT, UPDATE, or any mutating statement."
-        + history_hint + tenant_hint
+        + history_hint + tenant_hint + limit_hint
     )
     prompt = f"Schema:\n{schema_text}\n\nQuestion: {question}\n\nSQL:"
     log.info("Generating SQL from NL question", llm=llm, question=question[:80])

@@ -1227,9 +1227,11 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
         else:
             fkeys = all_fkeys
 
+        row_limit = history["row_limit"]
         sql = query_to_sql(req.question, schemas, llm, fkeys, api_key=api_key,
                            user_email=user["email"], history_months=history["months"],
-                           tenant_id=nl_tenant_id if s.get("db_configs") is None else None)
+                           tenant_id=nl_tenant_id if s.get("db_configs") is None else None,
+                           row_limit=row_limit)
         _guard_sql(sql)  # SEC-04: reject any mutating statement the LLM may have generated
         cursor = conn.cursor()
         cursor.execute(f"SET SESSION max_execution_time={_SQL_TIMEOUT_MS}")
@@ -1237,7 +1239,6 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
         columns = [desc[0] for desc in cursor.description]
         rows = cursor.fetchall()
         data = [{k: _safe(v) for k, v in dict(zip(columns, row)).items()} for row in rows]
-        row_limit = history["row_limit"]
         if len(data) > row_limit:
             data = data[:row_limit]
         log.info("NL query complete", user=user["email"], rows=len(data))
