@@ -6,6 +6,7 @@ All tables live in DataMind's internal DB (same env vars as integrations.py).
 """
 import os
 import time as _time
+import threading as _threading
 from typing import Optional, Dict, List, Tuple
 from datetime import date, timedelta
 import mysql.connector
@@ -24,8 +25,8 @@ log = get_logger(__name__)
 # correctly (charge_tokens always writes to DB); only the read-side check is cached.
 # Cache is busted immediately on subscribe/cancel so plan changes take effect instantly.
 
-_sub_cache: dict = {}          # email → (result_dict, expires_at)
-_sub_cache_lock = _threading.Lock()  # noqa: F821 — _threading imported below
+_sub_cache: dict = {}
+_sub_cache_lock = _threading.Lock()
 _SUB_CACHE_TTL = int(os.getenv("SUB_CACHE_TTL", "60"))  # seconds, configurable via .env
 
 def _sub_cache_get(email: str):
@@ -50,7 +51,6 @@ def invalidate_sub_cache(email: str):
 
 # Track consecutive billing-check failures so we can alert when the DB is
 # persistently unavailable (fail-open is intentional but should not be silent).
-import threading as _threading
 _billing_fail_count = 0
 _billing_fail_lock  = _threading.Lock()
 _BILLING_FAIL_WARN_EVERY = 10  # log an escalated warning every N consecutive failures
