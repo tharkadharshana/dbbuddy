@@ -1571,6 +1571,112 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# DEVELOPER API KEY MANAGEMENT  (Pro plan only)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _require_pro(user_email: str):
+    """Raise 403 if the user is not on the Pro plan."""
+    ok, reason = check_plan_feature(user_email, "partner_api")
+    if not ok:
+        raise HTTPException(status_code=403,
+                            detail="Developer API access requires the Pro plan.")
+
+
+def _generate_api_key() -> str:
+    import secrets
+    return f"dm_live_{secrets.token_urlsafe(32)}"
+
+
+@v1.get("/developer/key")
+@_limiter.limit(RL_READ)
+def get_developer_key(request: Request, user: dict = Depends(current_user)):
+    """Return the user's active API key (masked except the prefix and last 4 chars)."""
+    _require_pro(user["email"])
+    conn = _get_internal_conn()
+    try:
+        cur = conn.cursor(dictionary=True)
+        cur.execute(
+            """
+            SELECT api_key, name, created_at, last_used_at
+            FROM user_api_keys
+            WHERE user_email=%s AND active=1
+            ORDER BY id DESC LIMIT 1
+            """,
+            (user["email"],),
+        )
+        row = cur.fetchone()
+        if not row:
+            return {"ok": True, "key": None}
+        key = row["api_key"]
+        masked = key[:12] + "•" * (len(key) - 16) + key[-4:]
+        return {
+            "ok": True,
+            "key": {
+                "masked":       masked,
+                "prefix":       key[:12],
+                "name":         row["name"],
+                "created_at":   str(row["created_at"]),
+                "last_used_at": str(row["last_used_at"]) if row["last_used_at"] else None,
+            },
+        }
+    finally:
+        cur.close()
+        conn.close()
+
+
+@v1.post("/developer/key")
+@_limiter.limit(RL_WRITE)
+def generate_developer_key(request: Request, user: dict = Depends(current_user)):
+    """
+    Generate a new API key for the user.
+    Any existing active key is deactivated first.
+    The full key is returned ONCE — store it safely.
+    """
+    _require_pro(user["email"])
+    new_key = _generate_api_key()
+    conn = _get_internal_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE user_api_keys SET active=0 WHERE user_email=%s AND active=1",
+            (user["email"],),
+        )
+        cur.execute(
+            """
+            INSERT INTO user_api_keys (user_email, api_key, name, active)
+            VALUES (%s, %s, 'Default', 1)
+            """,
+            (user["email"], new_key),
+        )
+        conn.commit()
+        log.info("API key generated", user=user["email"])
+        return {"ok": True, "key": new_key}
+    finally:
+        cur.close()
+        conn.close()
+
+
+@v1.delete("/developer/key")
+@_limiter.limit(RL_WRITE)
+def revoke_developer_key(request: Request, user: dict = Depends(current_user)):
+    """Revoke (deactivate) the user's active API key."""
+    _require_pro(user["email"])
+    conn = _get_internal_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE user_api_keys SET active=0 WHERE user_email=%s AND active=1",
+            (user["email"],),
+        )
+        conn.commit()
+        revoked = cur.rowcount > 0
+        return {"ok": True, "revoked": revoked}
+    finally:
+        cur.close()
+        conn.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # CONVERSATION MEMORY
 # ══════════════════════════════════════════════════════════════════════════════
 
