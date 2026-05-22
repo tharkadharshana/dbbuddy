@@ -38,36 +38,38 @@ Caching eliminates the repeated cost after the first request.
 | **Cache key** | `user_email` (string) |
 | **Cache value** | Full subscription dict — plan name, token usage, limits, trial status, expiry |
 
-### What it caches
+### Cache 1 — Stored data
 
 The result of `get_user_subscription(user_email)`, which queries:
+
 - `users` table (trial status, trial expiry)
 - `user_subscriptions` table (active plan, start date)
 - `subscription_plans` table (plan limits, price)
 - `ai_usage_log` table (`COUNT(*)` of tokens used this billing period)
 
-### Why it exists
+### Cache 1 — Reason
 
 `check_ai_limit()` is called at the start of **every** compute request — NL query,
 analytics run, forecast, anomaly detection, report. Without caching, that is 5+
 DB queries on every button click. With a 60-second cache, the first request in any
 minute hits the DB; all subsequent requests in that minute are served from memory.
 
-### Acceptable lag
+### Cache 1 — Acceptable lag
 
 If a user hits their token limit, they can continue making requests for up to
 `SUB_CACHE_TTL` seconds before being blocked. Default is 60 seconds. Lower this
 value if stricter enforcement is needed (minimum recommended: 30s).
 
-### Cache invalidation
+### Cache 1 — Invalidation
 
 Explicitly busted (entry deleted from `_sub_cache`) when:
+
 - User subscribes to or changes a plan → `subscribe_to_plan()`
 - User starts a free trial → `start_trial()`
 
 Not busted when tokens are charged — this is intentional (the lag is the TTL).
 
-### Code location
+### Cache 1 — Code location
 
 ```python
 # billing.py
@@ -94,22 +96,23 @@ def invalidate_sub_cache(email: str): ...
 | **Cache key** | `(tenant_id, template_id)` tuple |
 | **Cache value** | Full query result dict — columns, rows, metadata |
 
-### What it caches
+### Cache 2 — Stored data
 
 The complete result of every Analytics Hub template query. Templates include:
 `revenue_trend`, `top_products`, `category_performance`, `customer_analysis`,
 `payment_breakdown`, `hourly_heatmap`, `shop_comparison`, `inventory_risk`.
 
-### Why it exists
+### Cache 2 — Reason
 
 Before the `sp_*` shared table migration, these queries took 507–680 seconds due
 to BNL joins on JSON views. After the migration they take 0.035–0.5 seconds.
 Even at that speed, caching is valuable: repeated clicks on the same template
 (e.g. a user refreshing the dashboard) return instantly with zero DB hit.
 
-### Cache invalidation
+### Cache 2 — Invalidation
 
 Explicitly busted for a specific tenant when a sync completes:
+
 ```python
 # called in integrations.py after _run_sync_inner() succeeds
 from providers.salesplay.analytics import cache_bust
@@ -119,7 +122,7 @@ cache_bust(tenant_id)
 This deletes all cached entries for that tenant so the next click fetches
 fresh post-sync data.
 
-### Code location
+### Cache 2 — Code location
 
 ```python
 # providers/salesplay/analytics.py
@@ -146,28 +149,29 @@ def cache_bust(tenant_id): ...   # called after sync
 | **Cache key** | `(user_email, provider_id)` tuple |
 | **Cache value** | Full `user_integrations` DB row — `table_prefix`, `status`, `last_sync_at`, credentials (encrypted), etc. |
 
-### What it caches
+### Cache 3 — Stored data
 
 The result of `get_integration(user_email, provider_id)`, which does a single
 `SELECT` on `user_integrations`. This row is needed on every NL query and
 analytics request to look up the user's `table_prefix` (their tenant ID in
 the shared `sp_*` tables).
 
-### Why it exists
+### Cache 3 — Reason
 
 `get_integration()` is called by `get_user_connections()`, which is called by
 the NL query endpoint, analytics endpoint, forecast endpoint, and anomaly
 detection endpoint. Before caching this was a DB round-trip on every request
 for every integration user.
 
-### Cache invalidation
+### Cache 3 — Invalidation
 
 Explicitly busted (entry deleted) when the integration row changes:
+
 - User connects a new provider → `connect_integration()`
 - User disconnects a provider → `disconnect_integration()`
 - A sync completes or fails → `_run_sync_inner()`
 
-### Code location
+### Cache 3 — Code location
 
 ```python
 # integrations.py
@@ -193,25 +197,25 @@ def _invalidate_integration_cache(user_email: str, provider_id: str): ...
 | **Cache key** | `MD5(str(rows) + str(params))` — a hash of the input data and parameters |
 | **Cache value** | Full result dict — historical series, forecast points, anomaly list, summary stats |
 
-### What it caches
+### Cache 4 — Stored data
 
 - `run_forecast(rows, periods)` — Prophet ML model: fit + predict
 - `run_anomaly_detection(rows, has_date)` — IsolationForest: fit + score
 
-### Why it exists
+### Cache 4 — Reason
 
 Training Prophet takes 2–8 seconds. Training IsolationForest takes 0.5–3 seconds.
 These are called on every forecast or anomaly detection request. If a user clicks
 the same chart twice (or two users look at the same data), the model is retrained
 from scratch each time — wasteful.
 
-### Cache invalidation
+### Cache 4 — Invalidation
 
 **No explicit bust needed.** The cache key is an MD5 hash of the actual input rows.
 When new data arrives after a sync, `rows` changes → different hash → cache miss →
 model retrained on fresh data. Stale entries expire naturally after `MODEL_CACHE_TTL`.
 
-### Code location
+### Cache 4 — Code location
 
 ```python
 # analytics.py
@@ -237,24 +241,24 @@ def _mcache_set(key: str, result): ...
 | **Cache key** | Global singleton — one per process |
 | **Cache value** | `"max_execution_time"` (MySQL 5.7.8+) or `"max_statement_time"` (MariaDB) or `None` (unsupported) |
 
-### What it caches
+### Cache 5 — Stored data
 
 Which session variable name to use when setting a per-query timeout before
 executing user-facing SQL. MySQL and MariaDB use different variable names.
 
-### Why it exists
+### Cache 5 — Reason
 
 `_set_query_timeout()` is called before every NL query execution. Without
 caching, it would probe the server on every query to find the right variable
 name. The server type never changes while the process is running, so probing
 once and caching the result is correct.
 
-### Cache invalidation
+### Cache 5 — Invalidation
 
 Never busted. Set once on the first NL query, used for the lifetime of the
 process. Resets on server restart.
 
-### Code location
+### Cache 5 — Code location
 
 ```python
 # main.py
@@ -294,7 +298,7 @@ MODEL_CACHE_TTL=600
 
 ## Request Flow — Where Each Cache Is Hit
 
-```
+```text
 User clicks "Top Products" in Analytics Hub
 │
 ├─ check_ai_limit()
@@ -325,42 +329,195 @@ User clicks "Forecast" chart
 
 ---
 
-## Important Limitations
+## Known Limitations & End-User Impact
 
-### Per-process — not shared across workers
+### Limitation 1 — Per-process cache (not shared across workers)
 
-Each uvicorn worker is a separate Python process with its own memory.
-If `UVICORN_WORKERS=4`, there are 4 independent copies of every cache.
+**Technical cause:**
+Each uvicorn worker is a separate OS process with its own private memory.
+`UVICORN_WORKERS=4` means 4 completely independent copies of every cache dict.
+A cache bust triggered in Worker 1 has no effect on Workers 2, 3, or 4.
+Those workers continue serving their stale cached values until the TTL expires.
 
-Consequence: Worker 1 busting the analytics cache after a sync does not
-affect Workers 2, 3, or 4. Those workers will serve stale cached results
-until their own TTL expires.
+**Does this affect you now?**
+No. Your `.env` sets `UVICORN_WORKERS=1`. With a single worker there is no
+split — one cache, one process, busts always take effect immediately.
+This limitation only applies when you scale to multiple workers in production.
 
-**In practice:** With the default TTL values (60–600s) and typical sync
-intervals (every few hours), this is acceptable. The maximum stale window
-is equal to the TTL of the affected cache.
+---
 
-**Fix if this becomes a problem:** Move caches to Redis. All workers share
-one Redis instance. Cache busts are immediately visible to all workers.
-This is a post-MVP infrastructure concern.
+#### Impact on Cache 1 — Billing (multi-worker)
 
-### Lost on server restart
+**Scenario:** A user's token balance hits zero. The request that exhausts the
+tokens lands on Worker 1, which busts its own billing cache. The user's next
+request lands on Worker 2. Worker 2 still has the old "tokens available" result
+in its cache. Worker 2 allows the request through.
 
-All caches are plain Python dicts. A server restart wipes them completely.
-The first request after restart always hits the DB for every cache.
-This is expected and correct — startup is fast, caches warm up in seconds.
+**What the user experiences:**
+A user who should be blocked by their token limit can continue making AI
+requests for up to 60 more seconds (the TTL), provided those requests are
+routed to a different worker.
 
-### No persistence, no replication
+**How bad is it:**
+Minor at current scale. With low user counts, the probability of hitting a
+different worker on the very next request is low. At high concurrency (many
+simultaneous requests) the probability increases. A determined user could
+intentionally spam requests to extract extra usage.
 
-Caches exist only in RAM. If the server crashes and restarts, the first
-wave of requests after restart will see slightly higher DB load until
-caches warm up again. This is not a correctness concern — only a
-brief performance concern.
+**Mitigation options:**
 
-### Current storage: single server only
+- Lower `SUB_CACHE_TTL` to `30` — halves the maximum overage window with
+  minimal DB cost increase (one extra query per user per 30s vs per 60s).
+- Set `SUB_CACHE_TTL=0` to disable billing cache entirely — correct behaviour
+  but adds 5+ DB queries to every compute request; only do this if the DB
+  can handle the load.
+- Migrate to Redis — billing cache is shared across all workers; bust in
+  Worker 1 is instantly visible to all other workers. Correct at any scale.
 
-This caching design is correct for the current single-server deployment.
-If DataMind ever runs on **multiple servers** behind a load balancer
-(not just multiple workers on one server), the in-process caches will
-cause correctness issues: a billing bust on Server A won't reach Server B.
-At that point, migrate to Redis.
+---
+
+#### Impact on Cache 2 — Analytics results (multi-worker)
+
+**Scenario:** A sync completes. `cache_bust(tenant_id)` is called on whichever
+worker ran the sync job. The user refreshes the Analytics Hub. Their request
+lands on a different worker that still has the pre-sync result cached.
+
+**What the user experiences:**
+After a sync completes, the user sees old analytics data for up to 5 minutes
+depending on which worker serves their requests. The data is not wrong — it
+is simply from before the latest sync. The user may think the sync did not work.
+
+**How bad is it:**
+Mildly confusing. Not a data correctness issue — the user is only looking at
+their own data, just an older snapshot of it. After the TTL expires, all
+workers return fresh results automatically.
+
+**Mitigation options:**
+
+- Lower `ANALYTICS_CACHE_TTL` to `60` — stale window reduced to 1 minute
+  at the cost of more frequent SQL queries on `sp_*` tables.
+- Migrate to Redis — bust is shared across all workers instantly after sync.
+
+---
+
+#### Impact on Cache 3 — Integration metadata (multi-worker)
+
+**Scenario:** A user disconnects a provider in settings. The disconnect is
+processed by Worker 1, which busts that user's integration cache entry.
+The user's next NL query or analytics request lands on Worker 2, which
+still has the old "connected" integration row cached with the old `table_prefix`.
+
+**What the user experiences:**
+For up to 5 minutes after disconnecting, requests may still be processed as
+if the provider is connected — using the old `table_prefix` to query `sp_*`
+tables. The user may see data from their old connection even after disconnecting.
+
+**How bad is it:**
+Rare in practice (users rarely disconnect mid-session). Not a security issue —
+it is still the same user's own data. The stale state self-corrects when the TTL
+expires. The scenario where this matters most is if a user disconnects and
+immediately reconnects with a different account — there could be a 5-minute
+window of wrong-account data.
+
+**Mitigation options:**
+
+- Lower `INTEGRATION_CACHE_TTL` to `60`.
+- Migrate to Redis.
+
+---
+
+#### Impact on Cache 4 — ML model results (multi-worker)
+
+**No meaningful multi-worker issue.**
+
+The cache key is an MD5 hash of the actual input rows. Every worker independently
+computes the same hash for the same data and stores the same result. There is no
+explicit bust — new data after a sync produces a different hash automatically,
+causing every worker to miss its own cache and retrain. All workers converge to
+the correct result on their own without any coordination.
+
+**What the user experiences:** Nothing unusual. First request after new data
+takes 2–8 seconds (model training). Subsequent requests return instantly.
+This behaviour is identical regardless of how many workers are running.
+
+---
+
+#### Impact on Cache 5 — SQL timeout variable (multi-worker)
+
+**No issue at all.**
+
+Each worker probes the DB server once on its first NL query and caches the
+result forever. The DB server type (MySQL or MariaDB) never changes while the
+process is running. All workers independently determine and cache the same
+correct variable name. No coordination needed.
+
+---
+
+### Limitation 2 — Lost on server restart
+
+**Technical cause:**
+All cache dicts are in RAM. When the server process stops, they are gone.
+
+**What the user experiences:**
+Immediately after a server restart, every request is a cache miss. This causes
+a brief spike in DB query volume while caches warm back up. For most users,
+individual requests are slightly slower for the first 1–5 minutes post-restart.
+After that, caches are warm and performance returns to normal.
+
+**How bad is it:**
+Not a correctness issue — DB results are always correct. Only a brief
+performance concern. Warm-up happens organically as users make requests;
+no action needed.
+
+---
+
+### Limitation 3 — No cross-server sharing (multiple physical servers)
+
+**Technical cause:**
+If DataMind is ever deployed on multiple physical servers (e.g. behind an AWS
+ALB or nginx load balancer), each server has its own set of in-process caches.
+This is a more severe version of the multi-worker problem — a billing bust on
+Server A is completely invisible to Server B.
+
+**What the user experiences:**
+Same issues as multi-worker, but with longer potential stale windows since
+requests may always be routed to different servers by the load balancer.
+In the billing case, a user who hits their limit could be blocked on Server A
+but continue making requests on Server B for the full TTL duration indefinitely.
+
+**How bad is it:**
+Significant for billing correctness at multi-server scale. Acceptable for
+analytics staleness. The billing issue in particular becomes a real revenue
+and fairness concern.
+
+**This is a post-MVP concern.** DataMind currently runs on a single server.
+
+**Fix:** Migrate all caches to Redis. One Redis instance shared by all
+servers and all workers. All busts are instantly visible everywhere.
+
+---
+
+## Summary — Impact by Deployment Mode
+
+| Limitation | Dev (1 worker) | Prod (multiple workers) | Multi-server |
+|---|---|---|---|
+| Billing overage window | None | ≤ SUB_CACHE_TTL (60s) | ≤ SUB_CACHE_TTL per server |
+| Stale analytics after sync | None | ≤ ANALYTICS_CACHE_TTL (300s) | ≤ ANALYTICS_CACHE_TTL |
+| Stale integration metadata | None | ≤ INTEGRATION_CACHE_TTL (300s) | ≤ INTEGRATION_CACHE_TTL |
+| ML model staleness | None | None | None |
+| Performance after restart | Brief spike | Brief spike | Brief spike |
+
+---
+
+## Fix Roadmap
+
+| Priority | Fix | When |
+|---|---|---|
+| Low | Lower `SUB_CACHE_TTL` to `30` if billing overage is a concern | Before scaling workers |
+| Medium | Migrate billing cache to Redis | Before high-traffic production |
+| Medium | Migrate analytics + integration caches to Redis | Before multi-worker production |
+| Low | Migrate ML cache to Redis | Only if model training becomes a shared bottleneck |
+| None | Cache 5 (timeout variable) | No action ever needed |
+
+Redis migration is a post-MVP infrastructure task. Until then, running
+`UVICORN_WORKERS=1` eliminates all multi-worker cache issues entirely.
