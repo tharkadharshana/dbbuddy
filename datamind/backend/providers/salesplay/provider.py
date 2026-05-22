@@ -14,6 +14,7 @@ from providers.salesplay.sync import (
     SalesPlayAPIClient,
     sync_shops, sync_categories, sync_payment_types,
     sync_products, sync_customers, sync_receipts,
+    refresh_customer_last_purchase,
 )
 from logger import get_logger
 
@@ -115,6 +116,10 @@ class SalesPlayProvider(BaseProvider):
                 total += count
                 conn.commit()
                 progress(f"  ✓ {label}: {count} rows")
+
+            progress("  Refreshing customer last purchase dates…")
+            refresh_customer_last_purchase(conn, table_prefix)
+            conn.commit()
 
             if budget.skipped > 0:
                 progress(f"⚠ Row limit reached — {budget.skipped:,} rows skipped")

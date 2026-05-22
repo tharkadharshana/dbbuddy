@@ -631,3 +631,30 @@ def sync_receipts(client: SalesPlayAPIClient, conn, prefix: str, user_email: str
              receipts=receipt_count, line_items=line_count,
              total_rows=receipt_count + line_count)
     return receipt_count + line_count
+
+
+def refresh_customer_last_purchase(conn, prefix: str) -> int:
+    """
+    Compute last_purchase_date for each customer from sp_receipts and write it
+    back to sp_customers. Called after sync_receipts so customer rows always
+    have accurate recency without the LLM needing to JOIN receipts.
+    Returns the number of sp_customers rows updated.
+    """
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE sp_customers c
+        INNER JOIN (
+            SELECT customer_id, MAX(created_at) AS last_dt
+            FROM   sp_receipts
+            WHERE  tenant_id = %s
+              AND  status    = 'COMPLETED'
+              AND  customer_id IS NOT NULL
+              AND  customer_id != ''
+            GROUP BY customer_id
+        ) r ON r.customer_id = c.id
+        SET c.last_purchase_date = r.last_dt
+        WHERE c.tenant_id = %s
+    """, (prefix, prefix))
+    updated = cursor.rowcount
+    log.info("Refreshed last_purchase_date", prefix=prefix, updated=updated)
+    return updated

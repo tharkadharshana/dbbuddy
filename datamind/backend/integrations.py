@@ -237,21 +237,22 @@ def bootstrap_integration_tables():
     """)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS sp_customers (
-            tenant_id       VARCHAR(64)   NOT NULL,
-            id              VARCHAR(64)   NOT NULL,
-            customer_name   VARCHAR(255),
-            email           VARCHAR(255),
-            phone_number    VARCHAR(50),
-            customer_code   VARCHAR(100),
-            note            TEXT,
-            total_visits    INT           DEFAULT 0,
-            total_spent     DECIMAL(14,4) DEFAULT 0,
-            points_balance  DECIMAL(12,2) DEFAULT 0,
-            created_at      DATETIME,
-            updated_at      DATETIME,
-            synced_at       DATETIME      DEFAULT NOW(),
+            tenant_id           VARCHAR(64)   NOT NULL,
+            id                  VARCHAR(64)   NOT NULL,
+            customer_name       VARCHAR(255),
+            email               VARCHAR(255),
+            phone_number        VARCHAR(50),
+            customer_code       VARCHAR(100),
+            note                TEXT,
+            total_visits        INT           DEFAULT 0,
+            total_spent         DECIMAL(14,4) DEFAULT 0,
+            points_balance      DECIMAL(12,2) DEFAULT 0,
+            last_purchase_date  DATETIME      DEFAULT NULL,
+            created_at          DATETIME,
+            updated_at          DATETIME,
+            synced_at           DATETIME      DEFAULT NOW(),
             PRIMARY KEY (tenant_id, id),
-            INDEX idx_id    (id)                  -- JOIN without tenant_id
+            INDEX idx_id        (id)                  -- JOIN without tenant_id
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """)
     cursor.execute("""
