@@ -5,6 +5,7 @@ Subscription plans, usage tracking, and add-on purchases for DataMind AI.
 All tables live in DataMind's internal DB (same env vars as integrations.py).
 """
 import os
+import time as _time
 from typing import Optional, Dict, List, Tuple
 from datetime import date, timedelta
 import mysql.connector
@@ -12,6 +13,40 @@ from logger import get_logger
 from pool import get_internal_conn as _get_conn
 
 log = get_logger(__name__)
+
+# ── Per-request billing cache ──────────────────────────────────────────────────
+# get_user_subscription() is called on every compute request (check_ai_limit +
+# charge_tokens). It runs 5+ DB queries including a COUNT(*) on integration_records.
+# At 1,000 concurrent users that's 5,000+ DB queries just for billing on every tick.
+#
+# Cache subscription state for 60s per user. Acceptable lag: a user who hits their
+# token limit continues for at most 60s before being blocked. Tokens are still written
+# correctly (charge_tokens always writes to DB); only the read-side check is cached.
+# Cache is busted immediately on subscribe/cancel so plan changes take effect instantly.
+
+_sub_cache: dict = {}          # email → (result_dict, expires_at)
+_sub_cache_lock = _threading.Lock()  # noqa: F821 — _threading imported below
+_SUB_CACHE_TTL = 60            # seconds
+
+def _sub_cache_get(email: str):
+    with _sub_cache_lock:
+        entry = _sub_cache.get(email)
+    if entry:
+        result, exp = entry
+        if _time.monotonic() < exp:
+            return result
+        with _sub_cache_lock:
+            _sub_cache.pop(email, None)
+    return None
+
+def _sub_cache_set(email: str, result: dict):
+    with _sub_cache_lock:
+        _sub_cache[email] = (result, _time.monotonic() + _SUB_CACHE_TTL)
+
+def invalidate_sub_cache(email: str):
+    """Call after subscribe/cancel/plan-change so next request reads fresh data."""
+    with _sub_cache_lock:
+        _sub_cache.pop(email, None)
 
 # Track consecutive billing-check failures so we can alert when the DB is
 # persistently unavailable (fail-open is intentional but should not be silent).
@@ -345,6 +380,7 @@ def start_trial(user_email: str, plan_name: str = "Starter"):
             VALUES (%s, %s, 'trial', %s, %s)
         """, (user_email, plan["id"], today, period_end))
         conn.commit()
+        invalidate_sub_cache(user_email)
         log.info("Trial started", email=user_email, plan=plan_name)
     except Exception as e:
         conn.rollback()
@@ -407,6 +443,7 @@ def subscribe_to_plan(user_email: str, plan_id: int):
             VALUES (%s, %s, 'active', %s, %s)
         """, (user_email, plan_id, today, period_end))
         conn.commit()
+        invalidate_sub_cache(user_email)  # force fresh read on next request
         log.info("Subscription activated", email=user_email, plan_id=plan_id)
     except Exception as e:
         conn.rollback()
@@ -417,7 +454,15 @@ def subscribe_to_plan(user_email: str, plan_id: int):
 
 
 def get_user_subscription(user_email: str) -> Dict:
-    """Return full subscription state including usage and add-on balances."""
+    """Return full subscription state including usage and add-on balances.
+
+    Result is cached for _SUB_CACHE_TTL seconds to avoid hammering the DB
+    on every compute request. Cache is busted by invalidate_sub_cache().
+    """
+    cached = _sub_cache_get(user_email)
+    if cached is not None:
+        return cached
+
     conn = _get_conn()
     conn.autocommit = False
     cur = conn.cursor(dictionary=True)
@@ -503,6 +548,8 @@ def get_user_subscription(user_email: str) -> Dict:
             "can_use_ai":            tokens_total == 0 or tokens_used < tokens_total,
             "can_use_db":            db_base_used < db_total,
         }
+        _sub_cache_set(user_email, result)
+        return result
     finally:
         cur.close()
         conn.close()
@@ -564,20 +611,13 @@ def get_plan_history_limit(user_email: str) -> dict:
       row_limit   — max rows to return when no date column is available
       cutoff_date — concrete date object (today minus months*30 days)
     """
+    # Re-use the cached subscription rather than a separate DB query.
+    # get_user_subscription() is already called by check_ai_limit() on the same request,
+    # so this hits the in-process cache (no DB round-trip).
     from datetime import date, timedelta
     try:
-        conn = _get_conn()
-        cur  = conn.cursor(dictionary=True)
-        cur.execute("""
-            SELECT sp.name AS plan_name
-            FROM user_subscriptions us
-            JOIN subscription_plans sp ON sp.id = us.plan_id
-            WHERE us.user_email = %s AND us.status IN ('trial','active')
-            ORDER BY us.id DESC LIMIT 1
-        """, (user_email,))
-        row = cur.fetchone()
-        cur.close(); conn.close()
-        plan_name = (row or {}).get("plan_name", "Starter")
+        sub = get_user_subscription(user_email)
+        plan_name = sub.get("plan_name") or "Starter"
     except Exception:
         plan_name = "Starter"
     limits = _PLAN_HISTORY.get(plan_name, _PLAN_HISTORY["Starter"])
