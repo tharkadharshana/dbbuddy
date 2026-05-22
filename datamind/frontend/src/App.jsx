@@ -13,7 +13,8 @@ import UsagePage         from './pages/UsagePage'
 import DocsPage          from './pages/DocsPage'
 import Sidebar           from './components/Sidebar'
 import UsageLimitBanner  from './components/UsageLimitBanner'
-import { fetchTables, fetchCacheStatus, fetchSettings, fetchConnectedProviders, fetchProviderStats, fetchSubscription } from './utils/api'
+import { fetchTables, fetchCacheStatus, fetchSettings, fetchConnectedProviders, fetchProviderStats, fetchSubscription, listConversations } from './utils/api'
+import ConversationSidebar from './components/ConversationSidebar'
 
 export default function App() {
   const [user, setUser]       = useState(() => {
@@ -27,6 +28,8 @@ export default function App() {
   const [theme, setTheme]       = useState(() => localStorage.getItem('dm_theme') || 'dark')
   const [totalRows, setTotalRows] = useState(0)
   const [sub, setSub]             = useState(null)
+  const [conversations, setConversations]   = useState([])
+  const [activeConvId, setActiveConvId]     = useState(null)
   const subIntervalRef = useRef(null)
   const pollRef = useRef(null)
 
@@ -41,12 +44,20 @@ export default function App() {
     checkSetup()
     pollCacheStatus()
     loadSub()
+    loadConversations()
     subIntervalRef.current = setInterval(loadSub, 5 * 1 * 1000)
     return () => clearInterval(subIntervalRef.current)
   }, [user])
 
   async function loadSub() {
     try { setSub(await fetchSubscription()) } catch { /* silent */ }
+  }
+
+  async function loadConversations() {
+    try {
+      const data = await listConversations()
+      setConversations(data.conversations || [])
+    } catch { /* silent */ }
   }
 
   async function checkSetup({ suppressOnboarding = false } = {}) {
@@ -119,8 +130,25 @@ export default function App() {
 
   const noScroll = ['chat', 'discover', 'reports'].includes(page)
 
+  const handleConvSelect = (convId) => {
+    setActiveConvId(convId)
+    setPage('chat')
+  }
+
+  const handleConvCreated = (convId) => {
+    setActiveConvId(convId)
+    loadConversations()
+  }
+
+  const handleConvDeleted = (convId) => {
+    if (activeConvId === convId) setActiveConvId(null)
+    loadConversations()
+  }
+
   const pageEl = {
-    chat:        <ChatPage llm={llm} setLlm={setLlm} connection={connection} sub={sub} onNavigate={setPage} onQueryComplete={loadSub} />,
+    chat:        <ChatPage llm={llm} setLlm={setLlm} connection={connection} sub={sub} onNavigate={setPage}
+                           onQueryComplete={loadSub} activeConvId={activeConvId}
+                           onConvCreated={handleConvCreated} onConversationChange={loadConversations} />,
     discover:    <DiscoverPage llm={llm} setLlm={setLlm} sub={sub} onNavigate={setPage} onQueryComplete={loadSub} />,
     forecast:    <ForecastPage sub={sub} onNavigate={setPage} onQueryComplete={loadSub} />,
     anomaly:     <AnomalyPage sub={sub} onNavigate={setPage} onQueryComplete={loadSub} />,
@@ -131,17 +159,28 @@ export default function App() {
     docs:        <DocsPage />,
   }[page] ?? <ChatPage llm={llm} setLlm={setLlm} connection={connection} />
 
+  const showConvSidebar = page === 'chat'
+
   return (
     <div style={{ display:'flex', height:'100vh', overflow:'hidden', background:'var(--bg)' }}>
       <Sidebar
         active={page}
-        setActive={setPage}
+        setActive={(p) => { setPage(p); if (p !== 'chat') setActiveConvId(null) }}
         connection={connection}
         cacheStatus={cacheStatus}
         totalRows={totalRows}
         theme={theme}
         setTheme={setTheme}
       />
+      {showConvSidebar && (
+        <ConversationSidebar
+          conversations={conversations}
+          activeConvId={activeConvId}
+          onSelect={handleConvSelect}
+          onCreate={() => { setActiveConvId(null); setPage('chat') }}
+          onDelete={handleConvDeleted}
+        />
+      )}
       <main style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', minWidth:0 }}>
         <UsageLimitBanner sub={sub} onNavigate={setPage} />
         <div style={{ flex:1, overflow: noScroll ? 'hidden' : 'auto' }}>
