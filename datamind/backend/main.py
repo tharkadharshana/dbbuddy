@@ -33,6 +33,7 @@ from analytics import (
     run_employee_performance, run_product_velocity,
     run_payment_breakdown, run_location_comparison,
 )
+import conversations as _conv
 from integrations import (
     bootstrap_integration_tables,
     connect_provider, disconnect_provider,
@@ -1315,9 +1316,10 @@ def _run_think_analysis(question: str, columns: list, data: list,
 
 
 class NLQueryRequest(BaseModel):
-    question: str
-    llm: str = "gemini"
-    think_mode: bool = False
+    question:        str
+    llm:             str  = "gemini"
+    think_mode:      bool = False
+    conversation_id: str  = None  # optional — enables conversation memory
 
 
 @v1.post("/query")
@@ -1378,6 +1380,17 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                   tenant_id=nl_tenant_id)
         conn = _get_internal_conn()
 
+    # Load conversation history — compact multi-turn string injected into the
+    # LLM prompt so follow-up questions ("explain this value") work correctly.
+    conv_id = req.conversation_id or None
+    conv_history = ""
+    if conv_id:
+        try:
+            conv_history = _conv.get_history_for_prompt(conv_id)
+        except Exception as _he:
+            log.warning("Could not load conversation history",
+                        conv_id=conv_id, error=str(_he))
+
     try:
         schemas = get_table_schemas(conn, tables_filter)
         all_fkeys = get_foreign_keys(conn)
@@ -1399,7 +1412,8 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
         sql = query_to_sql(req.question, schemas, llm, fkeys, api_key=api_key,
                            user_email=user["email"], history_months=history["months"],
                            tenant_id=nl_tenant_id if s.get("db_configs") is None else None,
-                           row_limit=row_limit)
+                           row_limit=row_limit,
+                           conversation_history=conv_history)
         # SEC-15: enforce tenant isolation for integration users.
         # nl_tenant_id is set in the else-branch above; None for own-DB users.
         if nl_tenant_id:
@@ -1426,7 +1440,8 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
         data = [{k: _safe(v) for k, v in dict(zip(columns, row)).items()} for row in rows]
         if len(data) > row_limit:
             data = data[:row_limit]
-        log.info("NL query complete", user=user["email"], rows=len(data))
+        log.info("NL query complete", user=user["email"], rows=len(data),
+                 conv_id=conv_id or "stateless")
         _charge_op(user["email"], "nl_query_rows", len(data))
 
         analysis = None
@@ -1440,9 +1455,49 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                 log.warning("Think mode analysis failed", user=user["email"], error=str(_te))
                 analysis = "Analysis unavailable — the AI could not process the results."
 
+        # Build a human-readable answer summary for conversation storage.
+        answer_summary = f"Found {len(data)} result{'s' if len(data) != 1 else ''}."
+        if columns and data:
+            num_col = next(
+                (c for c in columns if isinstance(data[0].get(c), (int, float))), None
+            )
+            if num_col:
+                try:
+                    total = sum(float(r.get(num_col, 0) or 0) for r in data)
+                    answer_summary += f" {num_col.replace('_', ' ')} = {total:,.2f}"
+                except Exception:
+                    pass
+
+        # Persist exchange to conversation memory (best-effort, never blocks response).
+        if conv_id:
+            try:
+                stat_col = next(
+                    (c for c in columns if isinstance(data[0].get(c), (int, float))), None
+                ) if data else None
+                _conv.save_message(conv_id, "user", req.question)
+                _conv.save_message(
+                    conv_id, "assistant", answer_summary,
+                    sql_query=sql, row_count=len(data),
+                    columns=columns, data=data, stat_col=stat_col,
+                )
+                convo = _conv.get_conversation(conv_id, user["email"])
+                msg_count = convo["message_count"] if convo else 0
+                if msg_count == 2:
+                    _conv.trigger_title_generation(
+                        conv_id, req.question, answer_summary,
+                        llm, api_key, user["email"],
+                    )
+                from conversations import _SUMMARY_THRESHOLD
+                if msg_count >= _SUMMARY_THRESHOLD and msg_count % 5 == 0:
+                    _conv.trigger_summarisation(conv_id, llm, api_key, user["email"])
+            except Exception as _ce:
+                log.warning("Failed to save conversation exchange",
+                            conv_id=conv_id, error=str(_ce))
+
         return {
             "sql": sql, "columns": columns, "data": data, "row_count": len(data),
             "analysis": analysis, "think_mode": req.think_mode,
+            "conversation_id": conv_id,
         }
     except HTTPException:
         raise
@@ -1451,6 +1506,71 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
         raise _server_error("Query execution failed. Please try rephrasing your question.")
     finally:
         conn.close()  # always returned to pool (or closed for own-DB users)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CONVERSATION MEMORY
+# ══════════════════════════════════════════════════════════════════════════════
+
+class CreateConversationRequest(BaseModel):
+    id: str  # UUID generated by the frontend
+
+
+@v1.post("/conversations")
+@_limiter.limit(RL_WRITE)
+def api_create_conversation(request: Request, body: CreateConversationRequest,
+                            user: dict = Depends(current_user)):
+    if not body.id or len(body.id) > 64:
+        raise HTTPException(status_code=422, detail="Invalid conversation id.")
+    try:
+        row = _conv.create_conversation(user["email"], body.id)
+        return {"ok": True, "conversation": row}
+    except Exception as e:
+        log.error("create_conversation failed", user=user["email"], error=str(e))
+        raise _server_error("Could not create conversation.")
+
+
+@v1.get("/conversations")
+@_limiter.limit(RL_READ)
+def api_list_conversations(request: Request, user: dict = Depends(current_user)):
+    try:
+        return {"ok": True, "conversations": _conv.list_conversations(user["email"])}
+    except Exception as e:
+        log.error("list_conversations failed", user=user["email"], error=str(e))
+        raise _server_error("Could not load conversations.")
+
+
+@v1.get("/conversations/{conv_id}/messages")
+@_limiter.limit(RL_READ)
+def api_get_conversation_messages(request: Request, conv_id: str,
+                                  user: dict = Depends(current_user)):
+    try:
+        convo = _conv.get_conversation(conv_id, user["email"])
+        if not convo:
+            raise HTTPException(status_code=404, detail="Conversation not found.")
+        msgs = _conv.get_messages(conv_id, user["email"])
+        return {"ok": True, "conversation": convo, "messages": msgs}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("get_conversation_messages failed", user=user["email"], error=str(e))
+        raise _server_error("Could not load messages.")
+
+
+@v1.delete("/conversations/{conv_id}")
+@_limiter.limit(RL_WRITE)
+def api_delete_conversation(request: Request, conv_id: str,
+                            user: dict = Depends(current_user)):
+    try:
+        deleted = _conv.delete_conversation(conv_id, user["email"])
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Conversation not found.")
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("delete_conversation failed", user=user["email"], error=str(e))
+        raise _server_error("Could not delete conversation.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
