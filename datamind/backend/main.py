@@ -10,6 +10,7 @@ Three fixes in this version:
 """
 
 import os
+import re
 import decimal
 import datetime
 import traceback
@@ -162,8 +163,6 @@ def _enforce_tenant_isolation(sql: str, tenant_id: str) -> str:
       3. Raise ValueError if ANY other tenant_id literal appears in the SQL
          (prevents prompt-injection attacks requesting another tenant's data).
     """
-    import re
-
     if not tenant_id:
         return sql
 
