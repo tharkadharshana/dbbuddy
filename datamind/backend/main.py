@@ -1331,6 +1331,7 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
     api_key = _resolve_api_key(user, llm)
     history = get_plan_history_limit(user["email"])
     s = user.get("settings", {})
+    nl_tenant_id = None  # set only for integration users; used by SEC-15 enforcement below
     if s.get("db_configs"):
         # Own-DB user — their database is exclusively theirs; show all tables.
         conn = get_connection(_resolve_db(user))
@@ -1399,13 +1400,23 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                            user_email=user["email"], history_months=history["months"],
                            tenant_id=nl_tenant_id if s.get("db_configs") is None else None,
                            row_limit=row_limit)
-        # SEC-15: enforce tenant isolation — inject missing tenant_id filters
-        # and reject queries that reference any other tenant's data.
-        if nl_tenant_id and s.get("db_configs") is None:
+        # SEC-15: enforce tenant isolation for integration users.
+        # nl_tenant_id is set in the else-branch above; None for own-DB users.
+        if nl_tenant_id:
             try:
                 sql = _enforce_tenant_isolation(sql, nl_tenant_id)
             except ValueError as e:
                 raise HTTPException(status_code=403, detail=str(e))
+            # Fail-closed: if tenant_id literal is STILL absent after injection
+            # (e.g. highly unusual SQL structure the regex couldn't handle),
+            # refuse to execute rather than leak cross-tenant data.
+            if nl_tenant_id not in sql:
+                log.error("Tenant isolation enforcement failed — refusing to execute",
+                          user=user["email"], tenant_id=nl_tenant_id, sql=sql[:300])
+                raise HTTPException(
+                    status_code=500,
+                    detail="Could not generate a safely scoped query. Please rephrase your question."
+                )
         _guard_sql(sql)  # SEC-04: reject any mutating statement the LLM may have generated
         cursor = conn.cursor()
         _set_query_timeout(cursor)
