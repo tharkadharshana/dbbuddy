@@ -339,7 +339,7 @@ export default function ChatPage({
             {/* Think Mode toggle */}
             <button
               onClick={() => setThinkMode(m => !m)}
-              title={thinkMode ? 'Think Mode ON — click to turn off (uses 2 AI calls)' : 'Think Mode OFF — click to enable AI analysis of results'}
+              title={thinkMode ? 'Think Mode ON — click to turn off (Uses X2 Tokens)' : 'Think Mode OFF — click to enable AI analysis of results'}
               style={{
                 width:38, height:38, borderRadius:10, flexShrink:0, alignSelf:'flex-end',
                 background: thinkMode ? 'rgba(79,142,247,0.15)' : 'var(--bg2)',
