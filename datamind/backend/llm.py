@@ -310,7 +310,8 @@ def validate_llm_key(llm: str, api_key: str) -> Dict[str, Any]:
 def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "gemini",
                  fkeys: list = None, api_key: str = "", user_email: str = None,
                  history_months: int = None, tenant_id: str = None,
-                 row_limit: int = 500, conversation_history: str = "") -> str:
+                 row_limit: int = 500, conversation_history: str = "",
+                 extra_schema_hints: str = "") -> str:
     schema_text = schema_to_text(_filter_sensitive_schema(schemas), fkeys)
     history_hint = (
         f" Only return data from the last {history_months} month(s) — add "
@@ -356,7 +357,9 @@ def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "gemini",
         "write a valid MySQL SELECT query that may JOIN multiple tables as needed. "
         "Return ONLY the raw SQL — no markdown, no backticks, no explanation. "
         "Never use DROP, DELETE, INSERT, UPDATE, or any mutating statement."
-        + history_hint + tenant_hint + limit_hint
+        + history_hint + tenant_hint
+        + (f" {extra_schema_hints.strip()}" if extra_schema_hints else "")
+        + limit_hint
     )
     prompt = f"Schema:\n{schema_text}\n\nQuestion: {question}\n\nSQL:"
     log.info("Generating SQL from NL question", llm=llm, question=question[:80])
