@@ -73,6 +73,11 @@ export const fetchProviderHistory    = (connection_id)       => api.get(`/provid
 export const fetchIntegrationTemplates = (provider_id)       => api.get(`/integrations/${provider_id}/analytics/templates`).then(r => r.data)
 export const runIntegrationAnalytics   = (provider_id, template_id) => api.post(`/integrations/${provider_id}/analytics/run`, { template_id }).then(r => r.data)
 
+// ── Developer API Key (Pro only) ──────────────────────────────────────────────
+export const getDeveloperKey      = ()  => api.get('/developer/key').then(r => r.data)
+export const generateDeveloperKey = ()  => api.post('/developer/key').then(r => r.data)
+export const revokeDeveloperKey   = ()  => api.delete('/developer/key').then(r => r.data)
+
 // ── Conversations ─────────────────────────────────────────────────────────────
 export const createConversation       = (id)       => api.post('/conversations', { id }).then(r => r.data)
 export const listConversations        = ()          => api.get('/conversations').then(r => r.data)

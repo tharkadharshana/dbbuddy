@@ -3,6 +3,7 @@ import {
   fetchSettings, patchSettings, addDBConfig, updateDBConfig,
   deleteDBConfig, activateDBConfig, testDBConnection,
   fetchCacheStatus, rebuildCache, deleteAccount,
+  getDeveloperKey, generateDeveloperKey, revokeDeveloperKey,
 } from '../utils/api'
 import { Card, Btn, Badge, Spinner, ErrorBox } from '../components/UI'
 
@@ -128,12 +129,19 @@ function CacheStatusCard({ dbIndex, isActive }) {
   )
 }
 
-export default function SettingsPage({ user, onLogout, onNavigate }) {
+export default function SettingsPage({ user, onLogout, onNavigate, sub }) {
   const [settings, setSettings]   = useState(null)
   const [loading, setLoading]     = useState(true)
   const [saving, setSaving]       = useState(false)
   const [saved, setSaved]         = useState('')
   const [error, setError]         = useState('')
+
+  // API key state (Pro only)
+  const [apiKeyInfo, setApiKeyInfo]     = useState(null)   // masked key info from GET
+  const [newApiKey, setNewApiKey]       = useState(null)   // full key shown once after generation
+  const [apiKeyLoading, setApiKeyLoading] = useState(false)
+  const [apiKeyCopied, setApiKeyCopied]   = useState(false)
+  const isPro = sub?.plan_name === 'Pro'
 
   const [geminiKey, setGeminiKey]       = useState('')
   const [deepseekKey, setDeepseekKey]   = useState('')
@@ -157,6 +165,43 @@ export default function SettingsPage({ user, onLogout, onNavigate }) {
       })
       .catch(e => { setError(e.response?.data?.detail || e.message); setLoading(false) })
   }, [])
+
+  // Load existing API key info for Pro users
+  useEffect(() => {
+    if (!isPro) return
+    getDeveloperKey().then(r => setApiKeyInfo(r.key)).catch(() => {})
+  }, [isPro])
+
+  async function handleGenerateKey() {
+    if (!window.confirm('Generate a new API key? Your existing key will be revoked immediately.')) return
+    setApiKeyLoading(true)
+    try {
+      const r = await generateDeveloperKey()
+      setNewApiKey(r.key)
+      setApiKeyInfo(null) // will refresh on next load
+    } catch (e) {
+      alert(e.response?.data?.detail || 'Failed to generate key')
+    } finally { setApiKeyLoading(false) }
+  }
+
+  async function handleRevokeKey() {
+    if (!window.confirm('Revoke your API key? Any scripts using it will stop working immediately.')) return
+    setApiKeyLoading(true)
+    try {
+      await revokeDeveloperKey()
+      setApiKeyInfo(null)
+      setNewApiKey(null)
+    } catch (e) {
+      alert(e.response?.data?.detail || 'Failed to revoke key')
+    } finally { setApiKeyLoading(false) }
+  }
+
+  function handleCopyKey(key) {
+    navigator.clipboard.writeText(key).then(() => {
+      setApiKeyCopied(true)
+      setTimeout(() => setApiKeyCopied(false), 2000)
+    })
+  }
 
   async function saveAPIKeys() {
     setSaving(true); setSaved(''); setError('')
@@ -457,6 +502,132 @@ export default function SettingsPage({ user, onLogout, onNavigate }) {
           </button>
         </Card>
       </Section>
+
+      {/* ── API Access (Pro only) ──────────────────────────────────────── */}
+      {isPro && (
+        <Section
+          title="API Access"
+          subtitle="Use your personal API key to access DataMind programmatically from scripts, apps, or custom dashboards."
+        >
+          <Card style={{ padding: '18px 20px' }}>
+
+            {/* New key banner — shown once after generation */}
+            {newApiKey && (
+              <div style={{
+                marginBottom: 16, padding: '14px 16px', borderRadius: 8,
+                background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.25)',
+              }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--green)', marginBottom: 8 }}>
+                  ✓ New API key generated — copy it now. It won't be shown again.
+                </div>
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  background: 'var(--bg2)', border: '1px solid var(--border)',
+                  borderRadius: 7, padding: '10px 14px',
+                }}>
+                  <code style={{ flex: 1, fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--text)', wordBreak: 'break-all' }}>
+                    {newApiKey}
+                  </code>
+                  <button
+                    onClick={() => handleCopyKey(newApiKey)}
+                    style={{
+                      flexShrink: 0, padding: '5px 12px', borderRadius: 6, fontSize: 12,
+                      background: apiKeyCopied ? 'var(--green)' : 'var(--blue)',
+                      color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 600,
+                    }}
+                  >
+                    {apiKeyCopied ? 'Copied!' : 'Copy'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Existing key info */}
+            {!newApiKey && apiKeyInfo && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 6 }}>Active API key</div>
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  background: 'var(--bg2)', border: '1px solid var(--border)',
+                  borderRadius: 7, padding: '10px 14px',
+                }}>
+                  <code style={{ flex: 1, fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--text2)' }}>
+                    {apiKeyInfo.masked}
+                  </code>
+                  <span style={{ fontSize: 11, color: 'var(--text3)', flexShrink: 0 }}>
+                    {apiKeyInfo.last_used_at
+                      ? `Last used ${new Date(apiKeyInfo.last_used_at).toLocaleDateString()}`
+                      : `Created ${new Date(apiKeyInfo.created_at).toLocaleDateString()}`}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {!newApiKey && !apiKeyInfo && (
+              <div style={{ marginBottom: 16, fontSize: 13, color: 'var(--text3)' }}>
+                No active API key. Generate one below to start using the DataMind API.
+              </div>
+            )}
+
+            {/* Actions */}
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 20 }}>
+              <Btn onClick={handleGenerateKey} disabled={apiKeyLoading}>
+                {apiKeyLoading ? <><Spinner size={12} color="#fff" /> Working…</> : apiKeyInfo || newApiKey ? 'Regenerate Key' : 'Generate API Key'}
+              </Btn>
+              {(apiKeyInfo || newApiKey) && (
+                <Btn variant="ghost" onClick={handleRevokeKey} disabled={apiKeyLoading}>
+                  Revoke Key
+                </Btn>
+              )}
+            </div>
+
+            {/* How to use */}
+            <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 12 }}>
+              Use your key in the <code style={{ background: 'var(--bg3)', padding: '1px 6px', borderRadius: 4 }}>Authorization</code> header:
+            </div>
+            <div style={{
+              background: 'var(--bg2)', border: '1px solid var(--border)',
+              borderRadius: 7, padding: '12px 14px', marginBottom: 16,
+              fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text2)',
+              whiteSpace: 'pre',
+            }}>
+{`curl https://your-server/api/query \\
+  -H "Authorization: Bearer dm_live_your_key_here" \\
+  -H "Content-Type: application/json" \\
+  -d '{"question": "What was my total revenue last month?", "llm": "deepseek"}'`}
+            </div>
+
+            {/* Docs link */}
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 10,
+              padding: '12px 14px', borderRadius: 8,
+              background: 'var(--blue-dim)', border: '1px solid rgba(79,142,247,0.2)',
+            }}>
+              <span style={{ fontSize: 18 }}>📄</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', marginBottom: 2 }}>
+                  Full API Reference
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text3)' }}>
+                  Interactive Swagger docs — try every endpoint live in the browser.
+                </div>
+              </div>
+              <a
+                href="/docs"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  flexShrink: 0, padding: '6px 14px', borderRadius: 6,
+                  background: 'var(--blue)', color: '#fff',
+                  fontSize: 12, fontWeight: 600, textDecoration: 'none',
+                }}
+              >
+                Open Docs →
+              </a>
+            </div>
+          </Card>
+        </Section>
+      )}
 
       <Section title="How the Cache Works">
         <Card style={{ padding: '16px 18px' }}>
