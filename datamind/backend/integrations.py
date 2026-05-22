@@ -165,7 +165,8 @@ def bootstrap_integration_tables():
             INDEX idx_date     (tenant_id, created_at),
             INDEX idx_customer (tenant_id, customer_id),
             INDEX idx_shop     (tenant_id, shop_id),
-            INDEX idx_type     (tenant_id, receipt_type)
+            INDEX idx_type     (tenant_id, receipt_type),
+            INDEX idx_id       (id)           -- JOIN lookup without tenant_id
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """)
     cursor.execute("""
@@ -187,9 +188,11 @@ def bootstrap_integration_tables():
             created_at      DATETIME,
             synced_at       DATETIME      DEFAULT NOW(),
             PRIMARY KEY (tenant_id, id),
-            INDEX idx_receipt (tenant_id, receipt_id),
-            INDEX idx_product (tenant_id, product_id),
-            INDEX idx_date    (tenant_id, created_at)
+            INDEX idx_receipt      (tenant_id, receipt_id),
+            INDEX idx_product      (tenant_id, product_id),
+            INDEX idx_date         (tenant_id, created_at),
+            INDEX idx_bare_receipt (receipt_id),  -- JOIN without tenant_id
+            INDEX idx_bare_product (product_id)   -- JOIN without tenant_id
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """)
     cursor.execute("""
@@ -210,7 +213,8 @@ def bootstrap_integration_tables():
             updated_at      DATETIME,
             synced_at       DATETIME      DEFAULT NOW(),
             PRIMARY KEY (tenant_id, id),
-            INDEX idx_cat (tenant_id, category_id)
+            INDEX idx_cat (tenant_id, category_id),
+            INDEX idx_id  (id)                    -- JOIN without tenant_id
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """)
     cursor.execute("""
@@ -228,7 +232,8 @@ def bootstrap_integration_tables():
             created_at      DATETIME,
             updated_at      DATETIME,
             synced_at       DATETIME      DEFAULT NOW(),
-            PRIMARY KEY (tenant_id, id)
+            PRIMARY KEY (tenant_id, id),
+            INDEX idx_id    (id)                  -- JOIN without tenant_id
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """)
     cursor.execute("""
