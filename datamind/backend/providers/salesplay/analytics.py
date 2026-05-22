@@ -14,6 +14,7 @@ category_name is stored denormalized in sp_receipt_line_items at sync time,
 so the 4-table JOIN (receipts × line_items × products × categories) is gone.
 """
 
+import os
 import decimal
 import datetime
 import time as _time
@@ -23,7 +24,7 @@ import time as _time
 # CACHE_TTL seconds. Busted automatically after each sync via cache_bust().
 
 _result_cache: dict = {}
-_CACHE_TTL = 300  # 5 minutes
+_CACHE_TTL = int(os.getenv("ANALYTICS_CACHE_TTL", "300"))  # configurable via .env
 
 
 def _cache_get(tenant_id: str, template_id: str):

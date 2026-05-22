@@ -26,7 +26,7 @@ log = get_logger(__name__)
 
 _sub_cache: dict = {}          # email → (result_dict, expires_at)
 _sub_cache_lock = _threading.Lock()  # noqa: F821 — _threading imported below
-_SUB_CACHE_TTL = 60            # seconds
+_SUB_CACHE_TTL = int(os.getenv("SUB_CACHE_TTL", "60"))  # seconds, configurable via .env
 
 def _sub_cache_get(email: str):
     with _sub_cache_lock:
