@@ -37,6 +37,11 @@ _sync_progress: Dict[int, Dict] = {}
 # Prevents double-sync from scheduler + manual trigger racing on the same integration.
 _sync_active: set = set()
 
+# Max concurrent sync threads. Each sync borrows 3 pool connections.
+# MAX_CONCURRENT_SYNCS × 3 must leave headroom in DB_POOL_SIZE.
+# Default 5 syncs × 3 connections = 15 connections (safe with pool_size=20).
+_MAX_CONCURRENT_SYNCS = int(os.getenv("MAX_CONCURRENT_SYNCS", "5"))
+
 
 # ── Credential encryption ──────────────────────────────────────────────────────
 
@@ -1009,7 +1014,12 @@ def _run_sync_inner(integration_id: int, user_email: str, provider_id: str,
 
 def _start_sync_thread(integration_id: int, user_email: str, provider_id: str,
                        sync_type: str = "delta", progress_callback=None) -> bool:
-    """Start a sync thread. Returns False (and skips) if a sync is already in progress."""
+    """Start a sync thread. Returns False (and skips) if pool is full or already running."""
+    if len(_sync_active) >= _MAX_CONCURRENT_SYNCS:
+        log.warning("Sync skipped — concurrent sync limit reached",
+                    active=len(_sync_active), limit=_MAX_CONCURRENT_SYNCS,
+                    user=user_email, provider=provider_id)
+        return False
     if integration_id in _sync_active:
         log.info("Sync skipped — already in progress",
                  user=user_email, provider=provider_id, integration_id=integration_id)
