@@ -107,6 +107,43 @@ app.add_middleware(SlowAPIMiddleware)
 _FORCE_HTTPS    = os.getenv("FORCE_HTTPS", "").lower() == "true"
 _SQL_TIMEOUT_MS = int(os.getenv("SQL_TIMEOUT_MS", "30000"))  # hard-kill runaway LLM queries
 
+# Cached name of the session timeout variable for this MySQL/MariaDB server.
+# "max_execution_time" (MySQL 5.7.8+, milliseconds)
+# "max_statement_time"  (MariaDB, seconds)
+# None = server doesn't support either — timeouts are skipped silently.
+_sql_timeout_var: str | None = "unknown"  # "unknown" triggers first-use probe
+_sql_timeout_lock = __import__("threading").Lock()
+
+
+def _set_query_timeout(cursor) -> None:
+    """Apply SQL_TIMEOUT_MS to the current session, probing which variable the server uses."""
+    global _sql_timeout_var
+    if _sql_timeout_var is None:
+        return  # server supports neither — skip
+    if _sql_timeout_var == "unknown":
+        with _sql_timeout_lock:
+            if _sql_timeout_var == "unknown":  # re-check inside lock
+                for var, val in [
+                    ("max_execution_time", _SQL_TIMEOUT_MS),           # MySQL (ms)
+                    ("max_statement_time", _SQL_TIMEOUT_MS / 1000.0),  # MariaDB (seconds)
+                ]:
+                    try:
+                        cursor.execute(f"SET SESSION {var}={val}")
+                        _sql_timeout_var = var
+                        log.info("SQL timeout variable detected", var=var, value=val)
+                        return
+                    except Exception:
+                        pass
+                _sql_timeout_var = None
+                log.warning("SQL timeout not supported by this MySQL/MariaDB server — runaway queries will not be auto-killed")
+                return
+    # Variable already known
+    try:
+        val = _SQL_TIMEOUT_MS if _sql_timeout_var == "max_execution_time" else _SQL_TIMEOUT_MS / 1000.0
+        cursor.execute(f"SET SESSION {_sql_timeout_var}={val}")
+    except Exception as e:
+        log.warning("Failed to set SQL timeout", var=_sql_timeout_var, error=str(e))
+
 if _FORCE_HTTPS:
     from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
     app.add_middleware(HTTPSRedirectMiddleware)
@@ -1234,7 +1271,7 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                            row_limit=row_limit)
         _guard_sql(sql)  # SEC-04: reject any mutating statement the LLM may have generated
         cursor = conn.cursor()
-        cursor.execute(f"SET SESSION max_execution_time={_SQL_TIMEOUT_MS}")
+        _set_query_timeout(cursor)
         cursor.execute(sql)
         columns = [desc[0] for desc in cursor.description]
         rows = cursor.fetchall()
