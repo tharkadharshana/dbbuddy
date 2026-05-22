@@ -41,7 +41,7 @@ export const testDBConnection     = (cfg) => api.post('/settings/db/test', cfg).
 export const fetchTables          = () => api.get('/tables').then(r => r.data)
 export const fetchTableColumns    = (table) => api.get(`/tables/${encodeURIComponent(table)}/columns`).then(r => r.data)
 export const fetchDiscover        = () => api.get('/discover').then(r => r.data)
-export const runNLQuery           = (question, llm, thinkMode = false) => api.post('/query', { question, llm, think_mode: thinkMode }).then(r => r.data)
+export const runNLQuery           = (question, llm, thinkMode = false, conversationId = null) => api.post('/query', { question, llm, think_mode: thinkMode, conversation_id: conversationId }).then(r => r.data)
 export const runAnalytics         = (template_id, llm, params={}, provider=null) => api.post('/analytics/run', { template_id, llm, params, provider }).then(r => r.data)
 export const runForecast          = (table, date_column, value_column, periods=90) => api.post('/forecast', { table, date_column, value_column, periods }).then(r => r.data)
 export const runAutoForecast      = (periods=90) => api.get(`/forecast/auto?periods=${periods}`).then(r => r.data)
@@ -72,6 +72,12 @@ export const fetchProviderStatus     = (connection_id)       => api.get(`/provid
 export const fetchProviderHistory    = (connection_id)       => api.get(`/providers/${connection_id}/history`).then(r => r.data)
 export const fetchIntegrationTemplates = (provider_id)       => api.get(`/integrations/${provider_id}/analytics/templates`).then(r => r.data)
 export const runIntegrationAnalytics   = (provider_id, template_id) => api.post(`/integrations/${provider_id}/analytics/run`, { template_id }).then(r => r.data)
+
+// ── Conversations ─────────────────────────────────────────────────────────────
+export const createConversation       = (id)       => api.post('/conversations', { id }).then(r => r.data)
+export const listConversations        = ()          => api.get('/conversations').then(r => r.data)
+export const getConversationMessages  = (convId)   => api.get(`/conversations/${convId}/messages`).then(r => r.data)
+export const deleteConversation       = (convId)   => api.delete(`/conversations/${convId}`).then(r => r.data)
 
 // ── Billing ───────────────────────────────────────────────────────────────────
 export const fetchBillingPlans  = () => api.get('/billing/plans').then(r => r.data)
