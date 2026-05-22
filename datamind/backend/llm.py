@@ -333,7 +333,12 @@ def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "gemini",
         f"3. sp_receipt_line_items already has product_name and category_name columns — "
         f"prefer using these directly instead of joining sp_products when possible.\n"
         f"4. COUNT(DISTINCT receipt_id) on sp_receipt_line_items gives receipt count "
-        f"without needing to join sp_receipts."
+        f"without needing to join sp_receipts.\n"
+        f"5. sp_customers already has pre-aggregated total_spent and total_visits columns "
+        f"synced directly from the POS system — use these for customer spending/frequency "
+        f"analysis INSTEAD of computing them via JOIN with sp_receipts. "
+        f"Only join sp_receipts when you specifically need individual receipt details "
+        f"(e.g. last purchase date, per-receipt breakdown)."
         if tenant_id else ""
     )
     # Conversation history is prepended so the LLM understands follow-up
