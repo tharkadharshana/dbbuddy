@@ -275,6 +275,64 @@ def _enforce_tenant_isolation(sql: str, tenant_id: str) -> str:
     return sql
 
 
+def _enforce_date_filter(sql: str, history_months: int) -> str:
+    """
+    Enforce the plan's data-history window on every NL query for integration users.
+
+    Problem: follow-up questions ("what can I do to increase this?") let the LLM
+    generate SQL without a date filter, pulling ALL historical data even though
+    the user's plan only allows N months. The LLM prompt hint is advisory —
+    this function is mandatory server-side enforcement.
+
+    Strategy:
+      - If the SQL already contains a created_at comparison (the LLM handled it),
+        return unchanged.
+      - Otherwise find the primary sp_*/ly_* FROM table alias and inject
+        AND alias.created_at >= DATE_SUB(CURDATE(), INTERVAL N MONTH)
+        into the WHERE clause (or create one if absent).
+
+    Only applied to integration users (sp_*/ly_* tables) where the date column
+    is always created_at. Not applied to own-DB users — unknown schema.
+    """
+    if not history_months:
+        return sql
+
+    # If LLM already applied a date filter on created_at, trust it.
+    if re.search(r'\bcreated_at\s*[><=]', sql, re.IGNORECASE):
+        return sql
+
+    # Find the primary FROM sp_*/ly_* table with its alias.
+    table_re = re.compile(
+        r'\bFROM\s+(`?(?:sp|ly)_\w+`?)(?:\s+(?:AS\s+)?(`?\w+`?))?',
+        re.IGNORECASE,
+    )
+    m = table_re.search(sql)
+    if not m:
+        return sql  # no shared table found — nothing to inject
+
+    alias = (m.group(2) or m.group(1)).strip('`')
+    date_cond = (
+        f"{alias}.created_at >= DATE_SUB(CURDATE(), INTERVAL {history_months} MONTH)"
+    )
+
+    log.debug("Date filter enforced", alias=alias, history_months=history_months)
+
+    where_re = re.compile(r'\bWHERE\b', re.IGNORECASE)
+    where_m = where_re.search(sql)
+    if where_m:
+        insert_at = where_m.end()
+        return sql[:insert_at] + f" {date_cond} AND " + sql[insert_at:].lstrip()
+
+    end_re = re.compile(
+        r'\b(?:GROUP\s+BY|ORDER\s+BY|HAVING|LIMIT)\b', re.IGNORECASE
+    )
+    end_m = end_re.search(sql)
+    if end_m:
+        return sql[:end_m.start()] + f"WHERE {date_cond} " + sql[end_m.start():]
+
+    return sql.rstrip(';').rstrip() + f" WHERE {date_cond}"
+
+
 if _FORCE_HTTPS:
     from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
     app.add_middleware(HTTPSRedirectMiddleware)
@@ -1431,6 +1489,10 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                     status_code=500,
                     detail="Could not generate a safely scoped query. Please rephrase your question."
                 )
+            # Enforce data-history window for integration users.
+            # The LLM hint is advisory; this is mandatory. Prevents follow-up
+            # questions from pulling all-time data beyond the plan's allowed window.
+            sql = _enforce_date_filter(sql, history["months"])
         _guard_sql(sql)  # SEC-04: reject any mutating statement the LLM may have generated
         cursor = conn.cursor()
         _set_query_timeout(cursor)
