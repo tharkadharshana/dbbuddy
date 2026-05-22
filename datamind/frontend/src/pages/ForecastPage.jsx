@@ -5,7 +5,7 @@ import { runAutoForecast, runForecast, fetchTables, fetchTableColumns } from '..
 
 const TT = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)', borderRadius:8, fontSize:12, color:'#f0f1fa' }
 
-export default function ForecastPage({ sub, onNavigate }) {
+export default function ForecastPage({ sub, onNavigate, onQueryComplete }) {
   const [mode, setMode]       = useState('auto')
   const [periods, setPeriods] = useState(90)
   const [loading, setLoading] = useState(false)
@@ -48,7 +48,7 @@ export default function ForecastPage({ sub, onNavigate }) {
         : await runForecast(manForm.table, manForm.date_column, manForm.value_column, periods)
       setResult(data)
     } catch(e) { setError(e.response?.data?.error || e.response?.data?.detail || e.message) }
-    finally { setLoading(false) }
+    finally { setLoading(false); onQueryComplete?.() }
   }
 
   const combined = result ? [

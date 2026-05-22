@@ -166,7 +166,7 @@ function Message({ msg, llm }) {
   )
 }
 
-export default function ChatPage({ llm, setLlm, connection, sub, onNavigate }) {
+export default function ChatPage({ llm, setLlm, connection, sub, onNavigate, onQueryComplete }) {
   const [messages, setMessages]   = useState([])
   const [input, setInput]         = useState('')
   const [loading, setLoading]     = useState(false)
@@ -205,7 +205,10 @@ export default function ChatPage({ llm, setLlm, connection, sub, onNavigate }) {
     } catch(e) {
       const err = e.response?.data?.error || e.response?.data?.detail || e.message
       setMessages(m => m.map(msg => msg.id === thinkMsg.id ? { role:'ai', error:err, id:thinkMsg.id } : msg))
-    } finally { setLoading(false) }
+    } finally {
+      setLoading(false)
+      onQueryComplete?.()
+    }
   }
 
   const hasMessages = messages.length > 0

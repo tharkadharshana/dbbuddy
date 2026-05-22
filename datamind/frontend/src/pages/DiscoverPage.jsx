@@ -221,7 +221,7 @@ function ResultPanel({ result, templateId }) {
 }
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
-export default function DiscoverPage({ llm, setLlm, sub, onNavigate }) {
+export default function DiscoverPage({ llm, setLlm, sub, onNavigate, onQueryComplete }) {
   const [catalogue, setCatalogue]   = useState([])
   const [loading, setLoading]       = useState(true)
   const [building, setBuilding]     = useState(false)
@@ -289,7 +289,7 @@ export default function DiscoverPage({ llm, setLlm, sub, onNavigate }) {
         : await runAnalytics(item.id, llm, {})
       setResult(data)
     } catch(e) { setRunError(e.response?.data?.detail || e.message) }
-    finally { setRunning(false) }
+    finally { setRunning(false); onQueryComplete?.() }
   }
 
   async function handleRebuild() {

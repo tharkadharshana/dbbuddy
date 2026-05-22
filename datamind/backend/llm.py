@@ -263,8 +263,9 @@ def call_llm(prompt: str, system: str = "", llm: str = "gemini",
                 log.info("LLM fallback succeeded", requested=requested, used=provider, user=user_email)
             if user_email:
                 try:
-                    from billing import charge_ai_usage
+                    from billing import charge_ai_usage, invalidate_sub_cache
                     charge_ai_usage(user_email, tokens or 0, provider, "llm_call")
+                    invalidate_sub_cache(user_email)
                 except Exception as _ce:
                     log.warning("charge_ai_usage failed silently", error=str(_ce))
             return result
