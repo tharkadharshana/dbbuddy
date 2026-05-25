@@ -109,7 +109,15 @@ TEMPLATE_GOALS = [
     },
     {
         "id": "top_customers",
-        "goal": "Top 25 customers by lifetime value: customer name, email or contact, total orders, total lifetime spend, average order value, loyalty points (if exists), last purchase date, and days since last purchase. JOIN customers with sales/orders table.",
+        "goal": (
+            "Top 25 customers by lifetime value: customer name, email or contact, "
+            "total orders/visits, total lifetime spend, average order value, loyalty points (if exists), "
+            "last purchase date, and days since last purchase. "
+            "IMPORTANT: If the customers table has pre-aggregated columns like total_spent or total_visits, "
+            "use those directly — do NOT recompute them by joining with the receipts/orders table. "
+            "Only join receipts/orders when you need data that is not already on the customers table "
+            "(e.g. last purchase date). Order by total lifetime spend descending."
+        ),
         "category": "Customers", "icon": "👑", "complexity": "simple",
         "title": "Top Customers by LTV",
         "description": "Rank customers by lifetime value, frequency, and recency.",

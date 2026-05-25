@@ -310,7 +310,8 @@ def validate_llm_key(llm: str, api_key: str) -> Dict[str, Any]:
 def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "gemini",
                  fkeys: list = None, api_key: str = "", user_email: str = None,
                  history_months: int = None, tenant_id: str = None,
-                 row_limit: int = 500, conversation_history: str = "") -> str:
+                 row_limit: int = 500, conversation_history: str = "",
+                 extra_schema_hints: str = "") -> str:
     schema_text = schema_to_text(_filter_sensitive_schema(schemas), fkeys)
     history_hint = (
         f" Only return data from the last {history_months} month(s) — add "
@@ -333,7 +334,13 @@ def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "gemini",
         f"3. sp_receipt_line_items already has product_name and category_name columns — "
         f"prefer using these directly instead of joining sp_products when possible.\n"
         f"4. COUNT(DISTINCT receipt_id) on sp_receipt_line_items gives receipt count "
-        f"without needing to join sp_receipts."
+        f"without needing to join sp_receipts.\n"
+        f"5. sp_customers has pre-aggregated columns — ALWAYS use them directly, never "
+        f"recompute via JOIN: total_spent (lifetime revenue), total_visits (order count), "
+        f"last_purchase_date (most recent completed purchase), points_balance. "
+        f"Do NOT join sp_receipts to compute any of these — the join misses most customers "
+        f"due to customer_id linkage gaps. Only join sp_receipts if you need individual "
+        f"receipt-level rows (e.g. itemised breakdown), never for aggregates."
         if tenant_id else ""
     )
     # Conversation history is prepended so the LLM understands follow-up
@@ -351,7 +358,9 @@ def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "gemini",
         "write a valid MySQL SELECT query that may JOIN multiple tables as needed. "
         "Return ONLY the raw SQL — no markdown, no backticks, no explanation. "
         "Never use DROP, DELETE, INSERT, UPDATE, or any mutating statement."
-        + history_hint + tenant_hint + limit_hint
+        + history_hint + tenant_hint
+        + (f" {extra_schema_hints.strip()}" if extra_schema_hints else "")
+        + limit_hint
     )
     prompt = f"Schema:\n{schema_text}\n\nQuestion: {question}\n\nSQL:"
     log.info("Generating SQL from NL question", llm=llm, question=question[:80])
