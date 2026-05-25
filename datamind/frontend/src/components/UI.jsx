@@ -40,6 +40,14 @@ export function Spinner({ size=18, color='var(--blue)' }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" style={{animation:'spin .8s linear infinite'}}><circle cx="12" cy="12" r="9" stroke={color} strokeWidth="2.5" strokeDasharray="40 20" strokeLinecap="round"/></svg>
 }
 
+const _TDM = 10_000
+const _fmtTok = (raw) => {
+  const n = (raw || 0) * _TDM
+  if (n >= 1_000_000) return `${parseFloat((n / 1_000_000).toFixed(2))}M`
+  if (n >= 1_000)     return `${parseFloat((n / 1_000).toFixed(1))}K`
+  return Math.round(n).toLocaleString()
+}
+
 export function UsageMeter({ sub }) {
   if (!sub || sub.status === 'no_subscription') return null
 
@@ -62,7 +70,7 @@ export function UsageMeter({ sub }) {
         <div style={{ height:'100%', width:`${pct}%`, borderRadius:99, background:color, transition:'width .3s' }} />
       </div>
       <div style={{ fontSize:9, color:'var(--text3)', fontFamily:'var(--mono)' }}>
-        {Number(used).toLocaleString(undefined, {maximumFractionDigits:2})} / {total.toLocaleString()}
+        {_fmtTok(used)} / {_fmtTok(total)}
       </div>
     </div>
   )

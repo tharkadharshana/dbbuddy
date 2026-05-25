@@ -2,10 +2,18 @@ import React, { useState, useEffect } from 'react'
 import { fetchBillingPlans, fetchSubscription, fetchBillingUsage, subscribeToPlan, purchaseAddon } from '../utils/api'
 import { Spinner } from '../components/UI'
 
+const TDM = 10_000 // Token Display Multiplier — backend stores small values, display as large
+const fmtTok = (raw) => {
+  const n = (raw || 0) * TDM
+  if (n >= 1_000_000) return `${parseFloat((n / 1_000_000).toFixed(2))}M`
+  if (n >= 1_000)     return `${parseFloat((n / 1_000).toFixed(1))}K`
+  return Math.round(n).toLocaleString()
+}
+
 // ── Plan definitions ──────────────────────────────────────────────────────────
 const PLAN_FEATURES = {
   Starter: [
-    { text: '100 Tokens / month',        ok: true  },
+    { text: '500K Tokens / month',       ok: true  },
     { text: 'Ask Your Data (AI)',         ok: true  },
     { text: 'All Analytics',             ok: true  },
     { text: 'All Reports',               ok: true  },
@@ -14,7 +22,7 @@ const PLAN_FEATURES = {
     { text: '1 Month data history',      ok: true  },
   ],
   Growth: [
-    { text: '250 Tokens / month',        ok: true  },
+    { text: '1.25M Tokens / month',      ok: true  },
     { text: 'Ask Your Data (AI)',         ok: true  },
     { text: 'All Analytics',             ok: true  },
     { text: 'All Reports',               ok: true  },
@@ -23,7 +31,7 @@ const PLAN_FEATURES = {
     { text: '3 Months data history',     ok: true  },
   ],
   Pro: [
-    { text: '1,000 Tokens / month',      ok: true  },
+    { text: '5M Tokens / month',         ok: true  },
     { text: 'Ask Your Data (AI)',         ok: true  },
     { text: 'All Analytics',             ok: true  },
     { text: 'All Reports',               ok: true  },
@@ -52,9 +60,9 @@ const OP_LABELS = {
 }
 
 // ── Shared components ─────────────────────────────────────────────────────────
-function UsageBar({ label, used, limit, pct, addon = 0, decimals = 2 }) {
+function UsageBar({ label, used, limit, pct, addon = 0, decimals = 2, isTok = false }) {
   const color = pct >= 100 ? 'var(--red)' : pct >= 80 ? 'var(--amber)' : 'var(--blue)'
-  const fmt = (n) => Number(n).toLocaleString(undefined, { maximumFractionDigits: decimals })
+  const fmt = (n) => isTok ? fmtTok(n) : Number(n).toLocaleString(undefined, { maximumFractionDigits: decimals })
   return (
     <div style={{ flex: 1 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, color: 'var(--text3)', marginBottom: 5 }}>
@@ -232,7 +240,7 @@ export default function BillingPage({ onSubChange }) {
               </div>
               <div style={{ fontSize: 12, color: 'var(--text3)', marginLeft: 'auto' }}>Renews {sub.period_end}</div>
               <div style={{ width: '100%' }}>
-                <UsageBar label="Tokens" used={sub.tokens_used ?? 0} limit={sub.tokens_total_available ?? sub.tokens_limit ?? 0} pct={sub.tokens_pct ?? 0} addon={sub.tokens_addon_balance ?? 0} />
+                <UsageBar label="Tokens" used={sub.tokens_used ?? 0} limit={sub.tokens_total_available ?? sub.tokens_limit ?? 0} pct={sub.tokens_pct ?? 0} addon={sub.tokens_addon_balance ?? 0} isTok />
               </div>
             </div>
           )}
@@ -288,9 +296,9 @@ export default function BillingPage({ onSubChange }) {
                   <td style={{ padding: '12px 16px' }}>
                     <span style={{ marginRight: 6 }}>⚡</span>
                     <span style={{ fontWeight: 500 }}>Tokens</span>
-                    <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--text3)' }}>50 Tokens per pack · rolls over</span>
+                    <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--text3)' }}>250K Tokens per pack · rolls over</span>
                   </td>
-                  <td style={{ padding: '12px 16px', color: 'var(--text3)' }}>$1 per 50 Tokens</td>
+                  <td style={{ padding: '12px 16px', color: 'var(--text3)' }}>$1 per 250K Tokens</td>
                   <td style={{ padding: '12px 16px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <button onClick={() => setAddonQty(q => ({ ...q, tokens: Math.max(0, q.tokens - 1) }))} style={{ width: 26, height: 26, borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg3)', cursor: 'pointer', fontSize: 15, color: 'var(--text2)' }}>−</button>
@@ -329,13 +337,13 @@ export default function BillingPage({ onSubChange }) {
                 <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text3)' }}>Period: {sub.period_start} → {sub.period_end}</span>
               </div>
 
-              <UsageBar label="Tokens" used={sub.tokens_used ?? 0} limit={sub.tokens_total_available ?? sub.tokens_limit ?? 0} pct={sub.tokens_pct ?? 0} addon={sub.tokens_addon_balance ?? 0} />
+              <UsageBar label="Tokens" used={sub.tokens_used ?? 0} limit={sub.tokens_total_available ?? sub.tokens_limit ?? 0} pct={sub.tokens_pct ?? 0} addon={sub.tokens_addon_balance ?? 0} isTok />
 
               <div style={{ marginTop: 14, padding: '10px 14px', background: 'var(--bg3)', borderRadius: 8, fontSize: 12, display: 'flex', gap: 24, flexWrap: 'wrap', color: 'var(--text3)' }}>
-                <span>Plan limit: <b style={{ color: 'var(--text)' }}>{(sub.tokens_limit ?? 0).toLocaleString()}</b></span>
-                {(sub.tokens_addon_balance ?? 0) > 0 && <span>Add-on: <b style={{ color: 'var(--green)' }}>+{Number(sub.tokens_addon_balance).toLocaleString(undefined, { maximumFractionDigits: 1 })}</b></span>}
-                <span>Used: <b style={{ color: 'var(--blue)' }}>{Number(sub.tokens_used ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</b></span>
-                <span>Remaining: <b style={{ color: 'var(--green)' }}>{Math.max(0, (sub.tokens_total_available ?? 0) - (sub.tokens_used ?? 0)).toLocaleString(undefined, { maximumFractionDigits: 2 })}</b></span>
+                <span>Plan limit: <b style={{ color: 'var(--text)' }}>{fmtTok(sub.tokens_limit ?? 0)}</b></span>
+                {(sub.tokens_addon_balance ?? 0) > 0 && <span>Add-on: <b style={{ color: 'var(--green)' }}>+{fmtTok(sub.tokens_addon_balance)}</b></span>}
+                <span>Used: <b style={{ color: 'var(--blue)' }}>{fmtTok(sub.tokens_used ?? 0)}</b></span>
+                <span>Remaining: <b style={{ color: 'var(--green)' }}>{fmtTok(Math.max(0, (sub.tokens_total_available ?? 0) - (sub.tokens_used ?? 0)))}</b></span>
               </div>
             </div>
           )}
@@ -368,7 +376,7 @@ export default function BillingPage({ onSubChange }) {
                       <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
                         <td style={{ padding: '10px 14px', color: 'var(--text3)', fontFamily: 'var(--mono)', fontSize: 11 }}>{item.created_at}</td>
                         <td style={{ padding: '10px 14px', fontWeight: 500 }}>{OP_LABELS[item.operation_type] || item.operation_type}</td>
-                        <td style={{ padding: '10px 14px', textAlign: 'right', fontFamily: 'var(--mono)', color: 'var(--blue)', fontWeight: 600 }}>{Number(item.tokens || 0).toFixed(2)}</td>
+                        <td style={{ padding: '10px 14px', textAlign: 'right', fontFamily: 'var(--mono)', color: 'var(--blue)', fontWeight: 600 }}>{fmtTok(item.tokens || 0)}</td>
                       </tr>
                     ))}
                   </tbody>
