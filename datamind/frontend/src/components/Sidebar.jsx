@@ -246,7 +246,10 @@ export default function Sidebar({ active, setActive, connection, cacheStatus, to
             </svg>
           </div>
           <div>
-            <div style={{ fontWeight:700, fontSize:14, lineHeight:1.1 }}>DataMind</div>
+            <div style={{ fontWeight:700, fontSize:14, lineHeight:1.1, display:'flex', alignItems:'center', gap:5 }}>
+              DataMind
+              <span style={{ fontSize:9, fontWeight:700, letterSpacing:'0.06em', background:'var(--blue-dim)', color:'var(--blue)', borderRadius:4, padding:'1px 5px', verticalAlign:'middle' }}>BETA</span>
+            </div>
             <div style={{ fontSize:10, color:'var(--text3)' }}>AI Analytics</div>
           </div>
         </div>
