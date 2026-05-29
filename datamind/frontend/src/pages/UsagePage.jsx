@@ -2,6 +2,14 @@ import React, { useState, useEffect } from 'react'
 import { fetchBillingUsage } from '../utils/api'
 import { Card, Spinner, Badge } from '../components/UI'
 
+const TDM = 10_000
+const fmtTok = (raw) => {
+  const n = (raw || 0) * TDM
+  if (n >= 1_000_000) return `${parseFloat((n / 1_000_000).toFixed(2))}M`
+  if (n >= 1_000)     return `${parseFloat((n / 1_000).toFixed(1))}K`
+  return Math.round(n).toLocaleString()
+}
+
 const OP_LABELS = {
   llm:                 'AI Query',
   nl_query_rows:       'Query Results',
@@ -18,9 +26,9 @@ const OP_LABELS = {
   location_comparison: 'Location Comparison',
 }
 
-function UsageBar({ label, used, limit, pct, decimals = 2, color }) {
+function UsageBar({ label, used, limit, pct, decimals = 2, color, isTok = false }) {
   const barColor = color || (pct >= 100 ? 'var(--red)' : pct >= 80 ? 'var(--amber)' : 'var(--blue)')
-  const fmt = (n) => Number(n).toLocaleString(undefined, { maximumFractionDigits: decimals })
+  const fmt = (n) => isTok ? fmtTok(n) : Number(n).toLocaleString(undefined, { maximumFractionDigits: decimals })
   return (
     <div style={{ flex: 1, minWidth: 200 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text3)', marginBottom: 5 }}>
@@ -88,19 +96,20 @@ export default function UsagePage({ sub }) {
             used={sub.tokens_used ?? 0}
             limit={sub.tokens_total_available ?? sub.tokens_limit ?? 0}
             pct={sub.tokens_pct ?? 0}
+            isTok
           />
 
           {/* Breakdown detail */}
           <div style={{ marginTop: 16, padding: '12px 14px', background: 'var(--bg3)', borderRadius: 8, fontSize: 12 }}>
             <div style={{ fontWeight: 600, color: 'var(--text2)', marginBottom: 8 }}>Token breakdown</div>
             <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', color: 'var(--text3)' }}>
-              <span>Plan limit: <b style={{ color: 'var(--text)' }}>{(sub.tokens_limit ?? 0).toLocaleString()}</b></span>
+              <span>Plan limit: <b style={{ color: 'var(--text)' }}>{fmtTok(sub.tokens_limit ?? 0)}</b></span>
               {(sub.tokens_addon_balance ?? 0) > 0 && (
-                <span>Add-on balance: <b style={{ color: 'var(--green)' }}>+{(sub.tokens_addon_balance).toLocaleString(undefined, { maximumFractionDigits: 1 })}</b></span>
+                <span>Add-on balance: <b style={{ color: 'var(--green)' }}>+{fmtTok(sub.tokens_addon_balance)}</b></span>
               )}
-              <span>Tokens used: <b style={{ color: 'var(--blue)' }}>{(sub.tokens_used ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</b></span>
+              <span>Tokens used: <b style={{ color: 'var(--blue)' }}>{fmtTok(sub.tokens_used ?? 0)}</b></span>
               <span>Remaining: <b style={{ color: 'var(--green)' }}>
-                {Math.max(0, (sub.tokens_total_available ?? 0) - (sub.tokens_used ?? 0)).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                {fmtTok(Math.max(0, (sub.tokens_total_available ?? 0) - (sub.tokens_used ?? 0)))}
               </b></span>
             </div>
           </div>

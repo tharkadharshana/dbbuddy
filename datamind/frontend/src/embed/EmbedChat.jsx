@@ -293,13 +293,13 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
               : <><span style={{ fontSize:12 }}>🌙</span> Dark</>
             }
           </button>
-          <button
+          {/* <button
             onClick={onLogout}
             title="Disconnect account"
             style={{ background:'none', border:'none', color:'var(--text3)', fontSize:11, cursor:'pointer', padding:'2px 6px' }}
           >
             ⏏ Disconnect
-          </button>
+          </button> */}
         </div>
       </div>
 
@@ -351,7 +351,7 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
           </button>
           {thinkMode && (
             <span style={{ fontSize:10, color:'var(--text3)' }}>
-              Uses 2 AI calls · deducts extra tokens
+              Uses X2 Tokens · deducts extra tokens
             </span>
           )}
         </div>

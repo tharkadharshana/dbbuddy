@@ -327,9 +327,9 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete }) {
           <div style={{ display:'flex', flexDirection:'column', gap:8, marginBottom:12 }}>
             {plans.length === 0
               ? [
-                  { id: 1, name: 'Starter', tokens_limit: 100,  price_cents: 500  },
-                  { id: 2, name: 'Growth',  tokens_limit: 250,  price_cents: 1000 },
-                  { id: 3, name: 'Pro',     tokens_limit: 1000, price_cents: 2500 },
+                  { id: 1, name: 'Starter', tokens_limit: 50,  price_cents: 500  },
+                  { id: 2, name: 'Growth',  tokens_limit: 125, price_cents: 1000 },
+                  { id: 3, name: 'Pro',     tokens_limit: 500, price_cents: 2500 },
                 ].map(plan => (
                   <PlanCard key={plan.id} plan={plan} selected={selectedPlanId === plan.id} onSelect={() => setSelectedPlanId(plan.id)} />
                 ))
@@ -442,11 +442,17 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete }) {
 }
 
 // ── Plan card subcomponent ─────────────────────────────────────────────────────
+const _TDM = 10_000
+function _fmtTok(raw) {
+  const n = (raw || 0) * _TDM
+  if (n >= 1_000_000) return `${parseFloat((n / 1_000_000).toFixed(2))}M`
+  if (n >= 1_000)     return `${parseFloat((n / 1_000).toFixed(1))}K`
+  return Math.round(n).toLocaleString()
+}
+
 function PlanCard({ plan, selected, onSelect }) {
   const price = `$${(plan.price_cents / 100).toFixed(0)}/mo`
-  const tokens = plan.tokens_limit >= 1000
-    ? `${(plan.tokens_limit / 1000).toFixed(0)}K`
-    : plan.tokens_limit
+  const tokens = _fmtTok(plan.tokens_limit)
   return (
     <div
       onClick={onSelect}
