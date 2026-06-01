@@ -52,7 +52,7 @@ export default function AuthPage({ onAuth }) {
             </svg>
           </div>
           <div style={{ fontSize:26, fontWeight:700, color:'#f0f1fa', marginBottom:4 }}>DataMind AI</div>
-          <div style={{ fontSize:13, color:'#5a5f7d' }}>SQL Analytics · Forecasting · AI Reports</div>
+          <div style={{ fontSize:13, color:'#5a5f7d' }}>Transform Data into Actionable Intelligence</div>
         </div>
 
         {/* Card */}
