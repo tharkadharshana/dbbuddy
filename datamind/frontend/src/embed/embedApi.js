@@ -70,21 +70,7 @@ export const embedGetPlans = () =>
 export const embedSubscribePlan = (plan_id) =>
   api.post('/billing/subscribe', { plan_id }).then(r => r.data)
 
-// Salesplay auto-init helpers
-export const salesplayCheckUser = (partnerKey, email) =>
-  api.post('/embed/salesplay/check-user', { partner_key: partnerKey, email }).then(r => r.data)
-
-export const salesplayAutoInit = (partnerKey, email, name, salesplayApiToken = null) =>
-  api.post('/embed/salesplay/auto-init', {
-    partner_key: partnerKey,
-    email,
-    name,
-    ...(salesplayApiToken ? { salesplay_api_token: salesplayApiToken } : {}),
-  }).then(r => r.data)
-
-// Salesplay backend proxies (bypass CORS — server-to-server calls)
-export const salesplayFetchProfile = (partnerKey, aat) =>
-  api.post('/embed/salesplay/profile', { partner_key: partnerKey, aat }).then(r => r.data)
-
-export const salesplayCreateToken = (partnerKey, aat) =>
-  api.post('/embed/salesplay/create-token', { partner_key: partnerKey, aat }).then(r => r.data)
+// Salesplay one-shot onboarding — backend handles profile fetch, token creation,
+// account setup, and provider connect in a single server-side call.
+export const salesplayOnboard = (partnerKey, aat) =>
+  api.post('/embed/salesplay/onboard', { partner_key: partnerKey, aat }).then(r => r.data)
