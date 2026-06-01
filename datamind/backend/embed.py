@@ -438,10 +438,11 @@ def salesplay_proxy_profile(request: Request, req: SalesplayProfileRequest):
             raise HTTPException(status_code=401, detail="Salesplay session expired. Please refresh the page.")
         resp.raise_for_status()
         data = resp.json()
-        raw  = data.get("data") or data
+        # Salesplay profile response: { "status": "success", "user": { "email": ..., "full_name": ... } }
+        raw  = data.get("user") or data.get("data") or data
         email = (raw.get("email") or "").strip().lower()
         name  = (
-            raw.get("name") or raw.get("full_name") or
+            raw.get("full_name") or raw.get("name") or
             raw.get("business_name") or email.split("@")[0]
         ).strip()
         if not email:
