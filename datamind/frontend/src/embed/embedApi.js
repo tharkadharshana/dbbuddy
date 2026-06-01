@@ -69,3 +69,15 @@ export const embedGetPlans = () =>
 
 export const embedSubscribePlan = (plan_id) =>
   api.post('/billing/subscribe', { plan_id }).then(r => r.data)
+
+// Salesplay auto-init helpers
+export const salesplayCheckUser = (partnerKey, email) =>
+  api.post('/embed/salesplay/check-user', { partner_key: partnerKey, email }).then(r => r.data)
+
+export const salesplayAutoInit = (partnerKey, email, name, salesplayApiToken = null) =>
+  api.post('/embed/salesplay/auto-init', {
+    partner_key: partnerKey,
+    email,
+    name,
+    ...(salesplayApiToken ? { salesplay_api_token: salesplayApiToken } : {}),
+  }).then(r => r.data)
