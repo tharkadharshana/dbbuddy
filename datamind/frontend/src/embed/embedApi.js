@@ -81,3 +81,10 @@ export const salesplayAutoInit = (partnerKey, email, name, salesplayApiToken = n
     name,
     ...(salesplayApiToken ? { salesplay_api_token: salesplayApiToken } : {}),
   }).then(r => r.data)
+
+// Salesplay backend proxies (bypass CORS — server-to-server calls)
+export const salesplayFetchProfile = (partnerKey, aat) =>
+  api.post('/embed/salesplay/profile', { partner_key: partnerKey, aat }).then(r => r.data)
+
+export const salesplayCreateToken = (partnerKey, aat) =>
+  api.post('/embed/salesplay/create-token', { partner_key: partnerKey, aat }).then(r => r.data)
