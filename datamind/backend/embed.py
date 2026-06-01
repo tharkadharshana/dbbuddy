@@ -21,6 +21,7 @@ import collections
 from typing import Optional
 
 import mysql.connector
+import requests as _http
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
@@ -385,3 +386,105 @@ def salesplay_auto_init(request: Request, req: SalesplayAutoInitRequest):
         "is_new_user": is_new_user,
         "sync":        sync,
     }
+
+
+# ── Salesplay API proxy endpoints ─────────────────────────────────────────────
+# The Salesplay API enforces CORS and only allows requests from their own
+# backoffice origin. Since our iframe runs at datamind.ai, direct browser
+# calls are blocked. These thin server-side proxies forward the request
+# using the user's app_access_token — no CORS applies to server-to-server calls.
+
+_SALESPLAY_BASE = "https://predev5api.nvision.lk/v2.0/public/app"
+_PROXY_TIMEOUT  = 10  # seconds
+
+
+def _salesplay_guard(partner_key: str, request: "Request"):
+    """Validate partner key is active Salesplay, apply rate limit. Returns partner row."""
+    _check_rate(_client_ip(request))
+    partner = _get_partner(partner_key)
+    if not partner:
+        raise HTTPException(status_code=404, detail="Invalid or inactive partner key.")
+    if partner["provider_id"] != "salesplay":
+        raise HTTPException(status_code=403, detail="This endpoint is only available for Salesplay partners.")
+    return partner
+
+
+class SalesplayProfileRequest(BaseModel):
+    partner_key: str
+    aat:         str   # Salesplay app_access_token
+
+
+class SalesplayCreateTokenRequest(BaseModel):
+    partner_key: str
+    aat:         str
+
+
+@router.post("/salesplay/profile")
+def salesplay_proxy_profile(request: Request, req: SalesplayProfileRequest):
+    """
+    Proxy: fetch the authenticated user's Salesplay profile.
+    Forwards the app_access_token server-to-server to avoid browser CORS restrictions.
+    Returns { email, name }.
+    """
+    _salesplay_guard(req.partner_key, request)
+
+    try:
+        resp = _http.get(
+            f"{_SALESPLAY_BASE}/profile",
+            headers={"Authorization": f"Bearer {req.aat.strip()}"},
+            timeout=_PROXY_TIMEOUT,
+        )
+        if resp.status_code == 401:
+            raise HTTPException(status_code=401, detail="Salesplay session expired. Please refresh the page.")
+        resp.raise_for_status()
+        data = resp.json()
+        raw  = data.get("data") or data
+        email = (raw.get("email") or "").strip().lower()
+        name  = (
+            raw.get("name") or raw.get("full_name") or
+            raw.get("business_name") or email.split("@")[0]
+        ).strip()
+        if not email:
+            raise HTTPException(status_code=422, detail="Could not retrieve email from Salesplay profile.")
+        log.info("Salesplay proxy: profile fetched", email=email)
+        return {"email": email, "name": name}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("Salesplay proxy: profile fetch failed", error=str(e))
+        raise HTTPException(status_code=502, detail="Could not reach Salesplay API. Please try again.")
+
+
+@router.post("/salesplay/create-token")
+def salesplay_proxy_create_token(request: Request, req: SalesplayCreateTokenRequest):
+    """
+    Proxy: create a DataMind integration access token in the user's Salesplay account.
+    Forwards the app_access_token server-to-server to avoid browser CORS restrictions.
+    Returns { token } — the Salesplay API token stored in user_integrations.
+    """
+    _salesplay_guard(req.partner_key, request)
+
+    try:
+        resp = _http.post(
+            f"{_SALESPLAY_BASE}/integrations/access_tokens",
+            headers={
+                "Authorization":  f"Bearer {req.aat.strip()}",
+                "Content-Type":   "application/json",
+            },
+            json={"name": "DataMind", "expire_enabled": False, "expires_at": ""},
+            timeout=_PROXY_TIMEOUT,
+        )
+        if resp.status_code == 401:
+            raise HTTPException(status_code=401, detail="Salesplay session expired. Please refresh the page.")
+        resp.raise_for_status()
+        data  = resp.json()
+        token = (data.get("data") or {}).get("token")
+        if not token:
+            raise HTTPException(status_code=502, detail="Salesplay did not return an API token.")
+        log.info("Salesplay proxy: access token created")
+        return {"token": token}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("Salesplay proxy: create-token failed", error=str(e))
+        raise HTTPException(status_code=502, detail="Could not create Salesplay API token. Please try again.")
