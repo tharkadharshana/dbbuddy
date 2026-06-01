@@ -182,6 +182,18 @@ class EmbedInitRequest(BaseModel):
     password:    str = Field(min_length=8)
 
 
+class SalesplayCheckUserRequest(BaseModel):
+    partner_key: str
+    email:       str
+
+
+class SalesplayAutoInitRequest(BaseModel):
+    partner_key:          str
+    email:                str
+    name:                 str
+    salesplay_api_token:  Optional[str] = None
+
+
 @router.post("/init")
 def embed_init(request: Request, req: EmbedInitRequest):
     """
@@ -253,4 +265,123 @@ def embed_init(request: Request, req: EmbedInitRequest):
         "user":        {"name": req.name, "email": req.email.strip().lower()},
         "provider_id": partner["provider_id"],
         "sync":        "started",
+    }
+
+
+# ── Salesplay auto-init endpoints ─────────────────────────────────────────────
+
+@router.post("/salesplay/check-user")
+def salesplay_check_user(request: Request, req: SalesplayCheckUserRequest):
+    """
+    Pre-flight check for the Salesplay auto-init flow.
+    Returns whether a DataMind account and Salesplay credentials exist for the
+    given email. The frontend uses this to decide whether to generate a new
+    Salesplay API token before calling /salesplay/auto-init.
+    """
+    _check_rate(_client_ip(request))
+
+    partner = _get_partner(req.partner_key)
+    if not partner:
+        raise HTTPException(status_code=404, detail="Invalid or inactive partner key.")
+    if partner["provider_id"] != "salesplay":
+        raise HTTPException(status_code=403, detail="This endpoint is only available for Salesplay partners.")
+
+    email = req.email.strip().lower()
+
+    conn = _get_conn()
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT email FROM users WHERE email = %s LIMIT 1", (email,))
+        user_row = cursor.fetchone()
+        exists = user_row is not None
+
+        has_credentials = False
+        if exists:
+            cursor.execute(
+                "SELECT id FROM user_integrations WHERE user_email = %s AND provider_id = 'salesplay' LIMIT 1",
+                (email,)
+            )
+            has_credentials = cursor.fetchone() is not None
+
+        cursor.close()
+    finally:
+        conn.close()
+
+    log.info("Salesplay check-user", email=email, exists=exists, has_credentials=has_credentials)
+    return {"exists": exists, "has_credentials": has_credentials}
+
+
+@router.post("/salesplay/auto-init")
+def salesplay_auto_init(request: Request, req: SalesplayAutoInitRequest):
+    """
+    One-shot auto-onboarding for Salesplay embed users.
+    The widget calls this after fetching the user's Salesplay profile and
+    (when needed) creating a Salesplay API token on the user's behalf.
+
+    Flow:
+      1. Validate partner key (Salesplay only)
+      2. Create DataMind account — or issue JWT directly for existing accounts
+      3. Start free trial (non-fatal if already active)
+      4. If salesplay_api_token provided: connect provider + trigger sync
+      5. Return JWT
+    """
+    _check_rate(_client_ip(request))
+
+    partner = _get_partner(req.partner_key)
+    if not partner:
+        raise HTTPException(status_code=404, detail="Invalid or inactive partner key.")
+    if partner["provider_id"] != "salesplay":
+        raise HTTPException(status_code=403, detail="This endpoint is only available for Salesplay partners.")
+
+    email = req.email.strip().lower()
+    name  = req.name.strip()
+
+    # Derive a deterministic password from the email (e.g. john2@gmail.com → john2@gmail)
+    password = email.rsplit(".", 1)[0]
+
+    is_new_user = False
+    try:
+        create_user(name, email, password)
+        is_new_user = True
+        log.info("Salesplay auto-init: user created", email=email)
+    except HTTPException as e:
+        if "already registered" in str(e.detail):
+            # Existing account — issue token directly; don't verify password because the
+            # user may have a different password from a main-app registration.
+            log.info("Salesplay auto-init: existing user", email=email)
+        else:
+            raise
+
+    # Start free trial (silently skip if already active)
+    try:
+        start_trial(email)
+    except Exception as _te:
+        log.warning("Salesplay auto-init: trial start skipped", email=email, error=str(_te))
+
+    # Connect provider only when a fresh API token is supplied
+    sync = "skipped"
+    api_token = (req.salesplay_api_token or "").strip()
+    if api_token:
+        try:
+            connect_provider(
+                user_email  = email,
+                provider_id = "salesplay",
+                credentials = {"api_token": api_token},
+            )
+            sync = "started"
+            log.info("Salesplay auto-init: provider connected", email=email)
+        except ValueError as e:
+            log.warning("Salesplay auto-init: bad API token", email=email, error=str(e))
+            raise HTTPException(status_code=422, detail="Invalid Salesplay API token.")
+        except Exception as e:
+            log.error("Salesplay auto-init: connect failed", email=email, error=str(e))
+            raise HTTPException(status_code=500, detail="Failed to connect provider. Please try again.")
+
+    token = create_token(email)
+    return {
+        "token":       token,
+        "user":        {"name": name, "email": email},
+        "provider_id": "salesplay",
+        "is_new_user": is_new_user,
+        "sync":        sync,
     }
