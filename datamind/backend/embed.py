@@ -489,3 +489,151 @@ def salesplay_proxy_create_token(request: Request, req: SalesplayCreateTokenRequ
     except Exception as e:
         log.error("Salesplay proxy: create-token failed", error=str(e))
         raise HTTPException(status_code=502, detail="Could not create Salesplay API token. Please try again.")
+
+
+# ── Single onboarding endpoint (widget calls this once after consent) ─────────
+
+class SalesplayOnboardRequest(BaseModel):
+    partner_key: str
+    aat:         str
+
+
+@router.post("/salesplay/onboard")
+def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
+    """
+    All-in-one Salesplay onboarding. The widget calls this once after the user
+    accepts the consent screen. The backend handles everything:
+      1. Fetch user profile from Salesplay (server-to-server, no CORS)
+      2. Check if a DataMind account + credentials already exist
+      3. If no credentials: create a Salesplay API token (server-to-server)
+      4. Create DataMind account if new, or issue JWT for existing account
+      5. Start free trial, connect provider, trigger sync
+      6. Return JWT + sync status
+    """
+    _check_rate(_client_ip(request))
+
+    partner = _get_partner(req.partner_key)
+    if not partner:
+        raise HTTPException(status_code=404, detail="Invalid or inactive partner key.")
+    if partner["provider_id"] != "salesplay":
+        raise HTTPException(status_code=403, detail="This endpoint is only available for Salesplay partners.")
+
+    aat = req.aat.strip()
+
+    # ── 1. Fetch Salesplay user profile ───────────────────────────────────────
+    try:
+        resp = _http.get(
+            f"{_SALESPLAY_BASE}/profile",
+            headers={"Authorization": f"Bearer {aat}"},
+            timeout=_PROXY_TIMEOUT,
+        )
+        if resp.status_code == 401:
+            raise HTTPException(status_code=401, detail="Salesplay session expired. Please refresh the page.")
+        resp.raise_for_status()
+        data  = resp.json()
+        raw   = data.get("user") or data.get("data") or data
+        email = (raw.get("email") or "").strip().lower()
+        name  = (
+            raw.get("full_name") or raw.get("name") or
+            raw.get("business_name") or email.split("@")[0]
+        ).strip()
+        if not email:
+            raise HTTPException(status_code=422, detail="Could not retrieve email from Salesplay profile.")
+        log.info("Salesplay onboard: profile fetched", email=email)
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("Salesplay onboard: profile fetch failed", error=str(e))
+        raise HTTPException(status_code=502, detail="Could not reach Salesplay API. Please try again.")
+
+    # ── 2. Check if DataMind account + credentials already exist ──────────────
+    conn = _get_conn()
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT email FROM users WHERE email = %s LIMIT 1", (email,))
+        user_exists = cursor.fetchone() is not None
+        has_credentials = False
+        if user_exists:
+            cursor.execute(
+                "SELECT id FROM user_integrations "
+                "WHERE user_email = %s AND provider_id = 'salesplay' LIMIT 1",
+                (email,)
+            )
+            has_credentials = cursor.fetchone() is not None
+        cursor.close()
+    finally:
+        conn.close()
+
+    # ── 3. Create Salesplay API token if needed ───────────────────────────────
+    salesplay_api_token = None
+    if not has_credentials:
+        try:
+            resp = _http.post(
+                f"{_SALESPLAY_BASE}/integrations/access_tokens",
+                headers={
+                    "Authorization": f"Bearer {aat}",
+                    "Content-Type":  "application/json",
+                },
+                json={"name": "DataMind", "expire_enabled": False, "expires_at": ""},
+                timeout=_PROXY_TIMEOUT,
+            )
+            if resp.status_code == 401:
+                raise HTTPException(status_code=401, detail="Salesplay session expired. Please refresh the page.")
+            resp.raise_for_status()
+            token_data        = resp.json()
+            salesplay_api_token = (token_data.get("data") or {}).get("token")
+            if not salesplay_api_token:
+                raise HTTPException(status_code=502, detail="Salesplay did not return an API token.")
+            log.info("Salesplay onboard: API token created", email=email)
+        except HTTPException:
+            raise
+        except Exception as e:
+            log.error("Salesplay onboard: create-token failed", error=str(e))
+            raise HTTPException(status_code=502, detail="Could not create Salesplay API token. Please try again.")
+
+    # ── 4. Create DataMind account (or reuse existing) ────────────────────────
+    password    = email.rsplit(".", 1)[0]
+    is_new_user = False
+    try:
+        create_user(name, email, password)
+        is_new_user = True
+        log.info("Salesplay onboard: user created", email=email)
+    except HTTPException as e:
+        if "already registered" in str(e.detail):
+            log.info("Salesplay onboard: existing user", email=email)
+        else:
+            raise
+
+    # ── 5. Start trial (non-fatal) ────────────────────────────────────────────
+    try:
+        start_trial(email)
+    except Exception as _te:
+        log.warning("Salesplay onboard: trial start skipped", email=email, error=str(_te))
+
+    # ── 6. Connect provider + trigger sync (only when we have a new API token) ─
+    sync = "skipped"
+    if salesplay_api_token:
+        try:
+            connect_provider(
+                user_email  = email,
+                provider_id = "salesplay",
+                credentials = {"api_token": salesplay_api_token},
+            )
+            sync = "started"
+            log.info("Salesplay onboard: provider connected", email=email)
+        except ValueError as e:
+            log.warning("Salesplay onboard: bad API token", email=email, error=str(e))
+            raise HTTPException(status_code=422, detail="Invalid Salesplay API token.")
+        except Exception as e:
+            log.error("Salesplay onboard: connect failed", email=email, error=str(e))
+            raise HTTPException(status_code=500, detail="Failed to connect provider. Please try again.")
+
+    token = create_token(email)
+    log.info("Salesplay onboard: complete", email=email, is_new_user=is_new_user, sync=sync)
+    return {
+        "token":       token,
+        "user":        {"name": name, "email": email},
+        "provider_id": "salesplay",
+        "is_new_user": is_new_user,
+        "sync":        sync,
+    }

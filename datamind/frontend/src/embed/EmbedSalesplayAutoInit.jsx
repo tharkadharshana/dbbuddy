@@ -7,16 +7,12 @@
  *
  * Flow:
  *   consent  → user reads what data will be accessed and clicks Accept
- *   profile  → fetch Salesplay user profile (auto)
- *   account  → create/locate DataMind account (auto)
+ *   loading  → single backend call handles everything (profile, token, account)
  *   sync     → first-time data sync with progress bar (auto)
  *   error    → something went wrong, with retry
  */
 import React, { useState } from 'react'
-import {
-  salesplayFetchProfile, salesplayCreateToken,
-  salesplayCheckUser, salesplayAutoInit, embedGetProviderStatus,
-} from './embedApi'
+import { salesplayOnboard, embedGetProviderStatus } from './embedApi'
 import { notifyParent } from './EmbedApp'
 
 // ── Shared styles (mirror EmbedOnboarding) ────────────────────────────────────
@@ -87,72 +83,31 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
   async function runFlow() {
     setErrorMsg('')
 
-    // Guard: aat is required for the auto-init path
     if (!aat) {
       fail('Session token not found. Please access DataMind through the Salesplay backoffice.')
       return
     }
 
-    // ── 1. Fetch Salesplay user profile (via backend proxy — no CORS) ────────
-    setPhase('profile')
-    let profile
+    // Single backend call — profile fetch, token creation, account setup all happen server-side
+    setPhase('loading')
+    let result
     try {
-      const data  = await salesplayFetchProfile(partnerKey, aat)
-      profile = { email: data.email, name: data.name }
-    } catch (e) {
-      const detail = e.response?.data?.detail || 'Could not connect to Salesplay. Your session may have expired. Please refresh the page.'
-      fail(detail)
-      return
-    }
-
-    // ── 2. Check DataMind account + credentials ───────────────────────────────
-    setPhase('account')
-    let checkResult
-    try {
-      checkResult = await salesplayCheckUser(partnerKey, profile.email)
-    } catch {
-      fail('Could not reach DataMind servers. Please try again.')
-      return
-    }
-
-    // ── 3. Create Salesplay API token if needed (via backend proxy — no CORS) ─
-    let salesplayApiToken = null
-    if (!checkResult.exists || !checkResult.has_credentials) {
-      try {
-        const data        = await salesplayCreateToken(partnerKey, aat)
-        salesplayApiToken = data.token
-      } catch (e) {
-        const detail = e.response?.data?.detail || 'Could not create Salesplay API credentials. Please try again.'
-        fail(detail)
-        return
-      }
-    }
-
-    // ── 4. Auto-init DataMind account ─────────────────────────────────────────
-    let initResult
-    try {
-      initResult = await salesplayAutoInit(
-        partnerKey,
-        profile.email,
-        profile.name,
-        salesplayApiToken,
-      )
+      result = await salesplayOnboard(partnerKey, aat)
     } catch (e) {
       const detail = e.response?.data?.detail || e.response?.data?.error || e.message || 'Setup failed. Please try again.'
       fail(detail)
       return
     }
 
-    localStorage.setItem('dm_embed_token', initResult.token)
+    localStorage.setItem('dm_embed_token', result.token)
 
-    // ── 5. Sync or go straight to chat ────────────────────────────────────────
-    if (initResult.sync === 'started') {
+    if (result.sync === 'started') {
       setPhase('sync')
       notifyParent('dm:onboarding_sync_started')
-      pollSync(context.provider_id, initResult.token, profile)
+      pollSync(context.provider_id, result.token, result.user)
     } else {
       notifyParent('dm:chat_open')
-      onComplete(initResult.token, profile)
+      onComplete(result.token, result.user)
     }
   }
 
@@ -281,11 +236,11 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
         </div>
       )}
 
-      {/* ── PROFILE / ACCOUNT loading ───────────────────────────────────────── */}
-      {(phase === 'profile' || phase === 'account') && (
+      {/* ── LOADING (single backend call covers everything) ─────────────────── */}
+      {phase === 'loading' && (
         <>
           <div style={{ fontSize: 13, color: 'var(--text2)', marginBottom: 18, marginTop: 10 }}>
-            {phase === 'profile' ? 'Connecting to Salesplay…' : 'Setting up your DataMind account…'}
+            Setting up your account…
           </div>
           <div style={{ display: 'flex', justifyContent: 'center' }}>
             <div style={{
