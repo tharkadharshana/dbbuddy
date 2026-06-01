@@ -13,10 +13,11 @@
  *   error    → something went wrong, with retry
  */
 import React, { useState } from 'react'
-import { salesplayCheckUser, salesplayAutoInit, embedGetProviderStatus } from './embedApi'
+import {
+  salesplayFetchProfile, salesplayCreateToken,
+  salesplayCheckUser, salesplayAutoInit, embedGetProviderStatus,
+} from './embedApi'
 import { notifyParent } from './EmbedApp'
-
-const SALESPLAY_API = 'https://predev5api.nvision.lk/v2.0/public/app'
 
 // ── Shared styles (mirror EmbedOnboarding) ────────────────────────────────────
 const primaryBtn = (disabled) => ({
@@ -88,22 +89,15 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
       return
     }
 
-    // ── 1. Fetch Salesplay user profile ───────────────────────────────────────
+    // ── 1. Fetch Salesplay user profile (via backend proxy — no CORS) ────────
     setPhase('profile')
     let profile
     try {
-      const resp = await fetch(`${SALESPLAY_API}/profile`, {
-        headers: { Authorization: `Bearer ${aatToken}` },
-      })
-      if (!resp.ok) throw new Error(`${resp.status}`)
-      const data  = await resp.json()
-      const raw   = data?.data || data
-      const email = (raw.email || '').trim().toLowerCase()
-      const name  = (raw.name || raw.full_name || raw.business_name || email.split('@')[0]).trim()
-      if (!email) throw new Error('No email in profile response')
-      profile = { email, name }
-    } catch {
-      fail('Could not connect to Salesplay. Your session may have expired. Please refresh the page.')
+      const data  = await salesplayFetchProfile(partnerKey, aatToken)
+      profile = { email: data.email, name: data.name }
+    } catch (e) {
+      const detail = e.response?.data?.detail || 'Could not connect to Salesplay. Your session may have expired. Please refresh the page.'
+      fail(detail)
       return
     }
 
@@ -117,24 +111,15 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
       return
     }
 
-    // ── 3. Create Salesplay API token if needed ───────────────────────────────
+    // ── 3. Create Salesplay API token if needed (via backend proxy — no CORS) ─
     let salesplayApiToken = null
     if (!checkResult.exists || !checkResult.has_credentials) {
       try {
-        const tokenResp = await fetch(`${SALESPLAY_API}/integrations/access_tokens`, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${aatToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ name: 'DataMind', expire_enabled: false, expires_at: '' }),
-        })
-        if (!tokenResp.ok) throw new Error(`${tokenResp.status}`)
-        const tokenData   = await tokenResp.json()
-        salesplayApiToken = tokenData?.data?.token
-        if (!salesplayApiToken) throw new Error('Missing token in response')
-      } catch {
-        fail('Could not create Salesplay API credentials. Please try again.')
+        const data        = await salesplayCreateToken(partnerKey, aatToken)
+        salesplayApiToken = data.token
+      } catch (e) {
+        const detail = e.response?.data?.detail || 'Could not create Salesplay API credentials. Please try again.'
+        fail(detail)
         return
       }
     }
