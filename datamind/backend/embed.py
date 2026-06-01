@@ -28,7 +28,7 @@ from pydantic import BaseModel, Field
 from logger import get_logger
 from auth import create_user, authenticate_user, create_token
 from billing import start_trial
-from integrations import connect_provider
+from integrations import connect_provider, connect_integration
 from pool import get_internal_conn as _get_conn
 
 log = get_logger(__name__)
@@ -611,19 +611,20 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
         log.warning("Salesplay onboard: trial start skipped", email=email, error=str(_te))
 
     # ── 6. Connect provider + trigger sync (only when we have a new API token) ─
+    # skip_validation=True: we just created this token from Salesplay's own API,
+    # so it is guaranteed valid. The provider's validate_credentials() calls a
+    # different Salesplay API system that may reject the token unnecessarily.
     sync = "skipped"
     if salesplay_api_token:
         try:
-            connect_provider(
-                user_email  = email,
-                provider_id = "salesplay",
-                credentials = {"api_token": salesplay_api_token},
+            connect_integration(
+                user_email       = email,
+                provider_id      = "salesplay",
+                creds            = {"api_token": salesplay_api_token},
+                skip_validation  = True,
             )
             sync = "started"
             log.info("Salesplay onboard: provider connected", email=email)
-        except ValueError as e:
-            log.warning("Salesplay onboard: bad API token", email=email, error=str(e))
-            raise HTTPException(status_code=422, detail="Invalid Salesplay API token.")
         except Exception as e:
             log.error("Salesplay onboard: connect failed", email=email, error=str(e))
             raise HTTPException(status_code=500, detail="Failed to connect provider. Please try again.")

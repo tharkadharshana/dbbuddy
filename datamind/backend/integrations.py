@@ -754,11 +754,13 @@ def connect_integration(
     creds: dict,
     display_label: str = "",
     progress_callback=None,
+    skip_validation: bool = False,
 ) -> Dict:
     """
     Full connect flow:
     1. Get provider
-    2. Validate credentials
+    2. Validate credentials (skipped when skip_validation=True — e.g. embed onboard
+       where the token was just created server-side and is guaranteed valid)
     3. Create user-namespaced tables in DataMind's DB
     4. Save integration record
     5. Trigger full sync in background
@@ -766,12 +768,14 @@ def connect_integration(
     provider = get_provider(provider_id)
     table_prefix = provider.get_table_prefix(user_email)
     log.info("Connecting integration",
-             user=user_email, provider=provider_id, prefix=table_prefix)
+             user=user_email, provider=provider_id, prefix=table_prefix,
+             skip_validation=skip_validation)
 
-    # Validate first
-    result = provider.validate_credentials(creds)
-    if not result.ok:
-        raise ValueError(f"Credential validation failed: {result.error}")
+    result = None
+    if not skip_validation:
+        result = provider.validate_credentials(creds)
+        if not result.ok:
+            raise ValueError(f"Credential validation failed: {result.error}")
 
     # Shared sp_* tables are created at bootstrap — no per-connection DDL needed.
     # _create_views_for_integration() is kept defined for reference but no longer
@@ -804,7 +808,7 @@ def connect_integration(
         "ok": True,
         "provider_id": provider_id,
         "table_prefix": table_prefix,
-        "validation_details": result.details,
+        "validation_details": result.details if result else {},
         "message": "Integration connected. Full sync started in background.",
     }
 
