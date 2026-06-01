@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Salesplay Embed Test</title>
+  <style>
+    body { font-family: sans-serif; background: #f5f5f5; padding: 40px; }
+    .panel { display: flex; gap: 40px; align-items: flex-start; }
+    .sidebar { flex: 1; background: #1a1a2e; color: #eee; padding: 20px; border-radius: 8px; }
+    #log { margin-top: 20px; font-size: 12px; color: #aaa; }
+    #aat-form { margin-bottom: 20px; }
+    #aat-form input { width: 100%; padding: 8px; border-radius: 6px; border: 1px solid #ccc; font-size: 12px; font-family: monospace; box-sizing: border-box; }
+    #aat-form button { margin-top: 8px; padding: 8px 16px; background: #4f8ef7; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; }
+    #widget-container { flex-shrink: 0; }
+  </style>
+</head>
+<body>
+  <h2 style="color:#333">Salesplay Embed Test (simulates Salesplay backoffice)</h2>
+
+  <!--
+    HOW THE REAL INTEGRATION WORKS:
+    Salesplay's backoffice JS reads app_access_token from document.cookie and
+    builds the iframe URL with &aat=TOKEN. This test page simulates that by letting
+    you paste the token manually (since we can't read Salesplay's cookie from localhost).
+
+    In production on predev5backoffice.nvision.lk, the script reads the cookie automatically.
+  -->
+  <div id="aat-form">
+    <label style="font-size:13px; color:#555; font-weight:600;">
+      Paste your <code>app_access_token</code> from Salesplay backoffice
+      (DevTools → Application → Cookies → predev5backoffice.nvision.lk → app_access_token)
+    </label><br><br>
+    <input id="aat-input" type="text" placeholder="eyJ0eXAiOiJKV1Q..." />
+    <button onclick="loadWidget()">Load Widget</button>
+  </div>
+
+  <div class="panel">
+    <div class="sidebar">
+      <h3>📊 Sales Overview</h3>
+      <p>This simulates the Salesplay backoffice layout.</p>
+      <div id="log">Waiting for DataMind events...</div>
+    </div>
+    <div id="widget-container">
+      <!-- Widget iframe is injected here by loadWidget() -->
+    </div>
+  </div>
+
+  <script>
+    const PK  = 'sp_dev_test'          // partner key — change to your real sp_live_ key
+    const log = document.getElementById('log')
+
+    function loadWidget() {
+      const aat = document.getElementById('aat-input').value.trim()
+      if (!aat) {
+        alert('Paste your app_access_token first')
+        return
+      }
+
+      // Remove any existing iframe
+      const container = document.getElementById('widget-container')
+      container.innerHTML = ''
+
+      // This exactly mirrors what the Salesplay backoffice JS snippet does:
+      //   1. Read app_access_token from cookie (here: from the input box for testing)
+      //   2. Build iframe URL with pk + aat
+      //   3. Append iframe to the page
+      const src = 'http://localhost:5173/src/embed/embed.html'
+                + '?pk='  + encodeURIComponent(PK)
+                + '&aat=' + encodeURIComponent(aat)
+
+      const iframe = document.createElement('iframe')
+      iframe.src         = src
+      iframe.width       = '420'
+      iframe.height      = '640'
+      iframe.frameBorder = '0'
+      iframe.style.cssText = 'border-radius:12px; box-shadow:0 4px 24px rgba(0,0,0,0.2);'
+
+      container.appendChild(iframe)
+      logEvent('Widget loaded with fresh aat')
+    }
+
+    // Listen for postMessage events from the DataMind widget
+    window.addEventListener('message', (event) => {
+      if (!event.data?.type?.startsWith('dm:')) return
+      logEvent(event.data.type + ' ' + JSON.stringify(event.data))
+    })
+
+    function logEvent(msg) {
+      const entry = document.createElement('div')
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`
+      log.prepend(entry)
+    }
+  </script>
+</body>
+</html>
