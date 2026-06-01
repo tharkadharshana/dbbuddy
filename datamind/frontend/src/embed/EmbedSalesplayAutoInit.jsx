@@ -70,6 +70,10 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
   const [errorMsg, setErrorMsg] = useState('')
   const [loading, setLoading]   = useState(false)
 
+  // Read aat directly from URL params — more reliable than the prop which travels
+  // through React state and can be empty on the first render in some React versions.
+  const aat = aatToken || new URLSearchParams(window.location.search).get('aat') || ''
+
   const productTitle  = context?.branding?.product_name || 'DataMind AI'
   const providerName  = context?.partner_name || 'Salesplay'
 
@@ -84,7 +88,7 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
     setErrorMsg('')
 
     // Guard: aat is required for the auto-init path
-    if (!aatToken) {
+    if (!aat) {
       fail('Session token not found. Please access DataMind through the Salesplay backoffice.')
       return
     }
@@ -93,7 +97,7 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
     setPhase('profile')
     let profile
     try {
-      const data  = await salesplayFetchProfile(partnerKey, aatToken)
+      const data  = await salesplayFetchProfile(partnerKey, aat)
       profile = { email: data.email, name: data.name }
     } catch (e) {
       const detail = e.response?.data?.detail || 'Could not connect to Salesplay. Your session may have expired. Please refresh the page.'
@@ -115,7 +119,7 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
     let salesplayApiToken = null
     if (!checkResult.exists || !checkResult.has_credentials) {
       try {
-        const data        = await salesplayCreateToken(partnerKey, aatToken)
+        const data        = await salesplayCreateToken(partnerKey, aat)
         salesplayApiToken = data.token
       } catch (e) {
         const detail = e.response?.data?.detail || 'Could not create Salesplay API credentials. Please try again.'
