@@ -13,6 +13,7 @@ import './embed.css'
 import { embedValidateContext } from './embedApi'
 import EmbedOnboarding from './EmbedOnboarding'
 import EmbedChat from './EmbedChat'
+import EmbedSalesplayAutoInit from './EmbedSalesplayAutoInit'
 
 // ── postMessage helper ────────────────────────────────────────────────────────
 // Populated once /embed/context loads; used to validate incoming messages and
@@ -45,9 +46,10 @@ function EmbedApp() {
   const params     = new URLSearchParams(window.location.search)
   const partnerKey = params.get('pk') || ''
 
-  const [state, setState]     = useState('loading')
-  const [context, setContext] = useState(null)
-  const [errorMsg, setError]  = useState('')
+  const [state, setState]       = useState('loading')
+  const [context, setContext]   = useState(null)
+  const [errorMsg, setError]    = useState('')
+  const [aatToken, setAatToken] = useState('')
 
   // Apply saved theme on first load so onboarding is themed consistently
   useEffect(() => {
@@ -71,7 +73,19 @@ function EmbedApp() {
         setAllowedOrigins(ctx.allowed_origins || [])
         notifyParent('dm:ready', { partner_name: ctx.partner_name })
 
-        if (existingToken) {
+        const aat = params.get('aat') || ''
+        setAatToken(aat)
+
+        if (ctx.provider_id === 'salesplay') {
+          // Salesplay always uses auto-init — manual wizard is not used for this partner
+          if (existingToken) {
+            setState('chat')
+            notifyParent('dm:chat_open')
+          } else {
+            setState('salesplay_init')
+            notifyParent('dm:onboarding_start')
+          }
+        } else if (existingToken) {
           setState('chat')
           notifyParent('dm:chat_open')
         } else {
@@ -134,6 +148,18 @@ function EmbedApp() {
   const accentColor = context?.branding?.accent_color
   if (accentColor) {
     document.documentElement.style.setProperty('--blue', accentColor)
+  }
+
+  if (state === 'salesplay_init') {
+    return (
+      <EmbedSalesplayAutoInit
+        context={context}
+        partnerKey={partnerKey}
+        aatToken={aatToken}
+        onComplete={handleOnboardingComplete}
+        onError={(msg) => { setError(msg); setState('error') }}
+      />
+    )
   }
 
   if (state === 'onboarding') {
