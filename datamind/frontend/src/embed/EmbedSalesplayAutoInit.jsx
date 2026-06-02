@@ -100,6 +100,7 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
     }
 
     localStorage.setItem('dm_embed_token', result.token)
+    if (result.user?.email) localStorage.setItem('dm_sp_email', result.user.email)
 
     if (result.sync === 'started') {
       setPhase('sync')

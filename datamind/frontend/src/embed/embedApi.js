@@ -74,3 +74,11 @@ export const embedSubscribePlan = (plan_id) =>
 // account setup, and provider connect in a single server-side call.
 export const salesplayOnboard = (partnerKey, aat) =>
   api.post('/embed/salesplay/onboard', { partner_key: partnerKey, aat }).then(r => r.data)
+
+// Salesplay profile-only fetch — used to verify merchant identity without side effects.
+export const salesplayGetProfile = (partnerKey, aat) =>
+  api.post('/embed/salesplay/profile', { partner_key: partnerKey, aat }).then(r => r.data)
+
+// Check whether a DataMind account with Salesplay credentials exists for a given email.
+export const salesplayCheckUser = (partnerKey, email) =>
+  api.post('/embed/salesplay/check-user', { partner_key: partnerKey, email }).then(r => r.data)

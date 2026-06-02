@@ -10,7 +10,7 @@
 import React, { useState, useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
 import './embed.css'
-import { embedValidateContext } from './embedApi'
+import { embedValidateContext, salesplayGetProfile, salesplayCheckUser, salesplayOnboard } from './embedApi'
 import EmbedOnboarding from './EmbedOnboarding'
 import EmbedChat from './EmbedChat'
 import EmbedSalesplayAutoInit from './EmbedSalesplayAutoInit'
@@ -67,7 +67,7 @@ function EmbedApp() {
     const existingToken = localStorage.getItem('dm_embed_token')
 
     embedValidateContext(partnerKey)
-      .then(ctx => {
+      .then(async ctx => {
         setContext(ctx)
         // Register allowed origins for all subsequent postMessage calls
         setAllowedOrigins(ctx.allowed_origins || [])
@@ -77,13 +77,44 @@ function EmbedApp() {
         setAatToken(aat)
 
         if (ctx.provider_id === 'salesplay') {
-          // Salesplay always uses auto-init — manual wizard is not used for this partner
-          if (existingToken) {
-            setState('chat')
-            notifyParent('dm:chat_open')
-          } else {
-            setState('salesplay_init')
-            notifyParent('dm:onboarding_start')
+          // Salesplay flow: use the AAT to determine the merchant identity,
+          // then decide whether to show the consent/onboard screen or go straight to chat.
+          if (!aat) {
+            setError('Session token not found. Please access DataMind through the Salesplay backoffice.')
+            setState('error')
+            return
+          }
+
+          try {
+            // 1. Fetch the merchant's Salesplay profile (email, name) — no side effects.
+            const profile = await salesplayGetProfile(partnerKey, aat)
+
+            // 2. Check whether this merchant already has a DataMind account + credentials.
+            const check = await salesplayCheckUser(partnerKey, profile.email)
+
+            if (check.has_credentials) {
+              // Returning merchant — silently refresh the JWT and go straight to chat.
+              // salesplayOnboard is safe here: for existing users it skips all setup steps
+              // and just issues a new token (sync = "skipped").
+              const result = await salesplayOnboard(partnerKey, aat)
+              localStorage.setItem('dm_embed_token', result.token)
+              localStorage.setItem('dm_sp_email', profile.email)
+              setState('chat')
+              notifyParent('dm:chat_open')
+            } else {
+              // New merchant — show consent screen before doing anything.
+              setState('salesplay_init')
+              notifyParent('dm:onboarding_start')
+            }
+          } catch (err) {
+            if (err.response?.status === 401) {
+              setError('Salesplay session expired. Please refresh the page.')
+              setState('error')
+            } else {
+              // API unreachable — fall back to consent screen so the user can retry.
+              setState('salesplay_init')
+              notifyParent('dm:onboarding_start')
+            }
           }
         } else if (existingToken) {
           setState('chat')
@@ -117,12 +148,14 @@ function EmbedApp() {
 
   function handleExpired() {
     localStorage.removeItem('dm_embed_token')
+    localStorage.removeItem('dm_sp_email')
     setState('onboarding')
     notifyParent('dm:onboarding_start')
   }
 
   function handleLogout() {
     localStorage.removeItem('dm_embed_token')
+    localStorage.removeItem('dm_sp_email')
     setState('onboarding')
     notifyParent('dm:logout')
   }
