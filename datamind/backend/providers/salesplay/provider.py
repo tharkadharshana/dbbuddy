@@ -117,9 +117,14 @@ class SalesPlayProvider(BaseProvider):
                 conn.commit()
                 progress(f"  ✓ {label}: {count} rows")
 
-            progress("  Refreshing customer last purchase dates…")
-            refresh_customer_last_purchase(conn, table_prefix)
-            conn.commit()
+            try:
+                progress("  Refreshing customer last purchase dates…")
+                refresh_customer_last_purchase(conn, table_prefix)
+                conn.commit()
+            except Exception as _rce:
+                log.warning("refresh_customer_last_purchase failed — skipping",
+                            prefix=table_prefix, error=str(_rce))
+                conn.rollback()
 
             if budget.skipped > 0:
                 progress(f"⚠ Row limit reached — {budget.skipped:,} rows skipped")

@@ -255,6 +255,12 @@ def bootstrap_integration_tables():
             INDEX idx_id        (id)                  -- JOIN without tenant_id
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """)
+    # Migration: add last_purchase_date if it was missing from a pre-9de48df install
+    cursor.execute("""
+        ALTER TABLE sp_customers
+        ADD COLUMN IF NOT EXISTS last_purchase_date DATETIME DEFAULT NULL
+        AFTER points_balance
+    """)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS sp_categories (
             tenant_id       VARCHAR(64)   NOT NULL,
@@ -1082,8 +1088,10 @@ def _run_sync_inner(integration_id: int, user_email: str, provider_id: str,
     log.info("Sync worker finished", user=user_email, provider=provider_id,
              status=status, rows=result.rows_fetched)
 
-    # Bust analytics result cache so next query gets fresh post-sync data
-    if result.ok and provider_id == "salesplay":
+    # Bust analytics result cache so next query gets fresh post-sync data.
+    # Bust even when ok=False — individual entity steps commit their own data,
+    # so rows may be present even if the sync was later marked as error.
+    if provider_id == "salesplay" and (result.ok or result.rows_inserted > 0):
         try:
             from providers.salesplay.analytics import cache_bust
             cache_bust(table_prefix)
