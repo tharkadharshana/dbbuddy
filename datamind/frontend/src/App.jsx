@@ -44,7 +44,7 @@ export default function App() {
     pollCacheStatus()
     loadSub()
     loadConversations()
-    subIntervalRef.current = setInterval(loadSub, 5 * 1 * 1000)
+    subIntervalRef.current = setInterval(loadSub, 5 * 60 * 1000)
     return () => clearInterval(subIntervalRef.current)
   }, [user])
 
