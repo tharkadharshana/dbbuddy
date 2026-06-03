@@ -297,19 +297,26 @@ def salesplay_check_user(request: Request, req: SalesplayCheckUserRequest):
         exists = user_row is not None
 
         has_credentials = False
+        credentials_healthy = False
         if exists:
             cursor.execute(
-                "SELECT id FROM user_integrations WHERE user_email = %s AND provider_id = 'salesplay' LIMIT 1",
+                "SELECT id, status FROM user_integrations "
+                "WHERE user_email = %s AND provider_id = 'salesplay' LIMIT 1",
                 (email,)
             )
-            has_credentials = cursor.fetchone() is not None
+            row = cursor.fetchone()
+            if row:
+                has_credentials = True
+                credentials_healthy = row["status"] in ("active", "syncing")
 
         cursor.close()
     finally:
         conn.close()
 
-    log.info("Salesplay check-user", email=email, exists=exists, has_credentials=has_credentials)
-    return {"exists": exists, "has_credentials": has_credentials}
+    log.info("Salesplay check-user", email=email, exists=exists,
+             has_credentials=has_credentials, credentials_healthy=credentials_healthy)
+    return {"exists": exists, "has_credentials": has_credentials,
+            "credentials_healthy": credentials_healthy}
 
 
 @router.post("/salesplay/auto-init")
@@ -553,20 +560,33 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
         cursor.execute("SELECT email FROM users WHERE email = %s LIMIT 1", (email,))
         user_exists = cursor.fetchone() is not None
         has_credentials = False
+        credentials_healthy = False
         if user_exists:
             cursor.execute(
-                "SELECT id FROM user_integrations "
+                "SELECT id, status FROM user_integrations "
                 "WHERE user_email = %s AND provider_id = 'salesplay' LIMIT 1",
                 (email,)
             )
-            has_credentials = cursor.fetchone() is not None
+            row = cursor.fetchone()
+            if row:
+                has_credentials = True
+                credentials_healthy = row["status"] in ("active", "syncing")
         cursor.close()
     finally:
         conn.close()
 
+    log.info("Salesplay onboard: credential check",
+             email=email, has_credentials=has_credentials,
+             credentials_healthy=credentials_healthy)
+
     # ── 3. Create Salesplay API token if needed ───────────────────────────────
+    # Create a new token when:
+    #   A) No credentials exist yet (first-time user)
+    #   B) Credentials exist but the last sync failed (status='error') — the stored
+    #      token may be invalid. The AAT is always fresh from the current Salesplay
+    #      session, so it is safe to use it to get a new external token here.
     salesplay_api_token = None
-    if not has_credentials:
+    if not has_credentials or not credentials_healthy:
         try:
             resp = _http.post(
                 f"{_SALESPLAY_BASE}/integrations/access_tokens",
@@ -610,10 +630,12 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
     except Exception as _te:
         log.warning("Salesplay onboard: trial start skipped", email=email, error=str(_te))
 
-    # ── 6. Connect provider + trigger sync (only when we have a new API token) ─
-    # skip_validation=True: we just created this token from Salesplay's own API,
-    # so it is guaranteed valid. The provider's validate_credentials() calls a
-    # different Salesplay API system that may reject the token unnecessarily.
+    # ── 6. Connect provider + trigger sync ───────────────────────────────────
+    # Case A: fresh/broken credentials — store new token and kick off a full sync.
+    # Case B: healthy existing credentials — just trigger a delta sync to pick up
+    #         any new Salesplay data since the last sync (happens on every widget open).
+    # skip_validation=True: token was created directly from Salesplay's own API,
+    # so it is guaranteed valid without needing a separate /merchant round-trip.
     sync = "skipped"
     if salesplay_api_token:
         try:
@@ -624,10 +646,22 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
                 skip_validation  = True,
             )
             sync = "started"
-            log.info("Salesplay onboard: provider connected", email=email)
+            log.info("Salesplay onboard: provider connected with new token", email=email)
         except Exception as e:
             log.error("Salesplay onboard: connect failed", email=email, error=str(e))
             raise HTTPException(status_code=500, detail="Failed to connect provider. Please try again.")
+    elif has_credentials and credentials_healthy:
+        # Returning user with a healthy integration — trigger a delta sync so they
+        # see data from any new Salesplay transactions since their last sync.
+        try:
+            from integrations import trigger_sync
+            trigger_sync(email, "salesplay", full=False)
+            sync = "delta_started"
+            log.info("Salesplay onboard: delta sync triggered for returning user", email=email)
+        except Exception as e:
+            log.warning("Salesplay onboard: delta sync trigger failed (non-fatal)",
+                        email=email, error=str(e))
+            sync = "skipped"
 
     token = create_token(email)
     log.info("Salesplay onboard: complete", email=email, is_new_user=is_new_user, sync=sync)
