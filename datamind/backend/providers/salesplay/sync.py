@@ -441,14 +441,13 @@ def sync_customers(client: SalesPlayAPIClient, conn, prefix: str, user_email: st
 
 def sync_products(client: SalesPlayAPIClient, conn, prefix: str, user_email: str,
                   since: Optional[datetime] = None, budget=None) -> int:
-    """GET /products"""
-    if since is None:
-        since = _default_since()
+    """GET /products — always fetch all; products are a small reference table needed
+    for analytics JOINs regardless of the plan history window."""
+    body: Dict = {"product_ids": ""}
+    if since:
+        body["created_at_min"] = since.strftime(DT_FMT)
+    # No default date cutoff — fetch all products so analytics always have the full catalogue
 
-    body: Dict = {
-        "product_ids":    "",
-        "created_at_min": since.strftime(DT_FMT),
-    }
     items = client._paginate("/products", "products", body)
 
     count = 0

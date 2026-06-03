@@ -580,11 +580,13 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
              credentials_healthy=credentials_healthy)
 
     # ── 3. Create Salesplay API token if needed ───────────────────────────────
-    # Only create a new token when the user has no credentials at all.
-    # Returning users keep their existing token — AAT is a short-lived session
-    # cookie and may no longer be valid by the time they re-open the widget.
+    # Create a new token when:
+    #   A) No credentials exist yet (first-time user)
+    #   B) Credentials exist but the last sync failed (status='error') — the stored
+    #      token may be invalid. The AAT is always fresh from the current Salesplay
+    #      session, so it is safe to use it to get a new external token here.
     salesplay_api_token = None
-    if not has_credentials:
+    if not has_credentials or not credentials_healthy:
         try:
             resp = _http.post(
                 f"{_SALESPLAY_BASE}/integrations/access_tokens",
