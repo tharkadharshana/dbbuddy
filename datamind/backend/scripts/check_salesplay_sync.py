@@ -22,8 +22,6 @@ from datetime import datetime, timedelta
 import requests
 import urllib3
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
 # Force UTF-8 output on Windows so special chars don't crash
 if hasattr(sys.stdout, "buffer"):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
@@ -38,9 +36,14 @@ if env_path.exists():
             k, _, v = line.partition("=")
             os.environ.setdefault(k.strip(), v.strip())
 
-BASE_URL  = os.getenv("SALESPLAY_BASE_URL", "https://api.salesplaypos.com/v1.0")
-PAGE_SIZE = 250
-DT_FMT    = "%Y-%m-%d %H:%M:%S"
+BASE_URL      = os.getenv("SALESPLAY_BASE_URL", "https://api.salesplaypos.com/v1.0")
+PAGE_SIZE     = int(os.getenv("SALESPLAY_PAGE_SIZE", "250"))
+_HTTP_TIMEOUT = int(os.getenv("SALESPLAY_HTTP_TIMEOUT", "30"))
+_VERIFY_SSL   = os.getenv("SALESPLAY_VERIFY_SSL", "false").lower() not in ("false", "0", "no")
+
+if not _VERIFY_SSL:
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+DT_FMT        = "%Y-%m-%d %H:%M:%S"
 SEP       = "-" * 60
 
 
@@ -70,7 +73,7 @@ class RawSalesPlayClient:
             "Token":        f"Bearer {token}",
             "Content-Type": "application/json",
         })
-        self.session.verify = False
+        self.session.verify = _VERIFY_SSL
 
     def get_raw(self, endpoint: str, body: dict = None) -> tuple:
         url = f"{BASE_URL}/{endpoint.lstrip('/')}"
@@ -78,7 +81,7 @@ class RawSalesPlayClient:
         print(f"\n  {GREY}-> GET {url}{RESET}")
         print(f"     {GREY}body: {json.dumps(body)}{RESET}")
         try:
-            resp = self.session.get(url, json=body, timeout=30, verify=False)
+            resp = self.session.get(url, json=body, timeout=_HTTP_TIMEOUT, verify=_VERIFY_SSL)
         except Exception as e:
             print(f"     {RED}Exception: {e}{RESET}")
             return -1, str(e)

@@ -38,8 +38,8 @@ router = APIRouter(prefix="/embed", tags=["embed"])
 # ── Simple in-memory rate limiter (no external deps) ─────────────────────────
 # Tracks per-IP request timestamps for /embed/init (5 requests/minute max).
 _rate_store: dict = collections.defaultdict(list)
-_RATE_LIMIT   = 5    # max calls
-_RATE_WINDOW  = 60   # seconds
+_RATE_LIMIT   = int(os.getenv("SALESPLAY_EMBED_RATE_LIMIT", "5"))
+_RATE_WINDOW  = int(os.getenv("SALESPLAY_EMBED_RATE_WINDOW", "60"))
 
 def _client_ip(request: "Request") -> str:
     """
@@ -401,8 +401,8 @@ def salesplay_auto_init(request: Request, req: SalesplayAutoInitRequest):
 # calls are blocked. These thin server-side proxies forward the request
 # using the user's app_access_token — no CORS applies to server-to-server calls.
 
-_SALESPLAY_BASE = "https://predev5api.nvision.lk/v2.0/public/app"
-_PROXY_TIMEOUT  = 10  # seconds
+_SALESPLAY_BASE = os.getenv("SALESPLAY_EMBED_PROXY_BASE", "https://api.salesplaypos.com/v2.0/public/app")
+_PROXY_TIMEOUT  = int(os.getenv("SALESPLAY_EMBED_PROXY_TIMEOUT", "10"))
 
 
 def _salesplay_guard(partner_key: str, request: "Request"):
