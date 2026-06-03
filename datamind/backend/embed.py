@@ -570,8 +570,6 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
             row = cursor.fetchone()
             if row:
                 has_credentials = True
-                # Credentials exist but treat as needing refresh if the last sync
-                # failed (status='error') — the stored token may be expired.
                 credentials_healthy = row["status"] in ("active", "syncing")
         cursor.close()
     finally:
@@ -582,9 +580,11 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
              credentials_healthy=credentials_healthy)
 
     # ── 3. Create Salesplay API token if needed ───────────────────────────────
-    # Always create a fresh token when: no credentials, OR existing creds are broken.
+    # Only create a new token when the user has no credentials at all.
+    # Returning users keep their existing token — AAT is a short-lived session
+    # cookie and may no longer be valid by the time they re-open the widget.
     salesplay_api_token = None
-    if not has_credentials or not credentials_healthy:
+    if not has_credentials:
         try:
             resp = _http.post(
                 f"{_SALESPLAY_BASE}/integrations/access_tokens",
@@ -628,10 +628,12 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
     except Exception as _te:
         log.warning("Salesplay onboard: trial start skipped", email=email, error=str(_te))
 
-    # ── 6. Connect provider + trigger sync (only when we have a new API token) ─
-    # skip_validation=True: we just created this token from Salesplay's own API,
-    # so it is guaranteed valid. The provider's validate_credentials() calls a
-    # different Salesplay API system that may reject the token unnecessarily.
+    # ── 6. Connect provider + trigger sync ───────────────────────────────────
+    # Case A: fresh/broken credentials — store new token and kick off a full sync.
+    # Case B: healthy existing credentials — just trigger a delta sync to pick up
+    #         any new Salesplay data since the last sync (happens on every widget open).
+    # skip_validation=True: token was created directly from Salesplay's own API,
+    # so it is guaranteed valid without needing a separate /merchant round-trip.
     sync = "skipped"
     if salesplay_api_token:
         try:
@@ -642,10 +644,22 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
                 skip_validation  = True,
             )
             sync = "started"
-            log.info("Salesplay onboard: provider connected", email=email)
+            log.info("Salesplay onboard: provider connected with new token", email=email)
         except Exception as e:
             log.error("Salesplay onboard: connect failed", email=email, error=str(e))
             raise HTTPException(status_code=500, detail="Failed to connect provider. Please try again.")
+    elif has_credentials and credentials_healthy:
+        # Returning user with a healthy integration — trigger a delta sync so they
+        # see data from any new Salesplay transactions since their last sync.
+        try:
+            from integrations import trigger_sync
+            trigger_sync(email, "salesplay", full=False)
+            sync = "delta_started"
+            log.info("Salesplay onboard: delta sync triggered for returning user", email=email)
+        except Exception as e:
+            log.warning("Salesplay onboard: delta sync trigger failed (non-fatal)",
+                        email=email, error=str(e))
+            sync = "skipped"
 
     token = create_token(email)
     log.info("Salesplay onboard: complete", email=email, is_new_user=is_new_user, sync=sync)
