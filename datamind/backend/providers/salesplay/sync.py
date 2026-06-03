@@ -77,19 +77,25 @@ class SalesPlayAPIClient:
         url = f"{BASE_URL}/{endpoint.lstrip('/')}"
         request_body = body or {}
 
-        log.info("SalesPlay API Request", url=url, params=request_body)
+        log.debug("SalesPlay API Request", url=url, method="GET",
+                  headers=dict(self.session.headers), body=request_body)
 
         for attempt in range(3):
             try:
                 resp = self.session.get(url, json=request_body, timeout=30, verify=False)
             except requests.exceptions.ConnectionError as exc:
-                log.error("Connection error", error=str(exc), attempt=attempt)
+                log.error("Connection error", error=str(exc), attempt=attempt, url=url)
                 time.sleep(3 * (attempt + 1))
                 continue
             except requests.exceptions.Timeout:
                 log.error("Timeout", url=url, attempt=attempt)
                 time.sleep(3)
                 continue
+
+            log.debug("SalesPlay API Response",
+                      url=url, status=resp.status_code,
+                      response_headers=dict(resp.headers),
+                      raw_body=resp.text[:5000])
 
             if resp.status_code == 429:
                 wait = int(resp.headers.get("Retry-After", 15))
@@ -98,18 +104,27 @@ class SalesPlayAPIClient:
                 continue
 
             if resp.status_code == 401:
+                log.error("SalesPlay 401 Unauthorized", url=url, raw_body=resp.text[:500])
                 raise Exception("SalesPlay API token is invalid or expired.")
 
             if resp.status_code == 403:
+                log.error("SalesPlay 403 Forbidden", url=url, raw_body=resp.text[:500])
                 raise Exception("SalesPlay API: access forbidden.")
 
             if not resp.ok:
                 preview = resp.text[:300] if resp.text else "(empty)"
+                log.error("SalesPlay API error", url=url, status=resp.status_code,
+                          raw_body=resp.text[:1000])
                 raise Exception(f"SalesPlay API HTTP {resp.status_code}: {preview}")
 
             try:
-                return resp.json()
+                parsed = resp.json()
+                log.debug("SalesPlay API parsed response",
+                          url=url, top_level_keys=list(parsed.keys()) if isinstance(parsed, dict) else type(parsed).__name__,
+                          record_counts={k: len(v) for k, v in parsed.items() if isinstance(v, list)} if isinstance(parsed, dict) else {})
+                return parsed
             except ValueError:
+                log.error("SalesPlay non-JSON response", url=url, raw=resp.text[:500])
                 raise Exception(f"SalesPlay returned non-JSON: {resp.text[:200]}")
 
         raise Exception("SalesPlay API: failed after 3 retries.")

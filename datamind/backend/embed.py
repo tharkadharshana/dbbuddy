@@ -297,19 +297,26 @@ def salesplay_check_user(request: Request, req: SalesplayCheckUserRequest):
         exists = user_row is not None
 
         has_credentials = False
+        credentials_healthy = False
         if exists:
             cursor.execute(
-                "SELECT id FROM user_integrations WHERE user_email = %s AND provider_id = 'salesplay' LIMIT 1",
+                "SELECT id, status FROM user_integrations "
+                "WHERE user_email = %s AND provider_id = 'salesplay' LIMIT 1",
                 (email,)
             )
-            has_credentials = cursor.fetchone() is not None
+            row = cursor.fetchone()
+            if row:
+                has_credentials = True
+                credentials_healthy = row["status"] in ("active", "syncing")
 
         cursor.close()
     finally:
         conn.close()
 
-    log.info("Salesplay check-user", email=email, exists=exists, has_credentials=has_credentials)
-    return {"exists": exists, "has_credentials": has_credentials}
+    log.info("Salesplay check-user", email=email, exists=exists,
+             has_credentials=has_credentials, credentials_healthy=credentials_healthy)
+    return {"exists": exists, "has_credentials": has_credentials,
+            "credentials_healthy": credentials_healthy}
 
 
 @router.post("/salesplay/auto-init")
@@ -553,20 +560,31 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
         cursor.execute("SELECT email FROM users WHERE email = %s LIMIT 1", (email,))
         user_exists = cursor.fetchone() is not None
         has_credentials = False
+        credentials_healthy = False
         if user_exists:
             cursor.execute(
-                "SELECT id FROM user_integrations "
+                "SELECT id, status FROM user_integrations "
                 "WHERE user_email = %s AND provider_id = 'salesplay' LIMIT 1",
                 (email,)
             )
-            has_credentials = cursor.fetchone() is not None
+            row = cursor.fetchone()
+            if row:
+                has_credentials = True
+                # Credentials exist but treat as needing refresh if the last sync
+                # failed (status='error') — the stored token may be expired.
+                credentials_healthy = row["status"] in ("active", "syncing")
         cursor.close()
     finally:
         conn.close()
 
+    log.info("Salesplay onboard: credential check",
+             email=email, has_credentials=has_credentials,
+             credentials_healthy=credentials_healthy)
+
     # ── 3. Create Salesplay API token if needed ───────────────────────────────
+    # Always create a fresh token when: no credentials, OR existing creds are broken.
     salesplay_api_token = None
-    if not has_credentials:
+    if not has_credentials or not credentials_healthy:
         try:
             resp = _http.post(
                 f"{_SALESPLAY_BASE}/integrations/access_tokens",
