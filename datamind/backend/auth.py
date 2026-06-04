@@ -37,7 +37,30 @@ _DEFAULT_SETTINGS = {
     "active_db_index": 0,
     "default_llm": "gemini",
     "theme": "dark",
+    "locale": {
+        "currency":           "$",
+        "country":            "",
+        "country_code":       "",
+        "timezone":           "UTC",
+        "ui_language":        "en_US",
+        "number_format": {
+            "decimals":           2,
+            "decimal_separator":  ".",
+            "thousand_separator": ","
+        }
+    }
 }
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Merge override into base one level deep — nested dicts are merged, not replaced."""
+    result = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = {**result[key], **value}
+        else:
+            result[key] = value
+    return result
 
 
 def init_users_table():
@@ -118,7 +141,7 @@ def _row_to_user(row) -> dict:
         "email": email,
         "name": name,
         "password_hash": password_hash,
-        "settings": {**_DEFAULT_SETTINGS, **settings},
+        "settings": _deep_merge(_DEFAULT_SETTINGS, settings),
         "created_at": created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at),
     }
 
@@ -161,8 +184,7 @@ def update_user_settings(email: str, settings_patch: dict) -> dict:
     user = get_user(email)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    current = user.get("settings", {})
-    current.update(settings_patch)
+    current = _deep_merge(user.get("settings", {}), settings_patch)
     conn = _get_conn()
     cursor = conn.cursor()
     cursor.execute("UPDATE users SET settings = %s WHERE email = %s", (json.dumps(current), email))
