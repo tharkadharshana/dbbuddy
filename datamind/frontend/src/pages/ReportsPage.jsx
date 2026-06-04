@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { Card, Btn, UsageMeter, Spinner, ErrorBox, Badge, COLORS, AIQuotaWall } from '../components/UI'
 import { generateReport } from '../utils/api'
+import { formatCurrency, formatNumber } from '../utils/locale'
 
 const TT = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)', borderRadius:8, fontSize:12, color:'#f0f1fa' }
 
@@ -165,7 +166,7 @@ function RenderedReport({ report }) {
             <div key={k} style={{ background:'rgba(255,255,255,0.04)', borderRadius:'var(--r-md)', padding:'12px 14px', border:'1px solid rgba(255,255,255,0.06)' }}>
               <div style={{ fontSize:10, color:'var(--text3)', textTransform:'uppercase', letterSpacing:'.07em', marginBottom:6 }}>{kpiLabels[k]}</div>
               <div style={{ fontSize:20, fontWeight:700, color:kpiColors[i] }}>
-                {k.includes('revenue')||k.includes('ticket') ? `$${Number(kpis[k]).toLocaleString()}` : Number(kpis[k]).toLocaleString()}
+                {k.includes('revenue')||k.includes('ticket') ? formatCurrency(kpis[k]) : formatNumber(kpis[k], null, 0)}
               </div>
             </div>
           ))}
