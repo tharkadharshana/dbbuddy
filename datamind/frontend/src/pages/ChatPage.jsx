@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { runNLQuery, createConversation, getConversationMessages } from '../utils/api'
 import { Spinner, UsageMeter, AIQuotaWall } from '../components/UI'
+import { formatCurrency, formatNumber } from '../utils/locale'
 
 const TT = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)', borderRadius:8, fontSize:12, color:'#f0f1fa' }
 
@@ -57,10 +58,10 @@ function ResultTable({ columns, data, rowCount }) {
     if (v === null || v === undefined) return <span style={{color:'var(--text3)'}}>—</span>
     if (isNum(v)) {
       if (col.includes('revenue')||col.includes('total')||col.includes('amount')||col.includes('price')||col.includes('value')||col.includes('spent'))
-        return <span style={{color:'var(--blue)',fontFamily:'var(--mono)'}}>${Number(v).toLocaleString()}</span>
+        return <span style={{color:'var(--blue)',fontFamily:'var(--mono)'}}>{formatCurrency(v)}</span>
       if (col.includes('pct')||col.includes('rate')||col.includes('percent'))
         return <span style={{color:v>0?'var(--green)':'var(--red)',fontFamily:'var(--mono)'}}>{v > 0 ? '+' : ''}{v}%</span>
-      return <span style={{fontFamily:'var(--mono)',color:'var(--blue)'}}>{Number(v).toLocaleString()}</span>
+      return <span style={{fontFamily:'var(--mono)',color:'var(--blue)'}}>{formatNumber(v, null, 0)}</span>
     }
     return String(v)
   }
@@ -250,7 +251,7 @@ export default function ChatPage({
       let summary = `Found ${rowCount} result${rowCount !== 1 ? 's' : ''}`
       if (numCol && data.data?.[0]) {
         const total = data.data.reduce((s, r) => s + (r[numCol] || 0), 0)
-        summary += ` · Total ${numCol.replace(/_/g, ' ')}: ${total.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+        summary += ` · Total ${numCol.replace(/_/g, ' ')}: ${formatNumber(total)}`
       }
       if (rowCount === 0) summary = 'No matching records found for your query.'
 
