@@ -783,7 +783,8 @@ def register(request: Request, req: RegisterRequest):
     except Exception as _te:
         log.warning("Trial start skipped", email=req.email, error=str(_te))
     log.info("User registered", email=req.email)
-    return {"token": token, "user": {"name": user["name"], "email": user["email"]}}
+    locale = user.get("settings", {}).get("locale", {})
+    return {"token": token, "user": {"name": user["name"], "email": user["email"], "locale": locale}}
 
 
 @v1.post("/auth/login")
@@ -793,13 +794,15 @@ def login(request: Request, req: LoginRequest):
     user = authenticate_user(req.email, req.password)
     token = create_token(req.email)
     log.info("User logged in", email=req.email)
-    return {"token": token, "user": {"name": user["name"], "email": user["email"]}}
+    locale = user.get("settings", {}).get("locale", {})
+    return {"token": token, "user": {"name": user["name"], "email": user["email"], "locale": locale}}
 
 
 @v1.get("/auth/me")
 @_limiter.limit(RL_READ)
 def me(request: Request, user: dict = Depends(current_user)):
-    return {"name": user["name"], "email": user["email"]}
+    locale = user.get("settings", {}).get("locale", {})
+    return {"name": user["name"], "email": user["email"], "locale": locale}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
