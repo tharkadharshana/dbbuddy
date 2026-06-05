@@ -23,9 +23,6 @@ api.interceptors.response.use(
       window.location.href = '/login'
     } else if (status === 429) {
       toast?.error('Too many requests — please slow down and try again in a moment.')
-    } else if (status >= 500) {
-      const msg = err.response?.data?.error || 'Server error — please try again. If this persists, contact support.'
-      toast?.error(msg)
     }
 
     return Promise.reject(err)
