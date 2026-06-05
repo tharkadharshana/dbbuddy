@@ -380,9 +380,13 @@ async def http_exception_handler(request, exc):
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request, exc):
+    details = [
+        {"field": ".".join(str(l) for l in e["loc"][1:]), "msg": e["msg"]}
+        for e in exc.errors()
+    ]
     return JSONResponse(
         status_code=422,
-        content={"ok": False, "error": "Invalid request parameters.", "details": str(exc)},
+        content={"ok": False, "error": "Invalid request parameters.", "details": details},
     )
 
 
