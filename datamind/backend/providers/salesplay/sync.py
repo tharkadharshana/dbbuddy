@@ -47,14 +47,18 @@ from providers.upsert import upsert_record, upsert_to_shared, lookup_map
 
 log = get_logger(__name__)
 
-# Suppress SSL warnings for spdeveloperapi.nvision.lk cert issues
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+BASE_URL        = os.getenv("SALESPLAY_BASE_URL", "https://api.salesplaypos.com/v1.0")
+PAGE_SIZE       = int(os.getenv("SALESPLAY_PAGE_SIZE", "250"))
+RATE_SLEEP      = float(os.getenv("SALESPLAY_RATE_SLEEP", "1.1"))
+DEFAULT_DAYS    = int(os.getenv("SALESPLAY_DEFAULT_LOOKBACK_DAYS", "90"))
+_HTTP_TIMEOUT   = int(os.getenv("SALESPLAY_HTTP_TIMEOUT", "30"))
+_RETRY_ATTEMPTS = int(os.getenv("SALESPLAY_RETRY_ATTEMPTS", "3"))
+_VERIFY_SSL     = os.getenv("SALESPLAY_VERIFY_SSL", "false").lower() not in ("false", "0", "no")
+DT_FMT          = "%Y-%m-%d %H:%M:%S"
 
-BASE_URL     = os.getenv("SALESPLAY_BASE_URL", "https://api.salesplaypos.com/v1.0")
-PAGE_SIZE    = 250
-RATE_SLEEP   = 1.1
-DEFAULT_DAYS = 90
-DT_FMT       = "%Y-%m-%d %H:%M:%S"
+if not _VERIFY_SSL:
+    # Suppress urllib3 warnings only when SSL verification is intentionally disabled
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 # ── API Client ────────────────────────────────────────────────────────────────
@@ -71,7 +75,7 @@ class SalesPlayAPIClient:
             "Token":        f"Bearer {api_token}",
             "Content-Type": "application/json",
         })
-        self.session.verify = False
+        self.session.verify = _VERIFY_SSL
 
     def _get(self, endpoint: str, body: dict = None) -> dict:
         url = f"{BASE_URL}/{endpoint.lstrip('/')}"
@@ -80,9 +84,9 @@ class SalesPlayAPIClient:
         log.debug("SalesPlay API Request", url=url, method="GET",
                   headers=dict(self.session.headers), body=request_body)
 
-        for attempt in range(3):
+        for attempt in range(_RETRY_ATTEMPTS):
             try:
-                resp = self.session.get(url, json=request_body, timeout=30, verify=False)
+                resp = self.session.get(url, json=request_body, timeout=_HTTP_TIMEOUT, verify=_VERIFY_SSL)
             except requests.exceptions.ConnectionError as exc:
                 log.error("Connection error", error=str(exc), attempt=attempt, url=url)
                 time.sleep(3 * (attempt + 1))
@@ -127,7 +131,7 @@ class SalesPlayAPIClient:
                 log.error("SalesPlay non-JSON response", url=url, raw=resp.text[:500])
                 raise Exception(f"SalesPlay returned non-JSON: {resp.text[:200]}")
 
-        raise Exception("SalesPlay API: failed after 3 retries.")
+        raise Exception(f"SalesPlay API: failed after {_RETRY_ATTEMPTS} retries.")
 
     def _paginate(self, endpoint: str, key: str, body: dict) -> List[Dict]:
         """

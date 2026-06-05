@@ -5,6 +5,7 @@ import { Card, Badge, Spinner, Spinner2, ErrorBox, KPICard, ChartCard, DataTable
          BarChartSimple, LineChartSimple, PieChartSimple, UsageMeter, COLORS, Btn, AIQuotaWall } from '../components/UI'
 import { ComposedChart, Bar, Line, Area, XAxis, YAxis, CartesianGrid, Tooltip,
          ResponsiveContainer } from 'recharts'
+import { formatCurrency, formatNumber, isCurrencyColumn } from '../utils/locale'
 
 const TT = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)', borderRadius:8, fontSize:12, color:'#f0f1fa' }
 
@@ -203,7 +204,7 @@ function ResultPanel({ result, templateId }) {
             const isAvg = col.includes('avg')||col.includes('pct')||col.includes('rate')||col.includes('margin')
             const val = data.length===1 ? data[0][col] : (isAvg ? total/vals.length : total)
             const colors = ['var(--blue)','var(--green)','var(--purple)','var(--amber)']
-            return <KPICard key={col} label={col.replace(/_/g,' ')} value={typeof val==='number'?val.toLocaleString(undefined,{maximumFractionDigits:1}):val} color={colors[i%4]} />
+            return <KPICard key={col} label={col.replace(/_/g,' ')} value={typeof val==='number'?(isCurrencyColumn(col)?formatCurrency(val):formatNumber(val,null,1)):val} color={colors[i%4]} />
           })}
         </div>
       )}

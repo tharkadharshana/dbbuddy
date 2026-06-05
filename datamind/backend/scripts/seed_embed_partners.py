@@ -29,7 +29,10 @@ PARTNERS = [
     {
         "provider_id":     "salesplay",
         "partner_name":    "Salesplay",
-        "allowed_origins": "https://app.salesplay.io,https://backoffice.salesplay.io",
+        "allowed_origins": os.getenv(
+            "SALESPLAY_EMBED_ORIGINS",
+            "https://app.salesplay.io,https://backoffice.salesplay.io",
+        ),
         "branding": {
             "accent_color": "#f59e0b",
             "product_name": "Ask Your Salesplay Data",
@@ -39,7 +42,10 @@ PARTNERS = [
     {
         "provider_id":     "loyverse",
         "partner_name":    "Loyverse",
-        "allowed_origins": "https://r.loyverse.com,https://loyverse.com",
+        "allowed_origins": os.getenv(
+            "LOYVERSE_EMBED_ORIGINS",
+            "https://r.loyverse.com,https://loyverse.com",
+        ),
         "branding": {
             "accent_color": "#6366f1",
             "product_name": "Ask Your Loyverse Data",

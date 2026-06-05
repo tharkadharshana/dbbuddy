@@ -26,7 +26,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from logger import get_logger
-from auth import create_user, authenticate_user, create_token
+from auth import create_user, authenticate_user, create_token, update_user_settings
 from billing import start_trial
 from integrations import connect_provider, connect_integration
 from pool import get_internal_conn as _get_conn
@@ -38,8 +38,8 @@ router = APIRouter(prefix="/embed", tags=["embed"])
 # ── Simple in-memory rate limiter (no external deps) ─────────────────────────
 # Tracks per-IP request timestamps for /embed/init (5 requests/minute max).
 _rate_store: dict = collections.defaultdict(list)
-_RATE_LIMIT   = 5    # max calls
-_RATE_WINDOW  = 60   # seconds
+_RATE_LIMIT   = int(os.getenv("SALESPLAY_EMBED_RATE_LIMIT", "5"))
+_RATE_WINDOW  = int(os.getenv("SALESPLAY_EMBED_RATE_WINDOW", "60"))
 
 def _client_ip(request: "Request") -> str:
     """
@@ -401,8 +401,8 @@ def salesplay_auto_init(request: Request, req: SalesplayAutoInitRequest):
 # calls are blocked. These thin server-side proxies forward the request
 # using the user's app_access_token — no CORS applies to server-to-server calls.
 
-_SALESPLAY_BASE = "https://predev5api.nvision.lk/v2.0/public/app"
-_PROXY_TIMEOUT  = 10  # seconds
+_SALESPLAY_BASE = os.getenv("SALESPLAY_EMBED_PROXY_BASE", "https://api.salesplaypos.com/v2.0/public/app")
+_PROXY_TIMEOUT  = int(os.getenv("SALESPLAY_EMBED_PROXY_TIMEOUT", "10"))
 
 
 def _salesplay_guard(partner_key: str, request: "Request"):
@@ -424,6 +424,24 @@ class SalesplayProfileRequest(BaseModel):
 class SalesplayCreateTokenRequest(BaseModel):
     partner_key: str
     aat:         str
+
+
+def _extract_salesplay_locale(data: dict) -> dict:
+    """Extract locale fields from a Salesplay /profile response dict."""
+    raw    = data.get("user") or data.get("data") or data
+    nf_raw = raw.get("number_format") or {}
+    return {
+        "currency":           (raw.get("currency") or "$").strip(),
+        "country":            (raw.get("country") or "").strip(),
+        "country_code":       ((data.get("access_info") or {}).get("country_code") or "").strip(),
+        "timezone":           (raw.get("timezone") or "UTC").strip(),
+        "ui_language":        (raw.get("ui_language") or "en_US").strip(),
+        "number_format": {
+            "decimals":           int(nf_raw.get("number_of_decimel") or 2),  # Salesplay typo
+            "decimal_separator":  (nf_raw.get("decimal_separator") or "."),
+            "thousand_separator": (nf_raw.get("thousond_separator") or ","),  # Salesplay typo
+        },
+    }
 
 
 @router.post("/salesplay/profile")
@@ -454,8 +472,9 @@ def salesplay_proxy_profile(request: Request, req: SalesplayProfileRequest):
         ).strip()
         if not email:
             raise HTTPException(status_code=422, detail="Could not retrieve email from Salesplay profile.")
+        locale = _extract_salesplay_locale(data)
         log.info("Salesplay proxy: profile fetched", email=email)
-        return {"email": email, "name": name}
+        return {"email": email, "name": name, "locale": locale}
     except HTTPException:
         raise
     except Exception as e:
@@ -546,6 +565,7 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
         ).strip()
         if not email:
             raise HTTPException(status_code=422, detail="Could not retrieve email from Salesplay profile.")
+        locale = _extract_salesplay_locale(data)
         log.info("Salesplay onboard: profile fetched", email=email)
     except HTTPException:
         raise
@@ -630,6 +650,13 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
     except Exception as _te:
         log.warning("Salesplay onboard: trial start skipped", email=email, error=str(_te))
 
+    # ── 5b. Persist locale from Salesplay profile (non-fatal) ─────────────────
+    try:
+        update_user_settings(email, {"locale": locale})
+        log.info("Salesplay onboard: locale saved", email=email, currency=locale.get("currency"))
+    except Exception as _le:
+        log.warning("Salesplay onboard: locale save skipped", email=email, error=str(_le))
+
     # ── 6. Connect provider + trigger sync ───────────────────────────────────
     # Case A: fresh/broken credentials — store new token and kick off a full sync.
     # Case B: healthy existing credentials — just trigger a delta sync to pick up
@@ -667,7 +694,7 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
     log.info("Salesplay onboard: complete", email=email, is_new_user=is_new_user, sync=sync)
     return {
         "token":       token,
-        "user":        {"name": name, "email": email},
+        "user":        {"name": name, "email": email, "locale": locale},
         "provider_id": "salesplay",
         "is_new_user": is_new_user,
         "sync":        sync,

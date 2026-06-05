@@ -99,6 +99,7 @@ function EmbedApp() {
               const result = await salesplayOnboard(partnerKey, aat)
               localStorage.setItem('dm_embed_token', result.token)
               localStorage.setItem('dm_sp_email', profile.email)
+              if (result.user) localStorage.setItem('dm_embed_user', JSON.stringify(result.user))
               setState('chat')
               notifyParent('dm:chat_open')
             } else {
@@ -142,6 +143,7 @@ function EmbedApp() {
 
   function handleOnboardingComplete(token, userData) {
     localStorage.setItem('dm_embed_token', token)
+    if (userData) localStorage.setItem('dm_embed_user', JSON.stringify(userData))
     setState('chat')
     notifyParent('dm:chat_open')
   }
@@ -149,6 +151,7 @@ function EmbedApp() {
   function handleExpired() {
     localStorage.removeItem('dm_embed_token')
     localStorage.removeItem('dm_sp_email')
+    localStorage.removeItem('dm_embed_user')
     setState('onboarding')
     notifyParent('dm:onboarding_start')
   }
@@ -156,6 +159,7 @@ function EmbedApp() {
   function handleLogout() {
     localStorage.removeItem('dm_embed_token')
     localStorage.removeItem('dm_sp_email')
+    localStorage.removeItem('dm_embed_user')
     setState('onboarding')
     notifyParent('dm:logout')
   }

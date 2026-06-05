@@ -1,5 +1,6 @@
 import React from 'react'
 import { ResponsiveContainer, BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts'
+import { formatCurrency, isCurrencyColumn, formatNumber } from '../utils/locale'
 
 export const TT_STYLE = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.1)', borderRadius:8, fontSize:12, color:'#f0f1fa', boxShadow:'0 8px 24px rgba(0,0,0,0.4)' }
 export const COLORS = ['#4f8ef7','#34d17a','#a78bfa','#f5a623','#f05050','#2dd4bf','#f472b6','#facc15','#60a5fa','#fb923c']
@@ -255,8 +256,8 @@ export function DataTable({ columns, data, maxHeight=320 }) {
     if (isNum(v)) {
       if (col.includes('pct') || col.includes('rate') || col.includes('growth')) return `${v > 0 ? '+' : ''}${v}%`
       if (col.includes('revenue') || col.includes('sales') || col.includes('ltv') || col.includes('spent') || col.includes('value') || col.includes('profit') || col.includes('ticket') || col.includes('order') || col.includes('aov') || col.includes('monetary'))
-        return `$${Number(v).toLocaleString()}`
-      return Number(v).toLocaleString()
+        return formatCurrency(v)
+      return formatNumber(v, null, 0)
     }
     return String(v)
   }
