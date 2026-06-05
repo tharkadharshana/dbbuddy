@@ -65,7 +65,7 @@ function ToastStack({ toasts, onDismiss }) {
             animation: 'toastIn .2s ease', pointerEvents: 'auto',
           }}>
             <span style={{ color: s.color, fontWeight: 700, flexShrink: 0, fontSize: 13 }}>{s.icon}</span>
-            <span style={{ fontSize: 13, color: 'var(--text1, #f0f1fa)', lineHeight: 1.5, flex: 1 }}>{t.message}</span>
+            <span style={{ fontSize: 13, color: 'var(--text)', lineHeight: 1.5, flex: 1 }}>{t.message}</span>
             <button onClick={() => onDismiss(t.id)} style={{
               background: 'none', border: 'none', cursor: 'pointer', padding: 0,
               color: 'var(--text3, #6b7280)', fontSize: 15, lineHeight: 1, flexShrink: 0,
