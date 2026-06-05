@@ -986,7 +986,7 @@ def update_db_config(request: Request, index: int, cfg: DBConfig,
     s = get_user_settings(user["email"])
     configs = s.get("db_configs", [])
     if index < 0 or index >= len(configs):
-        raise HTTPException(status_code=404, detail="Index out of range")
+        raise HTTPException(status_code=404, detail="Database configuration not found.")
     invalidate_cache(user["email"], configs[index])
     cfg_dict = cfg.dict()
     cfg_dict["password"] = _encrypt_db_password(cfg_dict["password"])  # SEC-06
@@ -1008,7 +1008,7 @@ def delete_db_config(request: Request, index: int, user: dict = Depends(current_
     s = get_user_settings(user["email"])
     configs = s.get("db_configs", [])
     if index < 0 or index >= len(configs):
-        raise HTTPException(status_code=404, detail="Index out of range")
+        raise HTTPException(status_code=404, detail="Database configuration not found.")
     log.info("Delete DB config", user=user["email"], index=index)
     invalidate_cache(user["email"], configs[index])
     configs.pop(index)
@@ -1023,7 +1023,7 @@ def activate_db(request: Request, index: int, background_tasks: BackgroundTasks,
     s = get_user_settings(user["email"])
     configs = s.get("db_configs", [])
     if index < 0 or index >= len(configs):
-        raise HTTPException(status_code=404, detail="Index out of range")
+        raise HTTPException(status_code=404, detail="Database configuration not found.")
     update_user_settings(user["email"], {"active_db_index": index})
     db_config = dict(configs[index])
     if db_config.get("password"):
@@ -2573,7 +2573,7 @@ def run_integration_analytics(
     try:
         integration = get_integration(user["email"], provider_id)
         if not integration:
-            raise HTTPException(status_code=404, detail="Integration not connected")
+            raise HTTPException(status_code=404, detail="Integration not found or not connected.")
 
         table_prefix = integration["table_prefix"]
 
@@ -2647,7 +2647,7 @@ def forecast_integration(
     try:
         integration = get_integration(user["email"], provider_id)
         if not integration:
-            raise HTTPException(status_code=404, detail="Integration not connected")
+            raise HTTPException(status_code=404, detail="Integration not found or not connected.")
 
         conn = _get_internal_conn()
         table_prefix = integration["table_prefix"]
