@@ -94,10 +94,12 @@ function BuildProgress({ onDone }) {
 }
 
 // ── Analytics Card ────────────────────────────────────────────────────────────
-function AnalyticsCard({ item, isSelected, onRun }) {
+function AnalyticsCard({ item, isSelected, onRun, disabled }) {
   return (
-    <div onClick={onRun} style={{
-      padding:'12px 14px', borderRadius:'var(--r-md)', marginBottom:5, cursor:'pointer',
+    <div onClick={disabled ? undefined : onRun} style={{
+      padding:'12px 14px', borderRadius:'var(--r-md)', marginBottom:5,
+      cursor: disabled ? 'not-allowed' : 'pointer',
+      opacity: disabled ? 0.55 : 1,
       background: isSelected ? 'var(--blue-dim)' : 'var(--bg2)',
       border:`1px solid ${isSelected ? 'rgba(79,142,247,0.3)' : 'var(--border)'}`,
       transition:'all .1s'
@@ -358,7 +360,7 @@ export default function DiscoverPage({ llm, setLlm, sub, onNavigate, onQueryComp
 
         <div style={{ flex:1, overflowY:'auto', padding:'0 10px 16px' }}>
           {visible.map(item => (
-            <AnalyticsCard key={item.id} item={item} isSelected={selected?.id===item.id} onRun={() => handleRun(item)} />
+            <AnalyticsCard key={item.id} item={item} isSelected={selected?.id===item.id} onRun={() => handleRun(item)} disabled={running} />
           ))}
         </div>
       </div>
