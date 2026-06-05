@@ -526,7 +526,7 @@ def _resolve_api_key(user: dict, llm: str) -> str:
         if not key:
             raise HTTPException(
                 status_code=422,
-                detail="Gemini API key not set. Go to Settings → LLM API Keys."
+                detail="AI service is not configured. Please contact support."
             )
         log.debug("Resolved Gemini API key", user=user.get("email"), source="settings" if s.get("gemini_api_key") else "env")
         return key
@@ -538,12 +538,12 @@ def _resolve_api_key(user: dict, llm: str) -> str:
         if not key:
             raise HTTPException(
                 status_code=422,
-                detail="DeepSeek API key not set. Go to Settings → LLM API Keys."
+                detail="AI service is not configured. Please contact support."
             )
         log.debug("Resolved DeepSeek API key", user=user.get("email"), source="settings" if s.get("deepseek_api_key") else "env")
         return key
 
-    raise HTTPException(status_code=422, detail=f"Unknown LLM: '{llm}'. Use 'gemini' or 'deepseek'.")
+    raise HTTPException(status_code=422, detail="Unsupported AI model selected.")
 
 
 def _llm_has_key(user: dict, name: str) -> bool:
@@ -943,7 +943,15 @@ def get_settings(request: Request, user: dict = Depends(current_user)):
         if c.get("password"):
             c["password"] = "••••••••"
         safe_configs.append(c)
-    return {**s, "db_configs": safe_configs}
+    _HIDDEN = {"gemini_api_key", "deepseek_api_key", "default_llm"}
+    safe = {k: v for k, v in {**s, "db_configs": safe_configs}.items() if k not in _HIDDEN}
+    # Expose AI availability as a boolean — no provider name or key value leaked
+    _has_key = (
+        bool(s.get("gemini_api_key", "").strip()  or os.getenv("GEMINI_API_KEY", "").strip()) or
+        bool(s.get("deepseek_api_key", "").strip() or os.getenv("DEEPSEEK_API_KEY", "").strip())
+    )
+    safe["has_llm_key"] = _has_key
+    return safe
 
 
 @v1.patch("/settings")

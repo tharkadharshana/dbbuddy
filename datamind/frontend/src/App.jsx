@@ -67,11 +67,10 @@ export default function App() {
         fetchProviderStats().catch(() => ({total_rows:0})),
       ])
       const hasDB       = s.db_configs?.length > 0
-      const hasKey      = !!(s.gemini_api_key || s.deepseek_api_key)
+      const hasKey      = !!s.has_llm_key
       const hasProvider = providers.connections?.length > 0
 
       setTotalRows(stats.total_rows || 0)
-      if (s.default_llm) setLlm(s.default_llm)
 
       // Always update connection state — independent of whether a key is configured
       if (hasProvider) {
