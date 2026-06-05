@@ -294,8 +294,12 @@ export default function DiscoverPage({ llm, setLlm, sub, onNavigate, onQueryComp
   }
 
   async function handleRebuild() {
-    await rebuildCache()
-    setBuilding(true); setCatalogue([]); setNeedsBuild(false)
+    try {
+      await rebuildCache()
+      setBuilding(true); setCatalogue([]); setNeedsBuild(false)
+    } catch(e) {
+      setError(e.response?.data?.error || e.response?.data?.detail || e.message || 'Failed to start cache build.')
+    }
   }
 
   const categories = ['All', ...new Set(catalogue.map(c => c.category))]
