@@ -595,7 +595,7 @@ def _validate_table_column(schemas: dict, table: str, column: str):
 
 def _run_sql(conn, sql: str, title: str) -> dict:
     cursor = conn.cursor()
-    log.debug("Executing SQL", title=title, sql=sql[:120])
+    log.debug("Executing SQL", title=title, sql_preview=f"{sql[:60]}…" if len(sql) > 60 else sql)
     cursor.execute(sql)
     cols = [d[0] for d in cursor.description]
     rows = cursor.fetchall()
