@@ -788,7 +788,7 @@ def register(request: Request, req: RegisterRequest):
         log.warning("Trial start skipped", email=req.email, error=str(_te))
     log.info("User registered", email=req.email)
     locale = user.get("settings", {}).get("locale", {})
-    return {"token": token, "user": {"name": user["name"], "email": user["email"], "locale": locale}}
+    return JSONResponse(status_code=201, content={"token": token, "user": {"name": user["name"], "email": user["email"], "locale": locale}})
 
 
 @v1.post("/auth/login")
@@ -972,10 +972,10 @@ def add_db_config(request: Request, cfg: DBConfig, background_tasks: BackgroundT
         api_key = _resolve_api_key(user, llm)
         # Pass plaintext config for cache build (encrypted version already persisted above)
         background_tasks.add_task(_background_build, user["email"], cfg.dict(), llm, api_key)
-        return {"ok": True, "building_cache": True}
+        return JSONResponse(status_code=201, content={"ok": True, "building_cache": True})
     except HTTPException:
         log.warning("Skipping cache build — no API key set", user=user["email"])
-        return {"ok": True, "building_cache": False, "warning": "Add an API key in Settings to build the analytics cache."}
+        return JSONResponse(status_code=201, content={"ok": True, "building_cache": False, "warning": "Add an API key in Settings to build the analytics cache."})
 
 
 @v1.put("/settings/db/{index}")
@@ -1672,7 +1672,7 @@ def generate_developer_key(request: Request, user: dict = Depends(current_user))
         )
         conn.commit()
         log.info("API key generated", user=user["email"])
-        return {"ok": True, "key": new_key}
+        return JSONResponse(status_code=201, content={"ok": True, "key": new_key})
     finally:
         cur.close()
         conn.close()
@@ -1714,7 +1714,7 @@ def api_create_conversation(request: Request, body: CreateConversationRequest,
         raise HTTPException(status_code=422, detail="Invalid conversation id.")
     try:
         row = _conv.create_conversation(user["email"], body.id)
-        return {"ok": True, "conversation": row}
+        return JSONResponse(status_code=201, content={"ok": True, "conversation": row})
     except Exception as e:
         log.error("create_conversation failed", user=user["email"], error=str(e))
         raise _server_error("Could not create conversation.")
@@ -2410,7 +2410,7 @@ def connect_provider_route(request: Request, req: ProviderConnectRequest,
     try:
         connection_id = connect_provider(user["email"], req.provider_id, req.credentials)
         background_tasks.add_task(trigger_sync, user["email"], connection_id, full=True)
-        return {"ok": True, "connection_id": connection_id}
+        return JSONResponse(status_code=201, content={"ok": True, "connection_id": connection_id})
     except Exception as e:
         log.error("Provider connect failed", provider=req.provider_id, error=str(e))
         raise _server_error("Failed to connect provider.")
