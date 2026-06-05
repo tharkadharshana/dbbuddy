@@ -4,6 +4,7 @@ import {
   deleteDBConfig, activateDBConfig, testDBConnection,
   fetchCacheStatus, rebuildCache, deleteAccount,
   getDeveloperKey, generateDeveloperKey, revokeDeveloperKey,
+  getErrorMessage,
 } from '../utils/api'
 import { Card, Btn, Badge, Spinner, ErrorBox } from '../components/UI'
 
@@ -163,7 +164,7 @@ export default function SettingsPage({ user, onLogout, onNavigate, sub }) {
         setDefaultLLM(s.default_llm || 'gemini')
         setLoading(false)
       })
-      .catch(e => { setError(e.response?.data?.detail || e.message); setLoading(false) })
+      .catch(e => { setError(getErrorMessage(e)); setLoading(false) })
   }, [])
 
   // Load existing API key info for Pro users
@@ -209,7 +210,7 @@ export default function SettingsPage({ user, onLogout, onNavigate, sub }) {
       await patchSettings({ gemini_api_key: geminiKey, deepseek_api_key: deepseekKey, default_llm: defaultLLM })
       setSaved('Saved!')
       setTimeout(() => setSaved(''), 2500)
-    } catch(e) { setError(e.response?.data?.detail || e.message) }
+    } catch(e) { setError(getErrorMessage(e)) }
     finally { setSaving(false) }
   }
 
@@ -218,7 +219,7 @@ export default function SettingsPage({ user, onLogout, onNavigate, sub }) {
     try {
       const r = await testDBConnection(dbForm)
       setTestResult(r)
-    } catch(e) { setDbError(e.response?.data?.detail || e.message) }
+    } catch(e) { setDbError(getErrorMessage(e)) }
     finally { setTesting(false) }
   }
 
@@ -236,7 +237,7 @@ export default function SettingsPage({ user, onLogout, onNavigate, sub }) {
       const s = await fetchSettings()
       setSettings(s)
       setShowDBForm(false); setEditingIdx(null); setDbForm(EMPTY_DB); setTestResult(null)
-    } catch(e) { setDbError(e.response?.data?.detail || e.message) }
+    } catch(e) { setDbError(getErrorMessage(e)) }
     finally { setSaving(false) }
   }
 
@@ -303,7 +304,7 @@ export default function SettingsPage({ user, onLogout, onNavigate, sub }) {
                 localStorage.removeItem('dm_user')
                 window.location.href = '/'
               } catch(e) {
-                alert('Delete failed: ' + (e.response?.data?.detail || e.message))
+                alert('Delete failed: ' + (getErrorMessage(e)))
               }
             }}>Delete Account</Btn>
           </div>

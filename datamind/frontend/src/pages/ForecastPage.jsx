@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { ComposedChart, Area, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart } from 'recharts'
 import { Card, Btn, Spinner, Spinner2, Empty, ErrorBox, KPICard, AIQuotaWall } from '../components/UI'
-import { runAutoForecast, runForecast, fetchTables, fetchTableColumns } from '../utils/api'
+import { runAutoForecast, runForecast, fetchTables, fetchTableColumns, getErrorMessage } from '../utils/api'
 
 const TT = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)', borderRadius:8, fontSize:12, color:'#f0f1fa' }
 
@@ -47,7 +47,7 @@ export default function ForecastPage({ sub, onNavigate, onQueryComplete }) {
         ? await runAutoForecast(periods)
         : await runForecast(manForm.table, manForm.date_column, manForm.value_column, periods)
       setResult(data)
-    } catch(e) { setError(e.response?.data?.error || e.response?.data?.detail || e.message) }
+    } catch(e) { setError(getErrorMessage(e)) }
     finally { setLoading(false); onQueryComplete?.() }
   }
 

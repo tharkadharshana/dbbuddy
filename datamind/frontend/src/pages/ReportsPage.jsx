@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { Card, Btn, UsageMeter, Spinner, ErrorBox, Badge, COLORS, AIQuotaWall } from '../components/UI'
-import { generateReport } from '../utils/api'
+import { generateReport, getErrorMessage } from '../utils/api'
 import { formatCurrency, formatNumber } from '../utils/locale'
 
 const TT = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)', borderRadius:8, fontSize:12, color:'#f0f1fa' }
@@ -232,7 +232,7 @@ export default function ReportsPage({ llm, setLlm, sub, onNavigate, onQueryCompl
       const report = { ...data, id: Date.now(), ts: new Date().toLocaleString() }
       setReports(r => [report, ...r])
       setActiveReport(report)
-    } catch(e) { setError(e.response?.data?.detail || e.message) }
+    } catch(e) { setError(getErrorMessage(e)) }
     finally { setLoading(false); onQueryComplete?.() }
   }
 

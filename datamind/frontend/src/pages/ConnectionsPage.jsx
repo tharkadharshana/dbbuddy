@@ -3,7 +3,7 @@ import {
   fetchProviders, fetchConnectedProviders,
   validateProviderCreds, connectProvider,
   disconnectProvider, syncProvider, fetchProviderStatus,
-  addDBConfig, testDBConnection,
+  addDBConfig, testDBConnection, getErrorMessage,
 } from '../utils/api'
 import { Card, Btn, Badge, Spinner, ErrorBox } from '../components/UI'
 import { useToast } from '../components/Toast'
@@ -165,7 +165,7 @@ function ConnectModal({ provider, onClose, onConnected }) {
     try {
       const r = await validateProviderCreds(provider.provider_id, creds)
       setTestResult(r)
-    } catch(e) { setError(e.response?.data?.error || e.response?.data?.detail || e.message) }
+    } catch(e) { setError(getErrorMessage(e)) }
     finally { setTesting(false) }
   }
 
@@ -175,7 +175,7 @@ function ConnectModal({ provider, onClose, onConnected }) {
       await connectProvider(provider.provider_id, creds)
       onConnected()
       onClose()
-    } catch(e) { setError(e.response?.data?.error || e.response?.data?.detail || e.message) }
+    } catch(e) { setError(getErrorMessage(e)) }
     finally { setConnecting(false) }
   }
 
@@ -317,7 +317,7 @@ export default function ConnectionsPage({ onConnectionChange, sub }) {
       load()
       onConnectionChange?.()
     } catch(e) {
-      toast.error(e.response?.data?.error || e.response?.data?.detail || e.message || 'Failed to disconnect. Please try again.')
+      toast.error(getErrorMessage(e, 'Failed to disconnect. Please try again.'))
     }
   }
 

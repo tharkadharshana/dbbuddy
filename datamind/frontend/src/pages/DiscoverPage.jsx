@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { fetchDiscover, runAnalytics, fetchCacheProgress, rebuildCache,
-         fetchConnectedProviders, fetchIntegrationTemplates, runIntegrationAnalytics } from '../utils/api'
+         fetchConnectedProviders, fetchIntegrationTemplates, runIntegrationAnalytics, getErrorMessage } from '../utils/api'
 import { Card, Badge, Spinner, Spinner2, ErrorBox, KPICard, ChartCard, DataTable,
          BarChartSimple, LineChartSimple, PieChartSimple, UsageMeter, COLORS, Btn, AIQuotaWall } from '../components/UI'
 import { ComposedChart, Bar, Line, Area, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -276,7 +276,7 @@ export default function DiscoverPage({ llm, setLlm, sub, onNavigate, onQueryComp
 
       // Truly nothing available
       setNeedsBuild(true); setCatalogue([])
-    } catch(e) { setError(e.response?.data?.detail || e.message) }
+    } catch(e) { setError(getErrorMessage(e)) }
     finally { setLoading(false) }
   }
 
@@ -289,7 +289,7 @@ export default function DiscoverPage({ llm, setLlm, sub, onNavigate, onQueryComp
         ? await runIntegrationAnalytics(item.provider, item.id)
         : await runAnalytics(item.id, llm, {})
       setResult(data)
-    } catch(e) { setRunError(e.response?.data?.detail || e.message) }
+    } catch(e) { setRunError(getErrorMessage(e)) }
     finally { setRunning(false); onQueryComplete?.() }
   }
 
@@ -298,7 +298,7 @@ export default function DiscoverPage({ llm, setLlm, sub, onNavigate, onQueryComp
       await rebuildCache()
       setBuilding(true); setCatalogue([]); setNeedsBuild(false)
     } catch(e) {
-      setError(e.response?.data?.error || e.response?.data?.detail || e.message || 'Failed to start cache build.')
+      setError(getErrorMessage(e, 'Failed to start cache build.'))
     }
   }
 
