@@ -80,10 +80,25 @@ def create_conversation(user_email: str, conv_id: str) -> dict:
         )
         conn.commit()
         log.debug("Conversation created", conv_id=conv_id, user=user_email)
+        _sync_connected_providers(user_email)
         return {"id": conv_id, "user_email": user_email,
                 "title": "New conversation", "message_count": 0}
     finally:
         conn.close()
+
+
+def _sync_connected_providers(user_email: str) -> None:
+    """Kick off a delta sync for each healthy connected integration so a new
+    chat session always sees the latest data. Non-fatal — _start_sync_thread
+    dedupes against syncs already in flight, so this is safe to call on every
+    new conversation."""
+    try:
+        from integrations import list_integrations, trigger_sync
+        for integ in list_integrations(user_email):
+            if integ.get("status") in ("active", "syncing"):
+                trigger_sync(user_email, integ["provider_id"], full=False)
+    except Exception as e:
+        log.warning("New-chat sync trigger failed (non-fatal)", user=user_email, error=str(e))
 
 
 def save_message(
