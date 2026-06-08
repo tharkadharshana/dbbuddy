@@ -208,6 +208,16 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
 
   const toggleTheme = () => setTheme(t => t === 'dark' ? 'light' : 'dark')
 
+  // Opens the standalone DataMind app in a new tab — lets embed users leave
+  // the partner iframe to manage billing, integrations, and full analytics.
+  // Also notifies the parent window in case the partner wants to react
+  // (e.g. close the widget) — harmless no-op if they don't listen for it.
+  function openMainApp() {
+    const url = import.meta.env.VITE_APP_URL || 'https://app.datamind.ai'
+    notifyParent('dm:open_main_app', { url })
+    window.open(url, '_blank', 'noopener,noreferrer')
+  }
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior:'smooth' })
   }, [messages])
@@ -277,6 +287,19 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
           <span style={{ fontSize:13, fontWeight:600, color:'var(--text)' }}>{productTitle}</span>
         </div>
         <div style={{ display:'flex', alignItems:'center', gap:4 }}>
+          {/* Open in main DataMind app — leaves the partner iframe in a new tab */}
+          <button
+            onClick={openMainApp}
+            title={`Open ${productTitle} in a new tab`}
+            style={{
+              background:'none', border:'1px solid var(--border2)',
+              borderRadius:20, cursor:'pointer', padding:'3px 8px',
+              display:'flex', alignItems:'center', gap:5,
+              fontSize:11, color:'var(--text2)',
+            }}
+          >
+            <span style={{ fontSize:12 }}>↗</span> Open in DataMind
+          </button>
           {/* Light / dark toggle */}
           <button
             onClick={toggleTheme}
