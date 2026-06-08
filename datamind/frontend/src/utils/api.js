@@ -41,6 +41,11 @@ export function getErrorMessage(e, fallback = 'Something went wrong. Please try 
 // Auth
 export const register  = (name, email, password) => api.post('/auth/register', { name, email, password }).then(r => r.data)
 export const login     = (email, password) => api.post('/auth/login', { email, password }).then(r => r.data)
+
+// Exchanges a one-time embed handoff token (?sso=...) for a normal session —
+// lets users who authenticated inside the Salesplay Web Embed land here
+// already signed in, without ever seeing their (generated) password.
+export const ssoLogin  = (token) => api.post('/auth/sso-login', { token }).then(r => r.data)
 export const fetchMe   = () => api.get('/auth/me').then(r => r.data)
 export const deleteAccount = () => api.delete('/auth/account').then(r => r.data)
 

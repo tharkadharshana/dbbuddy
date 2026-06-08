@@ -66,8 +66,9 @@ except Exception as _be:
     log.warning("Integration bootstrap skipped (configure DATAMIND_DB_* in .env)", error=str(_be))
 
 from auth import (
-    create_user, authenticate_user, create_token,
+    create_user, authenticate_user, create_token, get_user,
     get_user_settings, update_user_settings, current_user, init_users_table, delete_user,
+    create_sso_handoff_token, redeem_sso_handoff_token,
 )
 
 app = FastAPI(
@@ -798,6 +799,34 @@ def login(request: Request, req: LoginRequest):
     user = authenticate_user(req.email, req.password)
     token = create_token(req.email)
     log.info("User logged in", email=req.email)
+    locale = user.get("settings", {}).get("locale", {})
+    return {"token": token, "user": {"name": user["name"], "email": user["email"], "locale": locale}}
+
+
+@v1.post("/auth/sso-handoff")
+@_limiter.limit(RL_READ)
+def auth_sso_handoff(request: Request, user: dict = Depends(current_user)):
+    """Issue a short-lived one-time link so a user already authenticated inside
+    a partner iframe (e.g. Salesplay Web Embed) can open the standalone
+    DataMind app without re-entering credentials."""
+    token = create_sso_handoff_token(user["email"])
+    return {"token": token}
+
+
+class SSOLoginRequest(BaseModel):
+    token: str
+
+
+@v1.post("/auth/sso-login")
+@_limiter.limit(RL_AUTH_LOGIN)
+def auth_sso_login(request: Request, body: SSOLoginRequest):
+    """Exchange a one-time embed handoff token for a normal session token."""
+    email = redeem_sso_handoff_token(body.token)
+    user = get_user(email)
+    if not user:
+        raise HTTPException(status_code=401, detail="Account not found")
+    token = create_token(email)
+    log.info("SSO login from embed", email=email)
     locale = user.get("settings", {}).get("locale", {})
     return {"token": token, "user": {"name": user["name"], "email": user["email"], "locale": locale}}
 

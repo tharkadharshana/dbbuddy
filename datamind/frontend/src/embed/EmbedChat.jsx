@@ -8,7 +8,7 @@
  */
 import React, { useState, useRef, useEffect } from 'react'
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { embedRunQuery } from './embedApi'
+import { embedRunQuery, embedGetSSOHandoff } from './embedApi'
 import { notifyParent } from './EmbedApp'
 
 const TT = {
@@ -208,14 +208,29 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
 
   const toggleTheme = () => setTheme(t => t === 'dark' ? 'light' : 'dark')
 
-  // Opens the standalone DataMind app in a new tab — lets embed users leave
-  // the partner iframe to manage billing, integrations, and full analytics.
-  // Also notifies the parent window in case the partner wants to react
-  // (e.g. close the widget) — harmless no-op if they don't listen for it.
-  function openMainApp() {
-    const url = import.meta.env.VITE_APP_URL || 'https://app.datamind.ai'
+  // Opens the standalone DataMind app in a new tab, already signed in — the
+  // user authenticated once inside the partner iframe and shouldn't have to
+  // log in again (their account password is a generated value they never see).
+  // We exchange the embed session for a one-time handoff link; the main app
+  // redeems it for a normal session token on load. Falls back to a plain
+  // (logged-out) link if the handoff call fails for any reason.
+  async function openMainApp() {
+    const base = import.meta.env.VITE_APP_URL || 'https://app.datamind.ai'
+    // Open the tab synchronously (within the click gesture) so Safari/iOS
+    // popup blockers don't kill it — we redirect it once the token resolves.
+    // (Can't pass noopener here or we'd lose the handle needed to redirect it;
+    // the destination is always our own trusted app.)
+    const tab = window.open('about:blank', '_blank')
+    let url = base
+    try {
+      const { token } = await embedGetSSOHandoff()
+      url = `${base}${base.includes('?') ? '&' : '?'}sso=${encodeURIComponent(token)}`
+    } catch {
+      // No handoff token — user lands on the main app's login screen instead.
+    }
     notifyParent('dm:open_main_app', { url })
-    window.open(url, '_blank', 'noopener,noreferrer')
+    if (tab) tab.location.href = url
+    else window.open(url, '_blank')
   }
 
   useEffect(() => {

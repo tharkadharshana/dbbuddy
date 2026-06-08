@@ -13,7 +13,7 @@ import UsagePage         from './pages/UsagePage'
 import DocsPage          from './pages/DocsPage'
 import Sidebar           from './components/Sidebar'
 import UsageLimitBanner  from './components/UsageLimitBanner'
-import { fetchTables, fetchCacheStatus, fetchSettings, fetchConnectedProviders, fetchProviderStats, fetchSubscription, listConversations } from './utils/api'
+import { fetchTables, fetchCacheStatus, fetchSettings, fetchConnectedProviders, fetchProviderStats, fetchSubscription, listConversations, ssoLogin } from './utils/api'
 
 export default function App() {
   const [user, setUser]       = useState(() => {
@@ -29,8 +29,34 @@ export default function App() {
   const [sub, setSub]             = useState(null)
   const [conversations, setConversations]   = useState([])
   const [activeConvId, setActiveConvId]     = useState(null)
+  const [ssoPending, setSsoPending] = useState(() => new URLSearchParams(window.location.search).has('sso'))
   const subIntervalRef = useRef(null)
   const pollRef = useRef(null)
+
+  // Embed handoff: a user already authenticated inside the Salesplay Web Embed
+  // arrives here with ?sso=<one-time token>. Exchange it for a normal session
+  // so they land in the app already signed in — they never see (or need) the
+  // generated password on their account. Strip the param either way so it
+  // can't be reused or bookmarked.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const token = params.get('sso')
+    if (!token) return
+
+    ssoLogin(token)
+      .then(data => {
+        localStorage.setItem('dm_token', data.token)
+        localStorage.setItem('dm_user', JSON.stringify(data.user))
+        setUser(data.user)
+      })
+      .catch(() => { /* expired/used link — fall through to normal login */ })
+      .finally(() => {
+        params.delete('sso')
+        const rest = params.toString()
+        window.history.replaceState({}, '', window.location.pathname + (rest ? `?${rest}` : ''))
+        setSsoPending(false)
+      })
+  }, [])
 
   // Apply theme to document root
   useEffect(() => {
@@ -111,6 +137,14 @@ export default function App() {
     localStorage.removeItem('dm_user')
     if (pollRef.current) clearInterval(pollRef.current)
     setUser(null); setConnection(null); setCacheStatus(null); setPage('chat')
+  }
+
+  if (ssoPending) {
+    return (
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100vh', background:'#09090f' }}>
+        <div style={{ width:24, height:24, border:'2px solid rgba(255,255,255,0.15)', borderTopColor:'#4f8ef7', borderRadius:'50%', animation:'spin 0.7s linear infinite' }} />
+      </div>
+    )
   }
 
   if (!user) return <AuthPage onAuth={handleAuth} />
