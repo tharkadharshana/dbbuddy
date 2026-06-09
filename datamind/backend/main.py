@@ -66,8 +66,9 @@ except Exception as _be:
     log.warning("Integration bootstrap skipped (configure DATAMIND_DB_* in .env)", error=str(_be))
 
 from auth import (
-    create_user, authenticate_user, create_token,
+    create_user, authenticate_user, create_token, get_user,
     get_user_settings, update_user_settings, current_user, init_users_table, delete_user,
+    create_sso_handoff_token, redeem_sso_handoff_token,
 )
 
 app = FastAPI(
@@ -380,9 +381,13 @@ async def http_exception_handler(request, exc):
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request, exc):
+    details = [
+        {"field": ".".join(str(l) for l in e["loc"][1:]), "msg": e["msg"]}
+        for e in exc.errors()
+    ]
     return JSONResponse(
         status_code=422,
-        content={"ok": False, "error": "Invalid request parameters.", "details": str(exc)},
+        content={"ok": False, "error": "Invalid request parameters.", "details": details},
     )
 
 
@@ -522,7 +527,7 @@ def _resolve_api_key(user: dict, llm: str) -> str:
         if not key:
             raise HTTPException(
                 status_code=422,
-                detail="Gemini API key not set. Go to Settings → LLM API Keys."
+                detail="AI service is not configured. Please contact support."
             )
         log.debug("Resolved Gemini API key", user=user.get("email"), source="settings" if s.get("gemini_api_key") else "env")
         return key
@@ -534,12 +539,12 @@ def _resolve_api_key(user: dict, llm: str) -> str:
         if not key:
             raise HTTPException(
                 status_code=422,
-                detail="DeepSeek API key not set. Go to Settings → LLM API Keys."
+                detail="AI service is not configured. Please contact support."
             )
         log.debug("Resolved DeepSeek API key", user=user.get("email"), source="settings" if s.get("deepseek_api_key") else "env")
         return key
 
-    raise HTTPException(status_code=422, detail=f"Unknown LLM: '{llm}'. Use 'gemini' or 'deepseek'.")
+    raise HTTPException(status_code=422, detail="Unsupported AI model selected.")
 
 
 def _llm_has_key(user: dict, name: str) -> bool:
@@ -591,7 +596,7 @@ def _validate_table_column(schemas: dict, table: str, column: str):
 
 def _run_sql(conn, sql: str, title: str) -> dict:
     cursor = conn.cursor()
-    log.debug("Executing SQL", title=title, sql=sql[:120])
+    log.debug("Executing SQL", title=title, sql_preview=f"{sql[:60]}…" if len(sql) > 60 else sql)
     cursor.execute(sql)
     cols = [d[0] for d in cursor.description]
     rows = cursor.fetchall()
@@ -784,7 +789,7 @@ def register(request: Request, req: RegisterRequest):
         log.warning("Trial start skipped", email=req.email, error=str(_te))
     log.info("User registered", email=req.email)
     locale = user.get("settings", {}).get("locale", {})
-    return {"token": token, "user": {"name": user["name"], "email": user["email"], "locale": locale}}
+    return JSONResponse(status_code=201, content={"token": token, "user": {"name": user["name"], "email": user["email"], "locale": locale}})
 
 
 @v1.post("/auth/login")
@@ -794,6 +799,34 @@ def login(request: Request, req: LoginRequest):
     user = authenticate_user(req.email, req.password)
     token = create_token(req.email)
     log.info("User logged in", email=req.email)
+    locale = user.get("settings", {}).get("locale", {})
+    return {"token": token, "user": {"name": user["name"], "email": user["email"], "locale": locale}}
+
+
+@v1.post("/auth/sso-handoff")
+@_limiter.limit(RL_READ)
+def auth_sso_handoff(request: Request, user: dict = Depends(current_user)):
+    """Issue a short-lived one-time link so a user already authenticated inside
+    a partner iframe (e.g. Salesplay Web Embed) can open the standalone
+    DataMind app without re-entering credentials."""
+    token = create_sso_handoff_token(user["email"])
+    return {"token": token}
+
+
+class SSOLoginRequest(BaseModel):
+    token: str
+
+
+@v1.post("/auth/sso-login")
+@_limiter.limit(RL_AUTH_LOGIN)
+def auth_sso_login(request: Request, body: SSOLoginRequest):
+    """Exchange a one-time embed handoff token for a normal session token."""
+    email = redeem_sso_handoff_token(body.token)
+    user = get_user(email)
+    if not user:
+        raise HTTPException(status_code=401, detail="Account not found")
+    token = create_token(email)
+    log.info("SSO login from embed", email=email)
     locale = user.get("settings", {}).get("locale", {})
     return {"token": token, "user": {"name": user["name"], "email": user["email"], "locale": locale}}
 
@@ -939,7 +972,15 @@ def get_settings(request: Request, user: dict = Depends(current_user)):
         if c.get("password"):
             c["password"] = "••••••••"
         safe_configs.append(c)
-    return {**s, "db_configs": safe_configs}
+    _HIDDEN = {"gemini_api_key", "deepseek_api_key", "default_llm"}
+    safe = {k: v for k, v in {**s, "db_configs": safe_configs}.items() if k not in _HIDDEN}
+    # Expose AI availability as a boolean — no provider name or key value leaked
+    _has_key = (
+        bool(s.get("gemini_api_key", "").strip()  or os.getenv("GEMINI_API_KEY", "").strip()) or
+        bool(s.get("deepseek_api_key", "").strip() or os.getenv("DEEPSEEK_API_KEY", "").strip())
+    )
+    safe["has_llm_key"] = _has_key
+    return safe
 
 
 @v1.patch("/settings")
@@ -968,10 +1009,10 @@ def add_db_config(request: Request, cfg: DBConfig, background_tasks: BackgroundT
         api_key = _resolve_api_key(user, llm)
         # Pass plaintext config for cache build (encrypted version already persisted above)
         background_tasks.add_task(_background_build, user["email"], cfg.dict(), llm, api_key)
-        return {"ok": True, "building_cache": True}
+        return JSONResponse(status_code=201, content={"ok": True, "building_cache": True})
     except HTTPException:
         log.warning("Skipping cache build — no API key set", user=user["email"])
-        return {"ok": True, "building_cache": False, "warning": "Add an API key in Settings to build the analytics cache."}
+        return JSONResponse(status_code=201, content={"ok": True, "building_cache": False, "warning": "Add an API key in Settings to build the analytics cache."})
 
 
 @v1.put("/settings/db/{index}")
@@ -982,7 +1023,7 @@ def update_db_config(request: Request, index: int, cfg: DBConfig,
     s = get_user_settings(user["email"])
     configs = s.get("db_configs", [])
     if index < 0 or index >= len(configs):
-        raise HTTPException(status_code=404, detail="Index out of range")
+        raise HTTPException(status_code=404, detail="Database configuration not found.")
     invalidate_cache(user["email"], configs[index])
     cfg_dict = cfg.dict()
     cfg_dict["password"] = _encrypt_db_password(cfg_dict["password"])  # SEC-06
@@ -1004,7 +1045,7 @@ def delete_db_config(request: Request, index: int, user: dict = Depends(current_
     s = get_user_settings(user["email"])
     configs = s.get("db_configs", [])
     if index < 0 or index >= len(configs):
-        raise HTTPException(status_code=404, detail="Index out of range")
+        raise HTTPException(status_code=404, detail="Database configuration not found.")
     log.info("Delete DB config", user=user["email"], index=index)
     invalidate_cache(user["email"], configs[index])
     configs.pop(index)
@@ -1019,7 +1060,7 @@ def activate_db(request: Request, index: int, background_tasks: BackgroundTasks,
     s = get_user_settings(user["email"])
     configs = s.get("db_configs", [])
     if index < 0 or index >= len(configs):
-        raise HTTPException(status_code=404, detail="Index out of range")
+        raise HTTPException(status_code=404, detail="Database configuration not found.")
     update_user_settings(user["email"], {"active_db_index": index})
     db_config = dict(configs[index])
     if db_config.get("password"):
@@ -1668,7 +1709,7 @@ def generate_developer_key(request: Request, user: dict = Depends(current_user))
         )
         conn.commit()
         log.info("API key generated", user=user["email"])
-        return {"ok": True, "key": new_key}
+        return JSONResponse(status_code=201, content={"ok": True, "key": new_key})
     finally:
         cur.close()
         conn.close()
@@ -1710,7 +1751,7 @@ def api_create_conversation(request: Request, body: CreateConversationRequest,
         raise HTTPException(status_code=422, detail="Invalid conversation id.")
     try:
         row = _conv.create_conversation(user["email"], body.id)
-        return {"ok": True, "conversation": row}
+        return JSONResponse(status_code=201, content={"ok": True, "conversation": row})
     except Exception as e:
         log.error("create_conversation failed", user=user["email"], error=str(e))
         raise _server_error("Could not create conversation.")
@@ -2406,7 +2447,7 @@ def connect_provider_route(request: Request, req: ProviderConnectRequest,
     try:
         connection_id = connect_provider(user["email"], req.provider_id, req.credentials)
         background_tasks.add_task(trigger_sync, user["email"], connection_id, full=True)
-        return {"ok": True, "connection_id": connection_id}
+        return JSONResponse(status_code=201, content={"ok": True, "connection_id": connection_id})
     except Exception as e:
         log.error("Provider connect failed", provider=req.provider_id, error=str(e))
         raise _server_error("Failed to connect provider.")
@@ -2569,7 +2610,7 @@ def run_integration_analytics(
     try:
         integration = get_integration(user["email"], provider_id)
         if not integration:
-            raise HTTPException(status_code=404, detail="Integration not connected")
+            raise HTTPException(status_code=404, detail="Integration not found or not connected.")
 
         table_prefix = integration["table_prefix"]
 
@@ -2643,7 +2684,7 @@ def forecast_integration(
     try:
         integration = get_integration(user["email"], provider_id)
         if not integration:
-            raise HTTPException(status_code=404, detail="Integration not connected")
+            raise HTTPException(status_code=404, detail="Integration not found or not connected.")
 
         conn = _get_internal_conn()
         table_prefix = integration["table_prefix"]

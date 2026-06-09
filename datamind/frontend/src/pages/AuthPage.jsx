@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { login, register } from '../utils/api'
+import { login, register, getErrorMessage } from '../utils/api'
 
 export default function AuthPage({ onAuth }) {
   const [mode, setMode] = useState('login') // 'login' | 'register'
@@ -24,7 +24,7 @@ export default function AuthPage({ onAuth }) {
       localStorage.setItem('dm_user', JSON.stringify(data.user))
       onAuth(data.user)
     } catch(e) {
-      setError(e.response?.data?.detail || 'Something went wrong')
+      setError(getErrorMessage(e, 'Something went wrong'))
     } finally {
       setLoading(false)
     }

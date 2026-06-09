@@ -11,8 +11,8 @@
  *   sync     → first-time data sync with progress bar (auto)
  *   error    → something went wrong, with retry
  */
-import React, { useState } from 'react'
-import { salesplayOnboard, embedGetProviderStatus } from './embedApi'
+import React, { useState, useEffect } from 'react'
+import { salesplayOnboard, embedGetProviderStatus, embedGetPlans } from './embedApi'
 import { notifyParent } from './EmbedApp'
 
 // ── Shared styles (mirror EmbedOnboarding) ────────────────────────────────────
@@ -65,6 +65,15 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
   const [syncRows, setSyncRows] = useState(0)
   const [errorMsg, setErrorMsg] = useState('')
   const [loading, setLoading]   = useState(false)
+  const [plans, setPlans]       = useState([])
+
+  // Load subscription plans for the consent screen pricing section.
+  // Non-fatal — if this fails, the consent screen still renders without pricing.
+  useEffect(() => {
+    embedGetPlans()
+      .then(r => setPlans(Array.isArray(r?.plans) ? r.plans : []))
+      .catch(() => setPlans([]))
+  }, [])
 
   // Read aat directly from URL params — more reliable than the prop which travels
   // through React state and can be empty on the first render in some React versions.
@@ -221,6 +230,35 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
               </div>
             ))}
           </div>
+
+          {plans.length > 0 && (
+            <div style={{
+              background: 'var(--bg2)', border: '1px solid var(--border)',
+              borderRadius: 8, padding: '12px', textAlign: 'left', marginBottom: 16,
+            }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', marginBottom: 4 }}>
+                Subscription plans
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--blue)', marginBottom: 8 }}>
+                Start with a free {plans[0]?.trial_days || 14}-day trial — no card required
+              </div>
+              {plans.map((p, i) => (
+                <div key={p.id || p.name} style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  padding: '6px 0',
+                  borderBottom: i < plans.length - 1 ? '1px solid var(--border)' : 'none',
+                }}>
+                  <span style={{ fontSize: 12, color: 'var(--text2)' }}>{p.name}</span>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>
+                    ${Number(p.price_usd).toFixed(2)}/mo
+                    <span style={{ fontWeight: 400, color: 'var(--text3)', marginLeft: 6 }}>
+                      · {p.ai_credits} AI credits
+                    </span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
 
           <button onClick={handleAccept} disabled={loading} style={primaryBtn(loading)}>
             {loading ? <><Spin /> Setting up…</> : 'Accept & Connect'}

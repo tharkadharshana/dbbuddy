@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { onboardingValidateKey, onboardingTestDB, onboardingConnectDB, patchSettings, fetchProviders, validateProviderCreds, connectProvider, fetchProviderStatus, fetchConnectedProviders, fetchBillingPlans, subscribeToPlan } from '../utils/api'
+import { onboardingValidateKey, onboardingTestDB, onboardingConnectDB, patchSettings, fetchProviders, validateProviderCreds, connectProvider, fetchProviderStatus, fetchConnectedProviders, fetchBillingPlans, subscribeToPlan, getErrorMessage } from '../utils/api'
 import { Spinner } from '../components/UI'
 
 // ── Step indicator ────────────────────────────────────────────────────────────
@@ -158,7 +158,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
         await patchSettings({ [`${llm}_api_key`]: apiKey.trim(), default_llm: llm })
       }
     } catch(e) {
-      setKeyResult({ ok:false, error: e.response?.data?.detail || e.message })
+      setKeyResult({ ok:false, error: getErrorMessage(e) })
     } finally { setKeyTesting(false) }
   }
 
@@ -170,7 +170,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
       const r = await onboardingTestDB({ ...dbForm, llm })
       setDbResult(r)
     } catch(e) {
-      setDbResult({ ok:false, error: e.response?.data?.detail || e.message })
+      setDbResult({ ok:false, error: getErrorMessage(e) })
     } finally { setDbTesting(false) }
   }
 
@@ -182,7 +182,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
       setConnectDone(true)
       setTimeout(() => setStep(3), 600)
     } catch(e) {
-      setConnectErr(e.response?.data?.detail || e.message)
+      setConnectErr(getErrorMessage(e))
     } finally { setConnecting(false) }
   }
 

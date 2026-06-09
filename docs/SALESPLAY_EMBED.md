@@ -222,6 +222,128 @@ Chat interface shown after onboarding completes. Shared by all partners.
 Axios client. Key functions for Salesplay:
 - `salesplayOnboard(partnerKey, aat)` → `POST /embed/salesplay/onboard`
 - `embedGetProviderStatus(connectionId)` → sync polling
+- `embedGetSSOHandoff()` → `POST /auth/sso-handoff` (see SSO Handoff section below)
+
+---
+
+## SSO Handoff — "Open in DataMind" Without Re-Login
+
+### Why this exists
+
+`EmbedChat.jsx` has an "Open in DataMind" button that lets embed users leave the
+iframe and use the full standalone app (billing, integrations, full analytics).
+Their DataMind account was auto-created during onboarding with a **deterministic,
+generated password** (see [Password Derivation](#password-derivation) — they have
+never seen it and never typed it). Sending them to a plain login screen would
+force them to either guess this password or go through "forgot password". Instead,
+the widget hands the main app a **short-lived, single-use token** that silently
+exchanges for a normal session — the user lands in the main app already signed in,
+and the generated password is never displayed, transmitted, or otherwise involved.
+
+### Flow
+
+```
+EmbedChat (iframe, already authenticated via dm_embed_token)
+  │
+  ├─ User clicks "Open in DataMind"
+  ├─ window.open('about:blank') — opened synchronously in the click handler
+  │    so Safari/iOS popup blockers don't kill it (no `noopener`, since we
+  │    need the handle to redirect it once the token resolves — destination
+  │    is always our own trusted app, so reverse-tabnabbing isn't a concern)
+  │
+  ├─ POST /auth/sso-handoff   (authenticated with the existing embed JWT)
+  │    → { token: "<one-time JWT, purpose=embed_sso, jti=..., 90s TTL>" }
+  │
+  ├─ Redirects the opened tab to:
+  │    https://app.datamind.ai/?sso=<token>
+  │    (falls back to a plain, logged-out link if the handoff call fails)
+  │
+  └─ notifyParent('dm:open_main_app', { url })   — postMessage, harmless no-op
+       if the partner page isn't listening
+
+Main App (App.jsx, on mount)
+  │
+  ├─ Detects `?sso=<token>` in the URL → shows a loading spinner (`ssoPending`)
+  ├─ POST /auth/sso-login  { token }
+  │    │
+  │    ├─ Verifies JWT signature/expiry (same SECRET_KEY/HS256 as everything else)
+  │    ├─ Checks `purpose == "embed_sso"` — rejects normal session tokens
+  │    ├─ Checks `jti` hasn't been redeemed before (replay protection)
+  │    └─ On success: issues a NORMAL session token via create_token(email)
+  │
+  ├─ On success: stores dm_token / dm_user, signs the user in
+  ├─ On failure (expired/already used/invalid): silently falls through to
+  │    the normal login screen — no error shown, just a fresh start
+  └─ Strips `?sso=...` from the URL via history.replaceState either way,
+       so the link can never be bookmarked, shared, or replayed
+```
+
+### Backend pieces (`datamind/backend/auth.py`, `main.py`)
+
+**`create_sso_handoff_token(email)`** — issues a JWT with:
+
+| Claim | Purpose |
+|---|---|
+| `sub` | the user's email |
+| `purpose` | `"embed_sso"` — scopes the token to this one exchange; a regular session token lacks this claim and is rejected by `/auth/sso-login` |
+| `jti` | `secrets.token_urlsafe(16)` — unique ID used for one-time-use enforcement |
+| `exp` | now + `SSO_HANDOFF_TTL_SECONDS` (90 seconds) |
+
+**`redeem_sso_handoff_token(token)`** — validates and *consumes* the token:
+
+1. Decodes/verifies signature + expiry (raises 401 on `JWTError`)
+2. Rejects anything without `purpose == "embed_sso"`
+3. Opportunistically prunes `_redeemed_sso_jti` of expired entries (keeps the
+   in-memory dict bounded — entries live ≤ 90s so it never grows large)
+4. Rejects if `jti` is missing or already present in `_redeemed_sso_jti`
+   (replay protection — a leaked/bookmarked URL is a dead link)
+5. Records the `jti` as redeemed and returns the email
+
+**`POST /auth/sso-handoff`** *(requires the caller's existing — embed — session)*
+
+```json
+→ { "token": "<one-time JWT>" }
+```
+
+**`POST /auth/sso-login`** *(public — this IS the login exchange)*
+
+```json
+{ "token": "<one-time JWT>" }
+→ { "token": "<normal_datamind_jwt>", "user": { "name": "...", "email": "...", "locale": {...} } }
+```
+
+Looks the user up with `get_user(email)`, then issues a completely ordinary
+session token via the existing `create_token(email)` — from this point on the
+session is indistinguishable from a normal password login.
+
+### Frontend pieces
+
+- `embedApi.js` → `embedGetSSOHandoff()` — `POST /auth/sso-handoff` using the embed JWT
+- `utils/api.js` → `ssoLogin(token)` — `POST /auth/sso-login`, public (no `dm_token` needed)
+- `EmbedChat.jsx` → `openMainApp()` — orchestrates the popup-safe open + handoff + redirect
+- `App.jsx` → on-mount effect detects `?sso=`, calls `ssoLogin`, stores the
+  session, and strips the param; an `ssoPending` flag renders a spinner while
+  the exchange is in flight so the user never sees a flash of the login page
+
+### Security properties (why this isn't "just sharing the password")
+
+- **Scoped**: the `purpose: "embed_sso"` claim means this token can do exactly
+  one thing — exchange for a session via `/auth/sso-login`. It cannot be used
+  as a Bearer token against any other endpoint.
+- **Short-lived**: 90-second expiry. A token sitting in browser history, a
+  server access log, or a `Referer` header is worthless almost immediately.
+- **Single-use**: the `jti` replay check means even a token captured within
+  the 90-second window can be redeemed only once.
+- **No new attack surface beyond the embed session itself**: minting a handoff
+  token requires an already-authenticated embed session — anyone able to do
+  that can already query that user's data through the embed, so this doesn't
+  meaningfully extend what a compromised embed session could already do.
+- **Zero impact on existing auth**: `/auth/login`, `/auth/register`,
+  `create_token`, `decode_token`, `current_user`, and password hashing are
+  untouched. Users who don't arrive with `?sso=` (i.e. everyone who isn't
+  coming from this specific embed handoff) never touch any of this code —
+  `App.jsx`'s `ssoPending` effect short-circuits to a no-op (`if (!token) return`)
+  on the very first line.
 
 ---
 

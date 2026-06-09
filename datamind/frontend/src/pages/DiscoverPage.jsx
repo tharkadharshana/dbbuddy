@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { fetchDiscover, runAnalytics, fetchCacheProgress, rebuildCache,
-         fetchConnectedProviders, fetchIntegrationTemplates, runIntegrationAnalytics } from '../utils/api'
+         fetchConnectedProviders, fetchIntegrationTemplates, runIntegrationAnalytics, getErrorMessage } from '../utils/api'
 import { Card, Badge, Spinner, Spinner2, ErrorBox, KPICard, ChartCard, DataTable,
          BarChartSimple, LineChartSimple, PieChartSimple, UsageMeter, COLORS, Btn, AIQuotaWall } from '../components/UI'
 import { ComposedChart, Bar, Line, Area, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -94,10 +94,12 @@ function BuildProgress({ onDone }) {
 }
 
 // ── Analytics Card ────────────────────────────────────────────────────────────
-function AnalyticsCard({ item, isSelected, onRun }) {
+function AnalyticsCard({ item, isSelected, onRun, disabled }) {
   return (
-    <div onClick={onRun} style={{
-      padding:'12px 14px', borderRadius:'var(--r-md)', marginBottom:5, cursor:'pointer',
+    <div onClick={disabled ? undefined : onRun} style={{
+      padding:'12px 14px', borderRadius:'var(--r-md)', marginBottom:5,
+      cursor: disabled ? 'not-allowed' : 'pointer',
+      opacity: disabled ? 0.55 : 1,
       background: isSelected ? 'var(--blue-dim)' : 'var(--bg2)',
       border:`1px solid ${isSelected ? 'rgba(79,142,247,0.3)' : 'var(--border)'}`,
       transition:'all .1s'
@@ -276,7 +278,7 @@ export default function DiscoverPage({ llm, setLlm, sub, onNavigate, onQueryComp
 
       // Truly nothing available
       setNeedsBuild(true); setCatalogue([])
-    } catch(e) { setError(e.response?.data?.detail || e.message) }
+    } catch(e) { setError(getErrorMessage(e)) }
     finally { setLoading(false) }
   }
 
@@ -289,13 +291,17 @@ export default function DiscoverPage({ llm, setLlm, sub, onNavigate, onQueryComp
         ? await runIntegrationAnalytics(item.provider, item.id)
         : await runAnalytics(item.id, llm, {})
       setResult(data)
-    } catch(e) { setRunError(e.response?.data?.detail || e.message) }
+    } catch(e) { setRunError(getErrorMessage(e)) }
     finally { setRunning(false); onQueryComplete?.() }
   }
 
   async function handleRebuild() {
-    await rebuildCache()
-    setBuilding(true); setCatalogue([]); setNeedsBuild(false)
+    try {
+      await rebuildCache()
+      setBuilding(true); setCatalogue([]); setNeedsBuild(false)
+    } catch(e) {
+      setError(getErrorMessage(e, 'Failed to start cache build.'))
+    }
   }
 
   const categories = ['All', ...new Set(catalogue.map(c => c.category))]
@@ -354,7 +360,7 @@ export default function DiscoverPage({ llm, setLlm, sub, onNavigate, onQueryComp
 
         <div style={{ flex:1, overflowY:'auto', padding:'0 10px 16px' }}>
           {visible.map(item => (
-            <AnalyticsCard key={item.id} item={item} isSelected={selected?.id===item.id} onRun={() => handleRun(item)} />
+            <AnalyticsCard key={item.id} item={item} isSelected={selected?.id===item.id} onRun={() => handleRun(item)} disabled={running} />
           ))}
         </div>
       </div>

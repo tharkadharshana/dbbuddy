@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { getGlobalToast } from '../components/Toast'
 
 const api = axios.create({ baseURL: '/api' })
 
@@ -9,22 +10,42 @@ api.interceptors.request.use(cfg => {
   return cfg
 })
 
-// Auto logout on 401
+// Centrally handle status codes that are not contextual to a specific component
 api.interceptors.response.use(
   r => r,
   err => {
-    if (err.response?.status === 401) {
+    const status = err.response?.status
+    const toast = getGlobalToast()
+
+    if (status === 401) {
       localStorage.removeItem('dm_token')
       localStorage.removeItem('dm_user')
       window.location.href = '/login'
+    } else if (status === 429) {
+      toast?.error('Too many requests — please slow down and try again in a moment.')
     }
+
     return Promise.reject(err)
   }
 )
 
+// Extracts the most useful error message from an axios error, checking backend
+// fields first before falling back to the raw axios message.
+export function getErrorMessage(e, fallback = 'Something went wrong. Please try again.') {
+  return e?.response?.data?.error
+    || e?.response?.data?.detail
+    || e?.message
+    || fallback
+}
+
 // Auth
 export const register  = (name, email, password) => api.post('/auth/register', { name, email, password }).then(r => r.data)
 export const login     = (email, password) => api.post('/auth/login', { email, password }).then(r => r.data)
+
+// Exchanges a one-time embed handoff token (?sso=...) for a normal session —
+// lets users who authenticated inside the Salesplay Web Embed land here
+// already signed in, without ever seeing their (generated) password.
+export const ssoLogin  = (token) => api.post('/auth/sso-login', { token }).then(r => r.data)
 export const fetchMe   = () => api.get('/auth/me').then(r => r.data)
 export const deleteAccount = () => api.delete('/auth/account').then(r => r.data)
 

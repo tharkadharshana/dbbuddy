@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { runNLQuery, createConversation, getConversationMessages } from '../utils/api'
+import { runNLQuery, createConversation, getConversationMessages, getErrorMessage } from '../utils/api'
 import { Spinner, UsageMeter, AIQuotaWall } from '../components/UI'
 import { formatCurrency, formatNumber } from '../utils/locale'
 
@@ -262,7 +262,7 @@ export default function ChatPage({
       ))
       onConversationChange?.()
     } catch(e) {
-      const err = e.response?.data?.error || e.response?.data?.detail || e.message
+      const err = getErrorMessage(e)
       setMessages(m => m.map(msg =>
         msg.id === thinkMsg.id ? { role: 'ai', error: err, id: thinkMsg.id } : msg
       ))

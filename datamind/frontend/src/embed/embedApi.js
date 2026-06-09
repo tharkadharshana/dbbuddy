@@ -61,6 +61,11 @@ export const embedGetProviderStatus = (connection_id) =>
 export const embedRunQuery = (question, llm = 'gemini', thinkMode = false) =>
   api.post('/query', { question, llm, think_mode: thinkMode }).then(r => r.data)
 
+// One-time link so an already-authenticated embed user can open the
+// standalone DataMind app without re-entering credentials.
+export const embedGetSSOHandoff = () =>
+  api.post('/auth/sso-handoff').then(r => r.data)
+
 export const embedGetSubscription = () =>
   api.get('/billing/subscription').then(r => r.data)
 

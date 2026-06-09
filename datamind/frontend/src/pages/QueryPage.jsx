@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { Card, Btn, UsageMeter, Spinner, Empty, ErrorBox, KPICard, DataTable, COLORS } from '../components/UI'
-import { runNLQuery } from '../utils/api'
+import { runNLQuery, getErrorMessage } from '../utils/api'
 
 const SUGGESTIONS = [
   'Show total revenue by product category',
@@ -32,7 +32,7 @@ export default function QueryPage({ llm, setLlm }) {
       setResult(data)
       setHistory(h => [{ q: qText, ts: new Date().toLocaleTimeString() }, ...h.slice(0,9)])
     } catch(e) {
-      setError(e.response?.data?.detail || e.message)
+      setError(getErrorMessage(e))
     } finally { setLoading(false) }
   }
 

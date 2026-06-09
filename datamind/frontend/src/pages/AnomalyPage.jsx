@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { ComposedChart, Bar, ReferenceLine, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { Card, Btn, Badge, Spinner, Spinner2, Empty, ErrorBox, KPICard, AIQuotaWall } from '../components/UI'
-import { runAutoAnomalies, runAnomalies, fetchTables, fetchTableColumns } from '../utils/api'
+import { runAutoAnomalies, runAnomalies, fetchTables, fetchTableColumns, getErrorMessage } from '../utils/api'
 
 const TT = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)', borderRadius:8, fontSize:12, color:'#f0f1fa' }
 const SEV_COLOR = { high:'red', medium:'amber', low:'blue' }
@@ -44,7 +44,7 @@ export default function AnomalyPage({ sub, onNavigate, onQueryComplete }) {
         ? await runAutoAnomalies()
         : await runAnomalies(form.table, form.value_column, form.date_column||null)
       setResult(data)
-    } catch(e) { setError(e.response?.data?.error || e.response?.data?.detail || e.message) }
+    } catch(e) { setError(getErrorMessage(e)) }
     finally { setLoading(false); onQueryComplete?.() }
   }
 

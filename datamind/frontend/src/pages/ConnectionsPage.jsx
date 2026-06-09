@@ -3,9 +3,10 @@ import {
   fetchProviders, fetchConnectedProviders,
   validateProviderCreds, connectProvider,
   disconnectProvider, syncProvider, fetchProviderStatus,
-  addDBConfig, testDBConnection,
+  addDBConfig, testDBConnection, getErrorMessage,
 } from '../utils/api'
 import { Card, Btn, Badge, Spinner, ErrorBox } from '../components/UI'
+import { useToast } from '../components/Toast'
 
 // ── Provider card ─────────────────────────────────────────────────────────────
 function ProviderCard({ provider, onConnect, canUseDB }) {
@@ -164,7 +165,7 @@ function ConnectModal({ provider, onClose, onConnected }) {
     try {
       const r = await validateProviderCreds(provider.provider_id, creds)
       setTestResult(r)
-    } catch(e) { setError(e.response?.data?.detail || e.message) }
+    } catch(e) { setError(getErrorMessage(e)) }
     finally { setTesting(false) }
   }
 
@@ -174,7 +175,7 @@ function ConnectModal({ provider, onClose, onConnected }) {
       await connectProvider(provider.provider_id, creds)
       onConnected()
       onClose()
-    } catch(e) { setError(e.response?.data?.detail || e.message) }
+    } catch(e) { setError(getErrorMessage(e)) }
     finally { setConnecting(false) }
   }
 
@@ -291,6 +292,7 @@ function BYODBModal({ onClose, onConnected }) {
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function ConnectionsPage({ onConnectionChange, sub }) {
+  const toast = useToast()
   const [providers, setProviders]     = useState([])
   const [connected, setConnected]     = useState([])
   const [loading, setLoading]         = useState(true)
@@ -310,7 +312,13 @@ export default function ConnectionsPage({ onConnectionChange, sub }) {
 
   async function handleDisconnect(cid) {
     if (!window.confirm('Disconnect this integration? Synced data will be deleted.')) return
-    try { await disconnectProvider(cid); load(); onConnectionChange?.() } catch(e) {}
+    try {
+      await disconnectProvider(cid)
+      load()
+      onConnectionChange?.()
+    } catch(e) {
+      toast.error(getErrorMessage(e, 'Failed to disconnect. Please try again.'))
+    }
   }
 
   const availableProviders = providers.filter(p => !connected.some(c => c.provider_id === p.provider_id))

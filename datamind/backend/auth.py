@@ -1,5 +1,6 @@
 import os
 import json
+import secrets
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -130,6 +131,56 @@ def decode_token(token: str) -> Optional[str]:
         return payload.get("sub")
     except JWTError:
         return None
+
+
+# ── Embed SSO handoff ─────────────────────────────────────────────────────────
+# Lets a user who is already authenticated inside a partner iframe (Salesplay
+# Web Embed) open the standalone DataMind app without re-entering credentials.
+# We never expose the account password (it's a deterministic derivative of the
+# email — see embed.py) — instead we issue a short-lived, single-use token that
+# is exchanged for a normal session token by /auth/sso-login.
+
+SSO_HANDOFF_TTL_SECONDS = 90
+
+# jti -> expiry; tracks redeemed tokens so a leaked URL can't be replayed.
+# Self-pruning on each redemption — stays small since tokens live <= 90s.
+_redeemed_sso_jti: dict = {}
+
+
+def create_sso_handoff_token(email: str) -> str:
+    """Issue a short-lived, single-purpose JWT for the embed → main-app handoff."""
+    now = datetime.utcnow()
+    payload = {
+        "sub": email,
+        "purpose": "embed_sso",
+        "jti": secrets.token_urlsafe(16),
+        "exp": now + timedelta(seconds=SSO_HANDOFF_TTL_SECONDS),
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def redeem_sso_handoff_token(token: str) -> str:
+    """Validate + consume a one-time handoff token. Returns the email or raises 401."""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired handoff link")
+
+    if payload.get("purpose") != "embed_sso":
+        raise HTTPException(status_code=401, detail="Invalid handoff link")
+
+    jti = payload.get("jti")
+    now = datetime.utcnow()
+    # Opportunistic cleanup of expired entries — keeps the set bounded.
+    for k, exp in list(_redeemed_sso_jti.items()):
+        if exp < now:
+            _redeemed_sso_jti.pop(k, None)
+
+    if not jti or jti in _redeemed_sso_jti:
+        raise HTTPException(status_code=401, detail="This handoff link has already been used")
+    _redeemed_sso_jti[jti] = now + timedelta(seconds=SSO_HANDOFF_TTL_SECONDS)
+
+    return payload["sub"]
 
 
 # ── User CRUD ─────────────────────────────────────────────────────────────────
