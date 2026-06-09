@@ -311,7 +311,8 @@ def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "gemini",
                  fkeys: list = None, api_key: str = "", user_email: str = None,
                  history_months: int = None, tenant_id: str = None,
                  row_limit: int = 500, conversation_history: str = "",
-                 extra_schema_hints: str = "") -> str:
+                 extra_schema_hints: str = "",
+                 shop_timezone: str = "UTC") -> str:
     schema_text = schema_to_text(_filter_sensitive_schema(schemas), fkeys)
     history_hint = (
         f" Only return data from the last {history_months} month(s) — add "
@@ -325,24 +326,31 @@ def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "gemini",
     )
     # For integration users querying shared sp_* tables, every table has a
     # tenant_id column that MUST be scoped in WHERE and JOIN conditions.
-    tenant_hint = (
-        f" IMPORTANT: All sp_* tables are shared across multiple customers. "
-        f"The current user's tenant_id is '{tenant_id}'. Rules:\n"
-        f"1. Main WHERE clause must always include: WHERE tenant_id = '{tenant_id}'\n"
-        f"2. Every JOIN must scope the joined table too: "
-        f"JOIN sp_foo f ON f.id = a.foo_id AND f.tenant_id = '{tenant_id}'\n"
-        f"3. sp_receipt_line_items already has product_name and category_name columns — "
-        f"prefer using these directly instead of joining sp_products when possible.\n"
-        f"4. COUNT(DISTINCT receipt_id) on sp_receipt_line_items gives receipt count "
-        f"without needing to join sp_receipts.\n"
-        f"5. sp_customers has pre-aggregated columns — ALWAYS use them directly, never "
-        f"recompute via JOIN: total_spent (lifetime revenue), total_visits (order count), "
-        f"last_purchase_date (most recent completed purchase), points_balance. "
-        f"Do NOT join sp_receipts to compute any of these — the join misses most customers "
-        f"due to customer_id linkage gaps. Only join sp_receipts if you need individual "
-        f"receipt-level rows (e.g. itemised breakdown), never for aggregates."
-        if tenant_id else ""
-    )
+    # Also inject SalesPlay canonical metric rules so the LLM matches SalesPlay's
+    # own dashboard numbers (VOID exclusion, timezone, correct revenue column, etc.)
+    if tenant_id:
+        from providers.salesplay.canonical_metrics import SALESPLAY_LLM_RULES
+        _sp_rules = SALESPLAY_LLM_RULES.format(timezone=shop_timezone or "UTC")
+        tenant_hint = (
+            f" IMPORTANT: All sp_* tables are shared across multiple customers. "
+            f"The current user's tenant_id is '{tenant_id}'. Rules:\n"
+            f"1. Main WHERE clause must always include: WHERE tenant_id = '{tenant_id}'\n"
+            f"2. Every JOIN must scope the joined table too: "
+            f"JOIN sp_foo f ON f.id = a.foo_id AND f.tenant_id = '{tenant_id}'\n"
+            f"3. sp_receipt_line_items already has product_name and category_name columns — "
+            f"prefer using these directly instead of joining sp_products when possible.\n"
+            f"4. COUNT(DISTINCT receipt_id) on sp_receipt_line_items gives receipt count "
+            f"without needing to join sp_receipts.\n"
+            f"5. sp_customers has pre-aggregated columns — ALWAYS use them directly, never "
+            f"recompute via JOIN: total_spent (lifetime revenue), total_visits (order count), "
+            f"last_purchase_date (most recent completed purchase), points_balance. "
+            f"Do NOT join sp_receipts to compute any of these — the join misses most customers "
+            f"due to customer_id linkage gaps. Only join sp_receipts if you need individual "
+            f"receipt-level rows (e.g. itemised breakdown), never for aggregates.\n\n"
+            f"{_sp_rules}"
+        )
+    else:
+        tenant_hint = ""
     # Conversation history is prepended so the LLM understands follow-up
     # questions ("explain this", "drill down", "compare to last month") without
     # generating a broad unrelated SQL query.
