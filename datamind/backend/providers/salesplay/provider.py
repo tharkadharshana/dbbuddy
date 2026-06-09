@@ -16,6 +16,7 @@ from providers.salesplay.sync import (
     sync_products, sync_customers, sync_receipts,
     refresh_customer_last_purchase,
 )
+from providers.salesplay.canonical_metrics import CONSISTENCY_CHECKS
 from logger import get_logger
 
 log = get_logger(__name__)
@@ -131,6 +132,14 @@ class SalesPlayProvider(BaseProvider):
             else:
                 progress(f"✅ Sync complete — {total} total rows")
 
+            # Run lightweight internal consistency checks against our own data.
+            # These catch transformation bugs (not API drift) — they never block
+            # the sync result, only emit warnings that appear in sync logs.
+            warnings = _run_consistency_checks(conn, table_prefix)
+            for w in warnings:
+                log.warning("SalesPlay data consistency issue", prefix=table_prefix, issue=w)
+                progress(f"  ⚠ Data check: {w}")
+
             return SyncResult(
                 ok=True,
                 rows_fetched=total + budget.skipped,
@@ -143,3 +152,33 @@ class SalesPlayProvider(BaseProvider):
             conn.rollback()
             log.error("SalesPlay sync failed", error=str(exc), prefix=table_prefix)
             return SyncResult(ok=False, error=str(exc))
+
+
+def _run_consistency_checks(conn, tenant_id: str) -> list:
+    """
+    Run the canonical consistency checks against our synced sp_* data.
+    Returns a list of human-readable warning strings for any failed checks.
+    Never raises — a check failure is a warning, not an error.
+    """
+    warnings = []
+    for check_name, sql_template, threshold, description in CONSISTENCY_CHECKS:
+        try:
+            sql = sql_template.format(tenant_id=tenant_id)
+            cursor = conn.cursor()
+            cursor.execute(sql)
+            row = cursor.fetchone()
+            if row is None:
+                continue
+            value = row[0]
+            if value is None:
+                continue
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                continue
+            if numeric > threshold:
+                warnings.append(f"{description} (value={numeric})")
+        except Exception as exc:
+            log.debug("Consistency check skipped due to error",
+                      check=check_name, error=str(exc))
+    return warnings
