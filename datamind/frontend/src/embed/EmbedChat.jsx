@@ -353,7 +353,7 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
             <div style={{ width:'100%', textAlign:'left', fontSize:10, fontWeight:600, color:'var(--text3)', textTransform:'uppercase', letterSpacing:'.07em', marginBottom:8 }}>
               Popular questions
             </div>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, width:'100%' }}>
+            <div style={{ display:'flex', flexDirection:'column', gap:8, width:'100%' }}>
               {SUGGESTIONS.map((s, i) => {
                 const featured = i === 0
                 const hovered = hoveredSuggestion === i
@@ -364,7 +364,6 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
                     onMouseEnter={() => setHoveredSuggestion(i)}
                     onMouseLeave={() => setHoveredSuggestion(null)}
                     style={{
-                      gridColumn: featured ? '1 / -1' : 'auto',
                       display:'flex', alignItems:'center', gap:9,
                       padding: featured ? '13px 14px' : '11px 12px',
                       background: hovered ? 'var(--bg2)' : 'var(--bg1)',
