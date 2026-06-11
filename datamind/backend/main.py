@@ -1667,12 +1667,19 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                 except Exception as _age_err:
                     log.debug("Staleness note skipped", error=str(_age_err))
 
-        return {
-            "sql": sql, "columns": columns, "data": data, "row_count": len(data),
+        response = {
+            "columns": columns, "data": data, "row_count": len(data),
             "analysis": analysis, "think_mode": req.think_mode,
             "conversation_id": conv_id,
             "data_as_of": nl_last_sync_at,  # ISO string or None; frontend shows "Data as of X ago"
         }
+        # Only own-DB users get the generated SQL back (used by QueryPage's
+        # "Show SQL" debugging view). Integration users (SalesPlay/Loyverse)
+        # query shared internal tables — the SQL would expose internal table
+        # names, column names, and tenant_id values, so never return it.
+        if s.get("db_configs"):
+            response["sql"] = sql
+        return response
     except HTTPException:
         raise
     except Exception as e:
