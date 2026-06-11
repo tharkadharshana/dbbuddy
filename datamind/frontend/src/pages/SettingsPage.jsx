@@ -144,9 +144,10 @@ export default function SettingsPage({ user, onLogout, onNavigate, sub }) {
   const [apiKeyCopied, setApiKeyCopied]   = useState(false)
   const isPro = sub?.plan_name === 'Pro'
 
+  const [openaiKey, setOpenaiKey]       = useState('')
   const [geminiKey, setGeminiKey]       = useState('')
   const [deepseekKey, setDeepseekKey]   = useState('')
-  const [defaultLLM, setDefaultLLM]     = useState('gemini')
+  const [defaultLLM, setDefaultLLM]     = useState('openai')
 
   const [showDBForm, setShowDBForm]   = useState(false)
   const [editingIdx, setEditingIdx]   = useState(null)
@@ -159,9 +160,10 @@ export default function SettingsPage({ user, onLogout, onNavigate, sub }) {
     fetchSettings()
       .then(s => {
         setSettings(s)
+        setOpenaiKey(s.openai_api_key || '')
         setGeminiKey(s.gemini_api_key || '')
         setDeepseekKey(s.deepseek_api_key || '')
-        setDefaultLLM(s.default_llm || 'gemini')
+        setDefaultLLM(s.default_llm || 'openai')
         setLoading(false)
       })
       .catch(e => { setError(getErrorMessage(e)); setLoading(false) })
@@ -207,7 +209,7 @@ export default function SettingsPage({ user, onLogout, onNavigate, sub }) {
   async function saveAPIKeys() {
     setSaving(true); setSaved(''); setError('')
     try {
-      await patchSettings({ gemini_api_key: geminiKey, deepseek_api_key: deepseekKey, default_llm: defaultLLM })
+      await patchSettings({ openai_api_key: openaiKey, gemini_api_key: geminiKey, deepseek_api_key: deepseekKey, default_llm: defaultLLM })
       setSaved('Saved!')
       setTimeout(() => setSaved(''), 2500)
     } catch(e) { setError(getErrorMessage(e)) }
@@ -316,7 +318,7 @@ export default function SettingsPage({ user, onLogout, onNavigate, sub }) {
         <Card style={{ padding: '18px 20px' }}>
           <Field label="Default LLM">
             <div style={{ display: 'flex', gap: 8 }}>
-              {['gemini', 'deepseek'].map(llm => (
+              {['openai', 'gemini', 'deepseek'].map(llm => (
                 <button key={llm} onClick={() => setDefaultLLM(llm)} style={{
                   flex: 1, padding: '9px 0', borderRadius: 'var(--r-md)', fontSize: 13, fontWeight: 500,
                   background: defaultLLM === llm ? 'var(--blue-dim)' : 'var(--bg3)',
@@ -324,9 +326,18 @@ export default function SettingsPage({ user, onLogout, onNavigate, sub }) {
                   border: `1px solid ${defaultLLM === llm ? 'rgba(79,142,247,0.3)' : 'var(--border)'}`,
                   cursor: 'pointer'
                 }}>
-                  {llm === 'gemini' ? '✦ Gemini' : '◈ DeepSeek'}
+                  {llm === 'openai' ? '◆ OpenAI' : llm === 'gemini' ? '✦ Gemini' : '◈ DeepSeek'}
                 </button>
               ))}
+            </div>
+          </Field>
+          <Field label="OpenAI API Key" hint="Get yours at platform.openai.com → API Keys">
+            <div style={{ display: 'flex', gap: 8 }}>
+              {inp(openaiKey, setOpenaiKey, openaiKey ? '••••••••••••••••' : 'sk-…', 'password', true)}
+              <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer"
+                style={{ padding: '9px 14px', background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--r-md)', fontSize: 12, color: 'var(--text3)', textDecoration: 'none', display: 'flex', alignItems: 'center', whiteSpace: 'nowrap' }}>
+                Get key ↗
+              </a>
             </div>
           </Field>
           <Field label="Gemini API Key" hint="Get yours free at aistudio.google.com → API Keys">

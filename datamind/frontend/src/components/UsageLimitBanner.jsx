@@ -1,5 +1,7 @@
 import React, { useState } from 'react'
 
+const SUPPORT_EMAIL = 'support@datamind.ai'
+
 export default function UsageLimitBanner({ sub, onNavigate }) {
   const [dismissed, setDismissed] = useState(false)
 
@@ -11,13 +13,17 @@ export default function UsageLimitBanner({ sub, onNavigate }) {
   let color   = 'var(--red)'
   let bg      = 'rgba(239,68,68,0.12)'
   let border  = 'rgba(239,68,68,0.3)'
+  let isBetaLimit = false
 
   if (status === 'expired' || status === 'cancelled') {
-    message = 'Your subscription has expired. Subscribe to restore access.'
+    message = "Your trial has ended. We're in beta — email us if you'd like continued access."
+    isBetaLimit = true
   } else if (status === 'no_subscription') {
-    message = 'No active plan. Choose a plan to get started.'
+    message = "No active plan. We're in beta — email us to get set up."
+    isBetaLimit = true
   } else if (tokens_pct >= 100) {
-    message = "You've used all your tokens for this billing period."
+    message = "You've used all your tokens for this billing period. We're in beta — email us if you need more."
+    isBetaLimit = true
   } else if (status === 'trial' && trial_days_remaining <= 2) {
     message = `Your free trial ends in ${trial_days_remaining} day${trial_days_remaining === 1 ? '' : 's'}.`
     color  = 'var(--amber)'
@@ -43,17 +49,31 @@ export default function UsageLimitBanner({ sub, onNavigate }) {
       flexShrink: 0,
     }}>
       <span style={{ flex: 1 }}>{message}</span>
-      <button
-        onClick={() => onNavigate && onNavigate('billing')}
-        style={{
-          fontSize: 12, fontWeight: 600, padding: '4px 12px',
-          borderRadius: 6, border: `1px solid ${color}`,
-          background: 'transparent', color, cursor: 'pointer',
-          flexShrink: 0,
-        }}
-      >
-        Manage Plan
-      </button>
+      {isBetaLimit ? (
+        <a
+          href={`mailto:${SUPPORT_EMAIL}`}
+          style={{
+            fontSize: 12, fontWeight: 600, padding: '4px 12px',
+            borderRadius: 6, border: `1px solid ${color}`,
+            background: 'transparent', color, textDecoration: 'none',
+            flexShrink: 0,
+          }}
+        >
+          Contact Us
+        </a>
+      ) : (
+        <button
+          onClick={() => onNavigate && onNavigate('billing')}
+          style={{
+            fontSize: 12, fontWeight: 600, padding: '4px 12px',
+            borderRadius: 6, border: `1px solid ${color}`,
+            background: 'transparent', color, cursor: 'pointer',
+            flexShrink: 0,
+          }}
+        >
+          Manage Plan
+        </button>
+      )}
       <button
         onClick={() => setDismissed(true)}
         aria-label="Dismiss"

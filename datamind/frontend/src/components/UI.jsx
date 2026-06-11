@@ -201,7 +201,9 @@ export function PieChartSimple({ data, nameKey, valueKey, height=220 }) {
 
 // ── AI Quota Wall ─────────────────────────────────────────────────────────────
 
-export function AIQuotaWall({ sub, onNavigate }) {
+const SUPPORT_EMAIL = 'support@datamind.ai'
+
+export function AIQuotaWall({ sub }) {
   const isNoSub    = !sub || sub.status === 'no_subscription'
   const isExpired  = sub?.status === 'expired' || sub?.status === 'cancelled'
   const isExhausted = sub?.tokens_pct >= 100
@@ -211,16 +213,16 @@ export function AIQuotaWall({ sub, onNavigate }) {
   let title, body
   if (isNoSub) {
     title = 'No active plan'
-    body  = 'Choose a plan to unlock AI features.'
+    body  = "We're in beta — email us and we'll get you set up with access."
   } else if (isExpired) {
-    title = 'Subscription expired'
-    body  = 'Renew your subscription to continue using AI features.'
+    title = 'Your trial has ended'
+    body  = "We're in beta — email us if you'd like continued access to AI features."
   } else {
     const resetDate = sub?.period_end
       ? new Date(sub.period_end).toLocaleDateString('en-US', { month: 'long', day: 'numeric' })
       : 'next month'
     title = 'AI credits exhausted'
-    body  = `You've used all ${sub.ai_total_available} AI credits for this billing period. Your quota resets on ${resetDate}. Purchase add-on credits to keep going.`
+    body  = `You've used all ${sub.ai_total_available} AI credits for this billing period. Your quota resets on ${resetDate}. We're in beta — email us if you need more before then.`
   }
 
   return (
@@ -231,15 +233,16 @@ export function AIQuotaWall({ sub, onNavigate }) {
       <div style={{ fontSize: 48, marginBottom: 16 }}>🔒</div>
       <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text)', marginBottom: 10 }}>{title}</div>
       <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.7, maxWidth: 400, marginBottom: 24 }}>{body}</div>
-      <button
-        onClick={() => onNavigate && onNavigate('billing')}
+      <a
+        href={`mailto:${SUPPORT_EMAIL}`}
         style={{
           padding: '10px 24px', borderRadius: 8, border: 'none',
-          background: 'var(--blue)', color: '#fff', fontWeight: 600, fontSize: 14, cursor: 'pointer',
+          background: 'var(--blue)', color: '#fff', fontWeight: 600, fontSize: 14,
+          textDecoration: 'none', display: 'inline-block',
         }}
       >
-        Manage Plan
-      </button>
+        Contact Us
+      </a>
     </div>
   )
 }

@@ -2,6 +2,12 @@ import React, { useState, useEffect } from 'react'
 import { fetchBillingPlans, fetchSubscription, fetchBillingUsage, subscribeToPlan, purchaseAddon } from '../utils/api'
 import { Spinner } from '../components/UI'
 
+// While in beta there is no live payment gateway — plans/add-ons are shown
+// for preview only. Set to false once payments go live.
+const BETA_MODE = true
+const SUPPORT_EMAIL = 'support@datamind.ai'
+const BETA_DISABLED_STYLE = { opacity: 0.5, pointerEvents: 'none', filter: 'grayscale(0.4)' }
+
 const TDM = 10_000 // Token Display Multiplier — backend stores small values, display as large
 const fmtTok = (raw) => {
   const n = (raw || 0) * TDM
@@ -213,6 +219,15 @@ export default function BillingPage({ onSubChange }) {
         <div style={{ fontSize: 13, color: 'var(--text3)' }}>Manage your plan, track usage, and purchase add-ons</div>
       </div>
 
+      {/* Beta notice */}
+      {BETA_MODE && (
+        <div style={{ background: 'rgba(79,142,247,0.1)', border: '1px solid rgba(79,142,247,0.3)', borderRadius: 10, padding: '12px 16px', marginBottom: 24, fontSize: 13, color: 'var(--text2)', lineHeight: 1.6 }}>
+          🚧 <strong>We're in beta.</strong> Plan upgrades and add-on purchases below are shown as a preview and aren't active yet.
+          If you need more Tokens or a higher plan, email us at{' '}
+          <a href={`mailto:${SUPPORT_EMAIL}`} style={{ color: 'var(--blue)' }}>{SUPPORT_EMAIL}</a> and we'll sort it out manually during the beta.
+        </div>
+      )}
+
       {/* Tabs */}
       <div style={{ display: 'flex', gap: 4, marginBottom: 24, borderBottom: '1px solid var(--border)', paddingBottom: 0 }}>
         {[['plans', 'Plans & Add-ons'], ['usage', 'Usage']].map(([id, label]) => (
@@ -246,7 +261,7 @@ export default function BillingPage({ onSubChange }) {
           )}
 
           {/* Plan cards */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16, marginBottom: 40 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16, marginBottom: 40, ...(BETA_MODE ? BETA_DISABLED_STYLE : {}) }}>
             {plans.map(plan => {
               const features  = PLAN_FEATURES[plan.name] || []
               const isCurrent = sub?.plan_id === plan.id && ['trial', 'active'].includes(sub?.status)
@@ -269,7 +284,7 @@ export default function BillingPage({ onSubChange }) {
                     ))}
                   </ul>
                   <button
-                    disabled={ctaDisabled(plan)}
+                    disabled={BETA_MODE || ctaDisabled(plan)}
                     onClick={() => !ctaDisabled(plan) && setConfirmPlan(plan)}
                     style={{ padding: '9px 0', borderRadius: 8, border: 'none', cursor: ctaDisabled(plan) ? 'default' : 'pointer', background: isCurrent ? 'var(--bg3)' : 'var(--blue)', color: isCurrent ? 'var(--text3)' : '#fff', fontWeight: 600, fontSize: 13, opacity: ctaDisabled(plan) ? 0.7 : 1 }}
                   >
@@ -281,7 +296,7 @@ export default function BillingPage({ onSubChange }) {
           </div>
 
           {/* Add-ons */}
-          <div style={{ background: 'var(--bg1)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+          <div style={{ background: 'var(--bg1)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden', ...(BETA_MODE ? BETA_DISABLED_STYLE : {}) }}>
             <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)', fontWeight: 600, fontSize: 15 }}>Add-ons</div>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
@@ -315,7 +330,7 @@ export default function BillingPage({ onSubChange }) {
               </tbody>
             </table>
             <div style={{ padding: '12px 18px', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'flex-end' }}>
-              <button onClick={handlePurchaseAddons} disabled={addonTotal === 0 || addonLoading} style={{ padding: '9px 22px', borderRadius: 8, border: 'none', background: 'var(--blue)', color: '#fff', fontWeight: 600, fontSize: 13, cursor: addonTotal === 0 || addonLoading ? 'default' : 'pointer', opacity: addonTotal === 0 || addonLoading ? 0.5 : 1 }}>
+              <button onClick={handlePurchaseAddons} disabled={BETA_MODE || addonTotal === 0 || addonLoading} style={{ padding: '9px 22px', borderRadius: 8, border: 'none', background: 'var(--blue)', color: '#fff', fontWeight: 600, fontSize: 13, cursor: addonTotal === 0 || addonLoading ? 'default' : 'pointer', opacity: addonTotal === 0 || addonLoading ? 0.5 : 1 }}>
                 {addonLoading ? 'Processing…' : `Purchase Add-ons — $${addonTotal}.00`}
               </button>
             </div>

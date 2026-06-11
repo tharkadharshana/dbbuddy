@@ -177,7 +177,7 @@ export default function ChatPage({
   const [messages, setMessages]   = useState([])
   const [input, setInput]         = useState('')
   const [loading, setLoading]     = useState(false)
-  const [thinkMode, setThinkMode] = useState(false)
+  const [thinkMode, setThinkMode] = useState(true)
   const [convId, setConvId]       = useState(activeConvId || null)
   const bottomRef = useRef(null)
   const inputRef  = useRef(null)

@@ -518,8 +518,21 @@ def _resolve_api_key(user: dict, llm: str) -> str:
     Raises clear error if missing.
     """
     s = user.get("settings", {})
-    llm = (llm or "gemini").lower().strip()
-    if llm == "gemini":
+    llm = (llm or "openai").lower().strip()
+    if llm == "openai":
+        key = s.get("openai_api_key", "").strip()
+        if not key:
+            # Last resort: server-level env var (for server admins only)
+            key = os.getenv("OPENAI_API_KEY", "").strip()
+        if not key:
+            raise HTTPException(
+                status_code=422,
+                detail="AI service is not configured. Please contact support."
+            )
+        log.debug("Resolved OpenAI API key", user=user.get("email"), source="settings" if s.get("openai_api_key") else "env")
+        return key
+
+    elif llm == "gemini":
         key = s.get("gemini_api_key", "").strip()
         if not key:
             # Last resort: server-level env var (for server admins only)
@@ -551,6 +564,8 @@ def _llm_has_key(user: dict, name: str) -> bool:
     """Return True if a real (non-placeholder) key exists for this LLM."""
     from llm import _is_real_key
     s = user.get("settings", {})
+    if name == "openai":
+        return _is_real_key(s.get("openai_api_key", "")) or _is_real_key(os.getenv("OPENAI_API_KEY", ""))
     if name == "gemini":
         return _is_real_key(s.get("gemini_api_key", "")) or _is_real_key(os.getenv("GEMINI_API_KEY", ""))
     if name == "deepseek":
@@ -559,19 +574,23 @@ def _llm_has_key(user: dict, name: str) -> bool:
 
 
 def _get_llm(user: dict) -> str:
-    """Return user's preferred LLM, falling back using LLM_PRIORITY env order."""
+    """Return the LLM to use, in LLM_PRIORITY order (default: openai, gemini, deepseek).
+
+    The system-wide priority order always wins so that OpenAI is tried first
+    (falling back to Gemini, then DeepSeek) regardless of any per-user
+    `default_llm` setting from the (currently hidden) BYOK Settings UI.
+    """
     from llm import get_llm_priority
     s = user.get("settings", {})
     preferred = (s.get("default_llm") or "").lower()
-    # Build candidate order: user's preferred first, then env priority order
     priority = get_llm_priority()
-    order = ([preferred] if preferred else []) + [p for p in priority if p != preferred]
+    order = priority + ([preferred] if preferred and preferred not in priority else [])
     for candidate in order:
         if _llm_has_key(user, candidate):
             if candidate != preferred and preferred:
                 log.info("LLM key fallback", preferred=preferred, using=candidate, user=user.get("email"))
             return candidate
-    return order[0] if order else "gemini"  # let _resolve_api_key raise the informative error
+    return order[0] if order else "openai"  # let _resolve_api_key raise the informative error
 
 
 def _effective_llm(user: dict, requested: str) -> str:
@@ -853,7 +872,7 @@ class OnboardingDBRequest(BaseModel):
     database: str
     user: str
     password: str
-    llm: str = "gemini"   # which LLM to use for the cache build
+    llm: str = "openai"   # which LLM to use for the cache build
 
 
 @v1.post("/onboarding/validate-key")
@@ -866,7 +885,9 @@ def onboarding_validate_key(request: Request, req: ValidateKeyRequest,
     if result["ok"]:
         # Save key to user settings immediately
         patch = {}
-        if req.llm == "gemini":
+        if req.llm == "openai":
+            patch["openai_api_key"] = req.api_key
+        elif req.llm == "gemini":
             patch["gemini_api_key"] = req.api_key
         else:
             patch["deepseek_api_key"] = req.api_key
@@ -946,6 +967,7 @@ def onboarding_connect_db(request: Request, req: OnboardingDBRequest,
 # ══════════════════════════════════════════════════════════════════════════════
 
 class SettingsPatch(BaseModel):
+    openai_api_key: Optional[str] = None
     gemini_api_key: Optional[str] = None
     deepseek_api_key: Optional[str] = None
     default_llm: Optional[str] = None
@@ -972,10 +994,11 @@ def get_settings(request: Request, user: dict = Depends(current_user)):
         if c.get("password"):
             c["password"] = "••••••••"
         safe_configs.append(c)
-    _HIDDEN = {"gemini_api_key", "deepseek_api_key", "default_llm"}
+    _HIDDEN = {"openai_api_key", "gemini_api_key", "deepseek_api_key", "default_llm"}
     safe = {k: v for k, v in {**s, "db_configs": safe_configs}.items() if k not in _HIDDEN}
     # Expose AI availability as a boolean — no provider name or key value leaked
     _has_key = (
+        bool(s.get("openai_api_key", "").strip()  or os.getenv("OPENAI_API_KEY", "").strip()) or
         bool(s.get("gemini_api_key", "").strip()  or os.getenv("GEMINI_API_KEY", "").strip()) or
         bool(s.get("deepseek_api_key", "").strip() or os.getenv("DEEPSEEK_API_KEY", "").strip())
     )
@@ -1418,7 +1441,7 @@ def _run_think_analysis(question: str, columns: list, data: list,
 
 class NLQueryRequest(BaseModel):
     question:        str
-    llm:             str  = "gemini"
+    llm:             str  = "openai"
     think_mode:      bool = False
     conversation_id: str  = None  # optional — enables conversation memory
 
@@ -1866,7 +1889,7 @@ def api_delete_conversation(request: Request, conv_id: str,
 
 class AnalyticsRunRequest(BaseModel):
     template_id: str
-    llm: str = "gemini"
+    llm: str = "openai"
     params: Optional[Dict[str, Any]] = {}
     provider: Optional[str] = None
 
@@ -2302,7 +2325,7 @@ def auto_anomalies(request: Request, user: dict = Depends(current_user)):
 class ReportRequest(BaseModel):
     title: str
     sections: List[str]
-    llm: str = "gemini"
+    llm: str = "openai"
     format: str = "full"
 
 

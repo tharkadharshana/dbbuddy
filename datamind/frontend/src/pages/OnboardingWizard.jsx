@@ -49,7 +49,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
   const [step, setStep]           = useState(0)
 
   // Step 0 — LLM choice
-  const [llm, setLlm]             = useState('gemini')
+  const [llm, setLlm]             = useState('openai')
   const [apiKey, setApiKey]       = useState('')
   const [keyTesting, setKeyTesting]   = useState(false)
   const [keyResult, setKeyResult]     = useState(null)
@@ -265,7 +265,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
               // Auto-set default LLM and skip to next step
               setTimeout(async () => {
                 try {
-                  await patchSettings({ default_llm: 'gemini' })
+                  await patchSettings({ default_llm: 'openai' })
                   const p = await fetchProviders()
                   setProviders(p.providers || [])
                   setStep(1)
