@@ -196,6 +196,7 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
   const [loading, setLoading]   = useState(false)
   const [thinkMode, setThinkMode] = useState(false)
   const [hoveredSuggestion, setHoveredSuggestion] = useState(null)
+  const [inputFocused, setInputFocused] = useState(false)
   const bottomRef = useRef(null)
   const inputRef  = useRef(null)
 
@@ -300,9 +301,9 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
               <rect x="9" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.9)"/>
             </svg>
           </div>
-          <span style={{ fontSize:13, fontWeight:600, color:'var(--text)' }}>{productTitle}</span>
+          <span style={{ fontSize:15, fontWeight:600, color:'var(--text)', letterSpacing:'-0.01em' }}>{productTitle}</span>
         </div>
-        <div style={{ display:'flex', alignItems:'center', gap:4 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:2 }}>
           {/* Open in main DataMind app — leaves the partner iframe in a new tab */}
           <button
             onClick={openMainApp}
@@ -316,21 +317,18 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
           >
             <span style={{ fontSize:12 }}>↗</span> Open in DataMind
           </button>
-          {/* Light / dark toggle */}
+          {/* Light / dark toggle — icon-only so it doesn't compete with primary actions */}
           <button
             onClick={toggleTheme}
             title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
             style={{
-              background:'var(--bg3)', border:'1px solid var(--border2)',
-              borderRadius:20, cursor:'pointer', padding:'3px 8px',
-              display:'flex', alignItems:'center', gap:5,
-              fontSize:11, color:'var(--text2)', transition:'background .15s',
+              background:'none', border:'none',
+              borderRadius:8, cursor:'pointer', padding:'4px 6px',
+              display:'flex', alignItems:'center', justifyContent:'center',
+              fontSize:13, color:'var(--text3)',
             }}
           >
-            {theme === 'dark'
-              ? <><span style={{ fontSize:12 }}>☀️</span> Light</>
-              : <><span style={{ fontSize:12 }}>🌙</span> Dark</>
-            }
+            {theme === 'dark' ? '☀️' : '🌙'}
           </button>
           {/* <button
             onClick={onLogout}
@@ -345,30 +343,49 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
       {/* Messages area */}
       <div style={{ flex:1, overflowY:'auto', padding:'14px 0' }}>
         {!hasMessages ? (
-          <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%', padding:'0 16px', textAlign:'center' }}>
-            <div style={{ fontSize:13, color:'var(--text2)', marginBottom:16, lineHeight:1.6 }}>
-              Ask anything about your {context?.partner_name || 'Salesplay'} data in plain English.
+          <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%', padding:'0 18px', textAlign:'center' }}>
+            <div style={{ fontSize:18, fontWeight:600, color:'var(--text)', marginBottom:6, letterSpacing:'-0.01em' }}>
+              Ask Your {context?.partner_name || 'Salesplay'} Data
             </div>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6, width:'100%' }}>
-              {SUGGESTIONS.map((s, i) => (
-                <button
-                  key={s.text}
-                  onClick={() => send(s.text)}
-                  onMouseEnter={() => setHoveredSuggestion(i)}
-                  onMouseLeave={() => setHoveredSuggestion(null)}
-                  style={{
-                    display:'flex', alignItems:'center', gap:7, padding:'9px 10px',
-                    background: hoveredSuggestion === i ? 'var(--bg2)' : 'var(--bg1)',
-                    border: `1px solid ${hoveredSuggestion === i ? 'var(--blue)' : 'var(--border)'}`,
-                    borderRadius:8, textAlign:'left', color:'var(--text2)', fontSize:11, lineHeight:1.4,
-                    cursor:'pointer', transition:'background .15s, border-color .15s',
-                  }}
-                >
-                  <span style={{ fontSize:14, flexShrink:0 }}>{s.icon}</span>
-                  <span style={{ flex:1 }}>{s.text}</span>
-                  <span style={{ fontSize:12, flexShrink:0, color:'var(--text3)' }}>→</span>
-                </button>
-              ))}
+            <div style={{ fontSize:13, color:'var(--text2)', marginBottom:20, lineHeight:1.6, maxWidth:300 }}>
+              Ask anything about your data in plain English — revenue, products, customers, and more.
+            </div>
+            <div style={{ width:'100%', textAlign:'left', fontSize:10, fontWeight:600, color:'var(--text3)', textTransform:'uppercase', letterSpacing:'.07em', marginBottom:8 }}>
+              Popular questions
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8, width:'100%' }}>
+              {SUGGESTIONS.map((s, i) => {
+                const featured = i === 0
+                const hovered = hoveredSuggestion === i
+                return (
+                  <button
+                    key={s.text}
+                    onClick={() => send(s.text)}
+                    onMouseEnter={() => setHoveredSuggestion(i)}
+                    onMouseLeave={() => setHoveredSuggestion(null)}
+                    style={{
+                      gridColumn: featured ? '1 / -1' : 'auto',
+                      display:'flex', alignItems:'center', gap:9,
+                      padding: featured ? '13px 14px' : '11px 12px',
+                      background: hovered ? 'var(--bg2)' : 'var(--bg1)',
+                      border: `1px solid ${hovered ? 'var(--blue)' : 'var(--border)'}`,
+                      borderRadius:12, textAlign:'left', color:'var(--text)',
+                      fontSize: featured ? 13.5 : 12.5, fontWeight: featured ? 500 : 400, lineHeight:1.4,
+                      cursor:'pointer', transition:'transform .15s, box-shadow .15s, border-color .15s, background .15s',
+                      transform: hovered ? 'translateY(-2px)' : 'none',
+                      boxShadow: hovered ? '0 6px 16px rgba(0,0,0,0.12)' : 'none',
+                    }}
+                  >
+                    <span style={{ fontSize: featured ? 18 : 15, flexShrink:0 }}>{s.icon}</span>
+                    <span style={{ flex:1 }}>{s.text}</span>
+                    <span style={{ fontSize:13, flexShrink:0, color: hovered ? 'var(--blue)' : 'var(--text3)', transition:'color .15s' }}>→</span>
+                  </button>
+                )
+              })}
+            </div>
+            <div style={{ marginTop:18, display:'flex', alignItems:'center', gap:6, fontSize:10, color:'var(--text3)' }}>
+              <span style={{ width:6, height:6, borderRadius:'50%', background:'var(--green)', display:'inline-block', flexShrink:0 }} />
+              Real-time data · Powered by DataMind
             </div>
           </div>
         ) : (
@@ -404,24 +421,41 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
           )}
         </div>
 
-        <div style={{ display:'flex', gap:8, background:'var(--bg1)', border:'1px solid var(--border2)', borderRadius:12, padding:'6px 6px 6px 12px' }}>
+        <div style={{
+          display:'flex', alignItems:'flex-end', gap:8,
+          background:'var(--bg1)',
+          border: `1.5px solid ${inputFocused ? 'var(--blue)' : 'var(--border2)'}`,
+          borderRadius:14, padding:'10px 10px 10px 14px',
+          boxShadow: inputFocused ? '0 0 0 3px rgba(79,142,247,0.15)' : 'none',
+          transition:'border-color .15s, box-shadow .15s',
+        }}>
+          <span style={{ fontSize:15, color:'var(--text3)', flexShrink:0, lineHeight:1.4, marginBottom:1 }}>💬</span>
           <textarea
             ref={inputRef}
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
+            onFocus={() => setInputFocused(true)}
+            onBlur={() => setInputFocused(false)}
             placeholder="Ask about your data…"
             rows={1}
-            style={{ flex:1, background:'transparent', border:'none', color:'var(--text)', fontSize:13, resize:'none', outline:'none', lineHeight:1.5, padding:'3px 0', maxHeight:90, overflowY:'auto', fontFamily:'var(--font)' }}
+            style={{ flex:1, background:'transparent', border:'none', color:'var(--text)', fontSize:14, resize:'none', outline:'none', lineHeight:1.5, padding:'3px 0', maxHeight:90, overflowY:'auto', fontFamily:'var(--font)' }}
           />
           <button
             onClick={() => send()}
             disabled={loading || !input.trim()}
-            style={{ width:32, height:32, borderRadius:8, flexShrink:0, alignSelf:'flex-end', background: loading || !input.trim() ? 'var(--bg3)' : 'var(--blue)', color: loading || !input.trim() ? 'var(--text3)' : '#fff', border:'none', display:'flex', alignItems:'center', justifyContent:'center' }}
+            style={{
+              width:36, height:36, borderRadius:10, flexShrink:0,
+              background: loading || !input.trim() ? 'var(--bg3)' : 'var(--blue)',
+              color: loading || !input.trim() ? 'var(--text3)' : '#fff', border:'none',
+              display:'flex', alignItems:'center', justifyContent:'center',
+              boxShadow: !loading && input.trim() ? '0 2px 8px rgba(79,142,247,0.35)' : 'none',
+              transition:'background .15s, box-shadow .15s',
+            }}
           >
             {loading
-              ? <div style={{ width:12, height:12, border:'1.5px solid var(--text3)', borderTopColor:'transparent', borderRadius:'50%', animation:'spin 0.7s linear infinite' }} />
-              : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+              ? <div style={{ width:13, height:13, border:'1.5px solid var(--text3)', borderTopColor:'transparent', borderRadius:'50%', animation:'spin 0.7s linear infinite' }} />
+              : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
             }
           </button>
         </div>
