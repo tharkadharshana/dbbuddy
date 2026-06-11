@@ -20,7 +20,7 @@ export default function App() {
     try { return JSON.parse(localStorage.getItem('dm_user')) } catch { return null }
   })
   const [page, setPage]       = useState('chat')
-  const [llm, setLlm]         = useState('gemini')
+  const [llm, setLlm]         = useState('openai')
   const [cacheStatus, setCacheStatus] = useState(null)
   const [connection, setConnection]   = useState(null) // active connection summary
   const [showOnboarding, setShowOnboarding] = useState(false)

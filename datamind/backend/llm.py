@@ -1,5 +1,5 @@
 """
-LLM module — Gemini + DeepSeek with Token Tracking.
+LLM module — OpenAI + Gemini + DeepSeek with Token Tracking.
 
 KEY FIX: Every function that calls an LLM now accepts an explicit `api_key`
 parameter. The key MUST come from the user's saved settings.
@@ -47,6 +47,66 @@ log = get_logger(__name__)
 
 
 # ── Core callers ──────────────────────────────────────────────────────────────
+
+def call_openai(prompt: str, system: str = "", max_tokens: int = 2000,
+                api_key: str = "") -> tuple:
+    """
+    Call OpenAI's Chat Completions API and return (response_text, tokens_used).
+    """
+    key = api_key or os.getenv("OPENAI_API_KEY", "")
+    if not key or key in ("your_openai_api_key_here", ""):
+        raise ValueError(
+            "OpenAI API key is not set. Go to Settings → LLM API Keys and add your key."
+        )
+    url = "https://api.openai.com/v1/chat/completions"
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": messages,
+        "temperature": 0.2,
+        "max_tokens": max_tokens,
+    }
+    log.debug("Calling OpenAI API", max_tokens=max_tokens, prompt_len=len(prompt))
+    for attempt in range(2):
+        try:
+            resp = requests.post(url, json=body, headers=headers, timeout=90)
+            if not resp.ok:
+                err_body = resp.text[:300]
+                log.warning("OpenAI API error response",
+                            status=resp.status_code, body=err_body, attempt=attempt)
+                if resp.status_code in (401, 403):
+                    raise ValueError(f"OpenAI API key is invalid or has no credits. "
+                                     f"Status {resp.status_code}: {err_body}")
+                resp.raise_for_status()
+
+            data = resp.json()
+            result = data["choices"][0]["message"]["content"].strip()
+
+            # Extract token usage
+            usage = data.get("usage", {})
+            tokens_used = usage.get("total_tokens", 0)
+
+            log.debug("OpenAI response received", response_len=len(result), tokens=tokens_used)
+            return result, tokens_used
+
+        except requests.exceptions.Timeout:
+            log.warning("OpenAI API timeout", attempt=attempt)
+            if attempt == 1:
+                raise Exception("OpenAI API timed out after 90s on both attempts.")
+        except ValueError:
+            raise
+        except Exception as e:
+            log.error("OpenAI API exception", error=str(e), attempt=attempt)
+            if attempt == 1:
+                raise
+
 
 def call_gemini(prompt: str, system: str = "", max_tokens: int = 2000,
                 api_key: str = "") -> tuple:
@@ -187,7 +247,7 @@ def call_deepseek(prompt: str, system: str = "", max_tokens: int = 2000,
                 raise
 
 
-_PLACEHOLDER_KEYS = {"", "your_gemini_api_key_here", "your_deepseek_api_key_here"}
+_PLACEHOLDER_KEYS = {"", "your_gemini_api_key_here", "your_deepseek_api_key_here", "your_openai_api_key_here"}
 
 def _is_real_key(key: str) -> bool:
     """Return True only if key is non-empty and not a placeholder from .env template."""
@@ -199,11 +259,11 @@ def get_llm_priority() -> list:
     """
     Return ordered list of LLM providers to try.
     Reads LLM_PRIORITY from .env (e.g. LLM_PRIORITY=deepseek,gemini).
-    Defaults to gemini,deepseek if not set.
+    Defaults to openai,gemini,deepseek if not set.
     """
-    raw = os.getenv("LLM_PRIORITY", "gemini,deepseek")
+    raw = os.getenv("LLM_PRIORITY", "openai,gemini,deepseek")
     providers = [p.strip().lower() for p in raw.split(",") if p.strip()]
-    known = {"gemini", "deepseek"}
+    known = {"openai", "gemini", "deepseek"}
     # Keep only known providers, preserve order, deduplicate
     seen = set()
     result = []
@@ -212,13 +272,13 @@ def get_llm_priority() -> list:
             result.append(p)
             seen.add(p)
     # Append any known provider not mentioned so there's always a full list
-    for p in ("gemini", "deepseek"):
+    for p in ("openai", "gemini", "deepseek"):
         if p not in seen:
             result.append(p)
     return result
 
 
-def call_llm(prompt: str, system: str = "", llm: str = "gemini",
+def call_llm(prompt: str, system: str = "", llm: str = "openai",
              max_tokens: int = 2000, api_key: str = "", user_email: str = None) -> str:
     """
     Main dispatcher with priority-based fallback.
@@ -230,7 +290,7 @@ def call_llm(prompt: str, system: str = "", llm: str = "gemini",
     If a provider has a key but the call fails at runtime (quota, timeout, etc.),
     it falls through to the next provider in the priority list.
     """
-    requested = (llm or "gemini").lower().strip()
+    requested = (llm or "openai").lower().strip()
 
     def _env_key(name: str) -> str:
         return os.getenv(f"{name.upper()}_API_KEY", "").strip()
@@ -240,7 +300,9 @@ def call_llm(prompt: str, system: str = "", llm: str = "gemini",
         return k if _is_real_key(k) else _env_key(name)
 
     def _call_one(name: str, key: str):
-        if name == "deepseek":
+        if name == "openai":
+            return call_openai(prompt, system, max_tokens, key)
+        elif name == "deepseek":
             return call_deepseek(prompt, system, max_tokens, key)
         elif name == "gemini":
             return call_gemini(prompt, system, max_tokens, key)
@@ -307,7 +369,7 @@ def validate_llm_key(llm: str, api_key: str) -> Dict[str, Any]:
 
 # ── Text-to-SQL ───────────────────────────────────────────────────────────────
 
-def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "gemini",
+def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "openai",
                  fkeys: list = None, api_key: str = "", user_email: str = None,
                  history_months: int = None, tenant_id: str = None,
                  row_limit: int = 500, conversation_history: str = "",
