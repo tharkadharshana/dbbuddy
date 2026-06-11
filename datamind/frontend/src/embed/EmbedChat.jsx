@@ -194,7 +194,7 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
   const [messages, setMessages] = useState([])
   const [input, setInput]       = useState('')
   const [loading, setLoading]   = useState(false)
-  const [thinkMode, setThinkMode] = useState(false)
+  const [thinkMode, setThinkMode] = useState(true) // always on for the SalesPlay embed — toggle UI hidden below
   const [hoveredSuggestion, setHoveredSuggestion] = useState(null)
   const [inputFocused, setInputFocused] = useState(false)
   const bottomRef = useRef(null)
@@ -398,7 +398,7 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
 
       {/* Input */}
       <div style={{ flexShrink:0, padding:'10px 12px', borderTop: hasMessages ? '1px solid var(--border)' : 'none' }}>
-        {/* Think Mode toggle */}
+        {/* Think Mode toggle — hidden for the embed; thinkMode is always true above.
         <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:6 }}>
           <button
             onClick={() => setThinkMode(m => !m)}
@@ -420,6 +420,7 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
             </span>
           )}
         </div>
+        */}
 
         <div style={{
           display:'flex', alignItems:'flex-end', gap:8,
