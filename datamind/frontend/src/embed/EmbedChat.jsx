@@ -195,6 +195,7 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
   const [input, setInput]       = useState('')
   const [loading, setLoading]   = useState(false)
   const [thinkMode, setThinkMode] = useState(false)
+  const [hoveredSuggestion, setHoveredSuggestion] = useState(null)
   const bottomRef = useRef(null)
   const inputRef  = useRef(null)
 
@@ -349,14 +350,23 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
               Ask anything about your {context?.partner_name || 'Salesplay'} data in plain English.
             </div>
             <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:6, width:'100%' }}>
-              {SUGGESTIONS.map(s => (
+              {SUGGESTIONS.map((s, i) => (
                 <button
                   key={s.text}
                   onClick={() => send(s.text)}
-                  style={{ display:'flex', alignItems:'flex-start', gap:7, padding:'9px 10px', background:'var(--bg1)', border:'1px solid var(--border)', borderRadius:8, textAlign:'left', color:'var(--text2)', fontSize:11, lineHeight:1.4 }}
+                  onMouseEnter={() => setHoveredSuggestion(i)}
+                  onMouseLeave={() => setHoveredSuggestion(null)}
+                  style={{
+                    display:'flex', alignItems:'center', gap:7, padding:'9px 10px',
+                    background: hoveredSuggestion === i ? 'var(--bg2)' : 'var(--bg1)',
+                    border: `1px solid ${hoveredSuggestion === i ? 'var(--blue)' : 'var(--border)'}`,
+                    borderRadius:8, textAlign:'left', color:'var(--text2)', fontSize:11, lineHeight:1.4,
+                    cursor:'pointer', transition:'background .15s, border-color .15s',
+                  }}
                 >
                   <span style={{ fontSize:14, flexShrink:0 }}>{s.icon}</span>
-                  {s.text}
+                  <span style={{ flex:1 }}>{s.text}</span>
+                  <span style={{ fontSize:12, flexShrink:0, color:'var(--text3)' }}>→</span>
                 </button>
               ))}
             </div>
