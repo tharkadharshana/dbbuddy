@@ -72,6 +72,14 @@ def _reset_billing_fail():
     with _billing_fail_lock:
         _billing_fail_count = 0
 
+# NOTE: ADDON_PACKAGES, FEATURE_COST, _PLAN_FEATURE_GATE, and _PLAN_HISTORY below
+# are SEED DEFAULTS only — bootstrap_billing_tables() copies them into the
+# addon_packages / feature_costs / plan_feature_gates / plan_history_limits
+# tables (INSERT IGNORE, so it only happens once). At runtime, _load_billing_config()
+# reads the live values from those tables (cached for _BILLING_CONFIG_CACHE_TTL
+# seconds), so editing the DB tables directly changes pricing/gating without a
+# code change or restart. These dicts remain as the fail-open fallback if the
+# DB read ever errors.
 ADDON_PACKAGES = {
     "ai_credits": {"units_per_pack": 25,       "price_cents": 100, "label": "25 AI Credits"},
     "db_rows":    {"units_per_pack": 100_000,   "price_cents": 100, "label": "100K DB Rows"},
@@ -114,7 +122,7 @@ def calculate_tokens(operation_type: str, llm_tokens: int = 0, rows_returned: in
     """
     T_llm  = llm_tokens  / 1000
     T_db   = rows_returned / 1000
-    T_feat = FEATURE_COST.get(operation_type, 0.5)
+    T_feat = _load_billing_config()["feature_costs"].get(operation_type, 0.5)
     return max(round(T_llm + T_db + T_feat, 4), 0.1)
 
 
@@ -274,6 +282,68 @@ def bootstrap_billing_tables():
             INSERT IGNORE INTO billing_config (config_key, config_value)
             VALUES ('ai_credit_rate', '1.0')
         """)
+
+        # ── Admin-editable pricing/feature config ──────────────────────────────
+        # These tables let an admin tune costs, plan gating, history windows, and
+        # add-on pricing directly in the DB (see _load_billing_config below).
+        # Seeded once from the hardcoded defaults below; INSERT IGNORE means
+        # manual edits survive restarts.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS feature_costs (
+                operation_type VARCHAR(50) PRIMARY KEY,
+                token_cost     DECIMAL(10,4) NOT NULL,
+                description    TEXT,
+                updated_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """)
+        for _op, _cost in FEATURE_COST.items():
+            cur.execute("""
+                INSERT IGNORE INTO feature_costs (operation_type, token_cost)
+                VALUES (%s, %s)
+            """, (_op, _cost))
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS plan_feature_gates (
+                feature   VARCHAR(50) NOT NULL,
+                plan_name VARCHAR(50) NOT NULL,
+                PRIMARY KEY (feature, plan_name)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """)
+        for _feature, _plans in _PLAN_FEATURE_GATE.items():
+            for _plan_name in _plans:
+                cur.execute("""
+                    INSERT IGNORE INTO plan_feature_gates (feature, plan_name)
+                    VALUES (%s, %s)
+                """, (_feature, _plan_name))
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS plan_history_limits (
+                plan_name      VARCHAR(50) PRIMARY KEY,
+                history_months INT NOT NULL,
+                row_limit      INT NOT NULL,
+                updated_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """)
+        for _plan_name, _limits in _PLAN_HISTORY.items():
+            cur.execute("""
+                INSERT IGNORE INTO plan_history_limits (plan_name, history_months, row_limit)
+                VALUES (%s, %s, %s)
+            """, (_plan_name, _limits["months"], _limits["row_limit"]))
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS addon_packages (
+                addon_type     VARCHAR(50) PRIMARY KEY,
+                units_per_pack INT NOT NULL,
+                price_cents    INT NOT NULL,
+                label          VARCHAR(100) NOT NULL,
+                updated_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """)
+        for _addon_type, _pkg in ADDON_PACKAGES.items():
+            cur.execute("""
+                INSERT IGNORE INTO addon_packages (addon_type, units_per_pack, price_cents, label)
+                VALUES (%s, %s, %s, %s)
+            """, (_addon_type, _pkg["units_per_pack"], _pkg["price_cents"], _pkg["label"]))
 
         # Personal API keys for Pro users — programmatic access to /v1/* endpoints.
         # Keys are stored in plaintext (prefix dm_live_ makes them identifiable).
@@ -595,6 +665,83 @@ _PLAN_HISTORY: dict = {
 }
 
 
+# ── Admin-editable pricing/feature config (DB-backed, cached) ─────────────────
+# Loaded from feature_costs / plan_feature_gates / plan_history_limits /
+# addon_packages. Cached for _BILLING_CONFIG_CACHE_TTL seconds so admins can
+# edit these tables directly in the DB and see the change take effect within
+# that window without restarting the server.
+
+_billing_config_cache: dict = {}
+_billing_config_cache_lock = _threading.Lock()
+_BILLING_CONFIG_CACHE_TTL = int(os.getenv("BILLING_CONFIG_CACHE_TTL", "60"))
+
+
+def invalidate_billing_config_cache():
+    """Force the next _load_billing_config() call to re-read from the DB."""
+    with _billing_config_cache_lock:
+        _billing_config_cache.pop("data", None)
+
+
+def _load_billing_config() -> dict:
+    """Return {feature_costs, plan_feature_gates, plan_history, addon_packages}
+    read live from the DB (cached). Falls back to the hardcoded defaults above
+    if the DB read fails, so a billing outage never hard-blocks the app."""
+    with _billing_config_cache_lock:
+        entry = _billing_config_cache.get("data")
+    if entry:
+        data, exp = entry
+        if _time.monotonic() < exp:
+            return data
+
+    try:
+        conn = _get_conn()
+        cur = conn.cursor(dictionary=True)
+        try:
+            cur.execute("SELECT operation_type, token_cost FROM feature_costs")
+            feature_costs = {r["operation_type"]: float(r["token_cost"]) for r in cur.fetchall()}
+
+            cur.execute("SELECT feature, plan_name FROM plan_feature_gates")
+            plan_feature_gates: dict = {}
+            for r in cur.fetchall():
+                plan_feature_gates.setdefault(r["feature"], set()).add(r["plan_name"])
+
+            cur.execute("SELECT plan_name, history_months, row_limit FROM plan_history_limits")
+            plan_history = {
+                r["plan_name"]: {"months": r["history_months"], "row_limit": r["row_limit"]}
+                for r in cur.fetchall()
+            }
+
+            cur.execute("SELECT addon_type, units_per_pack, price_cents, label FROM addon_packages")
+            addon_packages = {
+                r["addon_type"]: {
+                    "units_per_pack": r["units_per_pack"],
+                    "price_cents": r["price_cents"],
+                    "label": r["label"],
+                }
+                for r in cur.fetchall()
+            }
+        finally:
+            cur.close(); conn.close()
+
+        data = {
+            "feature_costs": feature_costs or FEATURE_COST,
+            "plan_feature_gates": plan_feature_gates or _PLAN_FEATURE_GATE,
+            "plan_history": plan_history or _PLAN_HISTORY,
+            "addon_packages": addon_packages or ADDON_PACKAGES,
+        }
+        with _billing_config_cache_lock:
+            _billing_config_cache["data"] = (data, _time.monotonic() + _BILLING_CONFIG_CACHE_TTL)
+        return data
+    except Exception as e:
+        log.warning("_load_billing_config failed, using hardcoded defaults", error=str(e))
+        return {
+            "feature_costs": FEATURE_COST,
+            "plan_feature_gates": _PLAN_FEATURE_GATE,
+            "plan_history": _PLAN_HISTORY,
+            "addon_packages": ADDON_PACKAGES,
+        }
+
+
 def check_plan_feature(user_email: str, feature: str) -> Tuple[bool, str]:
     """Return (True,'') if the user's plan includes *feature*, (False, reason) otherwise.
     Fails open on DB errors so a billing outage never hard-blocks the app."""
@@ -614,7 +761,7 @@ def check_plan_feature(user_email: str, feature: str) -> Tuple[bool, str]:
             _reset_billing_fail()
             return False, "No active subscription."
         plan_name   = row["plan_name"]
-        allowed     = _PLAN_FEATURE_GATE.get(feature)
+        allowed     = _load_billing_config()["plan_feature_gates"].get(feature)
         if allowed and plan_name not in allowed:
             upgrade_to = sorted(allowed)[0]
             _reset_billing_fail()
@@ -644,7 +791,8 @@ def get_plan_history_limit(user_email: str) -> dict:
         plan_name = sub.get("plan_name") or "Starter"
     except Exception:
         plan_name = "Starter"
-    limits = _PLAN_HISTORY.get(plan_name, _PLAN_HISTORY["Starter"])
+    plan_history = _load_billing_config()["plan_history"]
+    limits = plan_history.get(plan_name, plan_history.get("Starter", _PLAN_HISTORY["Starter"]))
     cutoff = date.today() - timedelta(days=limits["months"] * 30)
     return {**limits, "plan_name": plan_name, "cutoff_date": cutoff}
 
@@ -779,10 +927,11 @@ def charge_ai_usage(user_email: str, tokens: int, model: str, endpoint: str, api
 
 def purchase_addon(user_email: str, addon_type: str, quantity: int):
     """Purchase add-on packs (balance rolls over)."""
-    if addon_type not in ADDON_PACKAGES:
+    addon_packages = _load_billing_config()["addon_packages"]
+    if addon_type not in addon_packages:
         raise ValueError(f"Unknown addon_type: {addon_type}")
 
-    units = ADDON_PACKAGES[addon_type]["units_per_pack"] * quantity
+    units = addon_packages[addon_type]["units_per_pack"] * quantity
     conn = _get_conn()
     conn.autocommit = False
     cur = conn.cursor()
@@ -802,7 +951,7 @@ def purchase_addon(user_email: str, addon_type: str, quantity: int):
 
 
 def get_addon_pricing() -> Dict:
-    return ADDON_PACKAGES
+    return _load_billing_config()["addon_packages"]
 
 
 def get_llm_usage_history(user_email: str, limit: int = 50) -> List[Dict]:
