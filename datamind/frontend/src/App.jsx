@@ -30,6 +30,7 @@ export default function App() {
   const [conversations, setConversations]   = useState([])
   const [activeConvId, setActiveConvId]     = useState(null)
   const [ssoPending, setSsoPending] = useState(() => new URLSearchParams(window.location.search).has('sso'))
+  const ssoHandledRef = useRef(false)
   const subIntervalRef = useRef(null)
   const pollRef = useRef(null)
 
@@ -42,6 +43,14 @@ export default function App() {
     const params = new URLSearchParams(window.location.search)
     const token = params.get('sso')
     if (!token) return
+
+    // StrictMode runs effects twice in dev — without this guard, the
+    // one-time token gets redeemed twice. The second (failing) request
+    // resolves faster than the first (which does a DB lookup), so its
+    // .finally() flips ssoPending to false while user is still null,
+    // briefly/sometimes permanently landing on the login page.
+    if (ssoHandledRef.current) return
+    ssoHandledRef.current = true
 
     ssoLogin(token)
       .then(data => {

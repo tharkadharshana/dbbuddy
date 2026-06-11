@@ -1434,7 +1434,9 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
     api_key = _resolve_api_key(user, llm)
     history = get_plan_history_limit(user["email"])
     s = user.get("settings", {})
-    nl_tenant_id = None    # set only for SalesPlay integration users; used by SEC-15 enforcement
+    nl_tenant_id = None       # set only for SalesPlay integration users; used by SEC-15 enforcement
+    nl_shop_timezone = "UTC"  # shop's local timezone, fetched from sp_shops for CONVERT_TZ hints
+    nl_last_sync_at  = None   # ISO timestamp of the tenant's last successful sync
     loyverse_hints: list = []  # provider-specific schema hints passed to the LLM
     if s.get("db_configs"):
         # Own-DB user — their database is exclusively theirs; show all tables.
@@ -1472,6 +1474,9 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                 tables_filter.extend(_SALESPLAY_SHARED_TABLES)
                 if not nl_tenant_id:
                     nl_tenant_id = prefix  # first SalesPlay prefix drives SEC-15 enforcement
+                    _raw_sync = conn_info.get("last_sync_at")
+                    if _raw_sync:
+                        nl_last_sync_at = str(_raw_sync)
             elif pid == "loyverse" and prefix:
                 # Per-user views — already tenant-scoped, no tenant_id column.
                 tables_filter.extend([f"{prefix}_{s}" for s in _LOYVERSE_VIEW_SUFFIXES])
@@ -1524,13 +1529,30 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
         else:
             fkeys = all_fkeys
 
+        # For SalesPlay tenants, fetch the shop's local timezone so the LLM can
+        # emit CONVERT_TZ-aware date comparisons that match SalesPlay's reports.
+        if nl_tenant_id:
+            try:
+                _tz_cur = conn.cursor()
+                _tz_cur.execute(
+                    "SELECT timezone FROM sp_shops WHERE tenant_id = %s "
+                    "AND timezone IS NOT NULL AND timezone != '' LIMIT 1",
+                    (nl_tenant_id,)
+                )
+                _tz_row = _tz_cur.fetchone()
+                if _tz_row:
+                    nl_shop_timezone = _tz_row[0] or "UTC"
+            except Exception as _tze:
+                log.debug("Could not fetch shop timezone, defaulting to UTC", error=str(_tze))
+
         row_limit = history["row_limit"]
         sql = query_to_sql(req.question, schemas, llm, fkeys, api_key=api_key,
                            user_email=user["email"], history_months=history["months"],
                            tenant_id=nl_tenant_id if s.get("db_configs") is None else None,
                            row_limit=row_limit,
                            conversation_history=conv_history,
-                           extra_schema_hints=" ".join(loyverse_hints) if loyverse_hints else "")
+                           extra_schema_hints=" ".join(loyverse_hints) if loyverse_hints else "",
+                           shop_timezone=nl_shop_timezone)
         # SEC-15: enforce tenant isolation for integration users.
         # nl_tenant_id is set in the else-branch above; None for own-DB users.
         if nl_tenant_id:
@@ -1615,11 +1637,49 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                 log.warning("Failed to save conversation exchange",
                             conv_id=conv_id, error=str(_ce))
 
-        return {
-            "sql": sql, "columns": columns, "data": data, "row_count": len(data),
+        # For SalesPlay queries: if the user asked about a recent time window
+        # (today, this week, etc.) and our data is more than 1 hour stale,
+        # surface a transparent staleness note. We never block — we always show
+        # the answer, but we let the user know the data cut-off time.
+        if nl_last_sync_at and data is not None:
+            _TIME_KEYWORDS = (
+                "today", "yesterday", "this week", "this month", "last 24",
+                "last hour", "right now", "current", "latest", "recent",
+                "tonight", "this morning", "this afternoon",
+            )
+            _question_lower = req.question.lower()
+            if any(kw in _question_lower for kw in _TIME_KEYWORDS):
+                try:
+                    from datetime import datetime as _dt, timezone as _tz
+                    _synced = _dt.fromisoformat(nl_last_sync_at.replace("Z", "+00:00"))
+                    if _synced.tzinfo is None:
+                        _synced = _synced.replace(tzinfo=_tz.utc)
+                    _age_min = (_dt.now(_tz.utc) - _synced).total_seconds() / 60
+                    if _age_min > 60:
+                        _hours = int(_age_min // 60)
+                        _mins  = int(_age_min % 60)
+                        _age_str = f"{_hours}h {_mins}m" if _hours else f"{_mins}m"
+                        _note = (
+                            f"Note: your Salesplay data was last synced {_age_str} ago. "
+                            f"Transactions added since then are not included in this result."
+                        )
+                        analysis = f"{analysis}\n\n{_note}" if analysis else _note
+                except Exception as _age_err:
+                    log.debug("Staleness note skipped", error=str(_age_err))
+
+        response = {
+            "columns": columns, "data": data, "row_count": len(data),
             "analysis": analysis, "think_mode": req.think_mode,
             "conversation_id": conv_id,
+            "data_as_of": nl_last_sync_at,  # ISO string or None; frontend shows "Data as of X ago"
         }
+        # Only own-DB users get the generated SQL back (used by QueryPage's
+        # "Show SQL" debugging view). Integration users (SalesPlay/Loyverse)
+        # query shared internal tables — the SQL would expose internal table
+        # names, column names, and tenant_id values, so never return it.
+        if s.get("db_configs"):
+            response["sql"] = sql
+        return response
     except HTTPException:
         raise
     except Exception as e:

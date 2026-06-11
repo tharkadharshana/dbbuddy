@@ -58,7 +58,9 @@ export const embedConnectProvider = (provider_id, credentials, token) =>
 export const embedGetProviderStatus = (connection_id) =>
   api.get(`/providers/${connection_id}/status`).then(r => r.data)
 
-export const embedRunQuery = (question, llm = 'gemini', thinkMode = false) =>
+// "default" tells the backend to use the tenant's configured AI provider —
+// the embed never names a specific vendor in API traffic.
+export const embedRunQuery = (question, llm = 'default', thinkMode = false) =>
   api.post('/query', { question, llm, think_mode: thinkMode }).then(r => r.data)
 
 // One-time link so an already-authenticated embed user can open the
