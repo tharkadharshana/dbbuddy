@@ -255,7 +255,7 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
     notifyParent('dm:query', { question: q })
 
     try {
-      const data = await embedRunQuery(q, 'gemini', thinkMode)
+      const data = await embedRunQuery(q, 'default', thinkMode)
       const rowCount = data.row_count
       const numCol   = data.columns?.find(c => typeof data.data?.[0]?.[c] === 'number')
       let summary = `Found ${rowCount} result${rowCount !== 1 ? 's' : ''}`
