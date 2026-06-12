@@ -64,3 +64,13 @@ input, textarea { font-family: var(--font); }
   0%   { transform: translateX(-200%); }
   100% { transform: translateX(400%);  }
 }
+
+/* ── Hide scrollbar (SalesPlay embed) ───────────────────────────────────────── */
+.dm-scroll-hidden {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.dm-scroll-hidden::-webkit-scrollbar {
+  display: none;
+}
