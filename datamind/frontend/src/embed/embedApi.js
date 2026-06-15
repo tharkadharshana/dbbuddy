@@ -60,8 +60,19 @@ export const embedGetProviderStatus = (connection_id) =>
 
 // "default" tells the backend to use the tenant's configured AI provider —
 // the embed never names a specific vendor in API traffic.
-export const embedRunQuery = (question, llm = 'default', thinkMode = false) =>
-  api.post('/query', { question, llm, think_mode: thinkMode }).then(r => r.data)
+export const embedRunQuery = (question, llm = 'default', thinkMode = false, conversationId = null) =>
+  api.post('/query', { question, llm, think_mode: thinkMode, conversation_id: conversationId }).then(r => r.data)
+
+// Conversation history — same endpoints/data as the main app, so history
+// created in the embed shows up in the main app's sidebar and vice versa.
+export const embedCreateConversation = (id) =>
+  api.post('/conversations', { id }).then(r => r.data)
+
+export const embedListConversations = () =>
+  api.get('/conversations').then(r => r.data)
+
+export const embedGetConversationMessages = (convId) =>
+  api.get(`/conversations/${convId}/messages`).then(r => r.data)
 
 // One-time link so an already-authenticated embed user can open the
 // standalone DataMind app without re-entering credentials.

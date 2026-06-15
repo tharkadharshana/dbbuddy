@@ -29,3 +29,6 @@ datamind/backend/scratch/
 datamind/backend/data/users.json
 datamind/backend/data/cache/*
 datamind/backend/logs/datamind.log
+docs/
+logs/
+archives/
