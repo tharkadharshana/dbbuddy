@@ -374,44 +374,75 @@ const aat = aatToken || new URLSearchParams(window.location.search).get('aat') |
 
 ## Integration Snippet for Salesplay Team
 
+This is the current, complete snippet — it renders the widget as a small
+floating search-bar pill (bottom-right) that expands into the full chat panel
+when clicked (the `?layout=bar` + `dm:resize` feature, see below).
+
 ```html
-<!-- DataMind AI Widget -->
+<!-- DataMind AI Widget — paste before </body> -->
 <div id="datamind-widget"></div>
 
 <script>
 (function () {
+  // Read the Salesplay session token from the browser cookie
   var match = document.cookie.match(/(?:^|;\s*)app_access_token=([^;]+)/)
   var aat   = match ? decodeURIComponent(match[1]) : ''
 
   if (!aat) {
-    console.warn('[DataMind] app_access_token cookie not found. Is the user logged in?')
+    console.warn('[DataMind] app_access_token cookie not found — is the user logged in?')
     return
   }
 
   var iframe = document.createElement('iframe')
-  iframe.src = 'https://datamind.ai/src/embed/embed.html'
-            + '?pk=sp_live_XXXXXXXXXXXXXXXXXXXXXXXX'
+  iframe.id  = 'datamind-iframe'
+  iframe.src = 'https://datamindev.nvision.lk/src/embed/embed.html'
+            + '?pk=sp_dev_test'   // ← replace with real key
             + '&aat=' + encodeURIComponent(aat)
-  iframe.width       = '420'
-  iframe.height      = '680'
+            + '&layout=bar'       // starts as a small search-bar pill, expands on click
   iframe.frameBorder = '0'
   iframe.allow       = 'clipboard-write'
-  iframe.style.cssText = 'border-radius:12px; border:none;'
+
+  // Starts as a small floating pill, bottom-right. Grows into the full chat
+  // panel when the user clicks it (handled by the dm:resize listener below).
+  iframe.style.cssText = [
+    'position:fixed', 'right:24px', 'bottom:24px',
+    'width:320px', 'height:64px',
+    'border:none', 'border-radius:9999px',
+    'box-shadow:0 4px 24px rgba(0,0,0,0.15)',
+    'z-index:9999',
+    'transition:width .2s ease, height .2s ease, border-radius .2s ease',
+  ].join(';')
 
   document.getElementById('datamind-widget').appendChild(iframe)
 
-  // Optional: listen for widget lifecycle events
   window.addEventListener('message', function (e) {
     if (!e.data || !e.data.type) return
-    if (e.data.type === 'dm:ready')        console.log('[DataMind] Widget ready')
-    if (e.data.type === 'dm:chat_open')    console.log('[DataMind] Chat ready')
-    if (e.data.type === 'dm:sync_complete') console.log('[DataMind] Sync done, rows:', e.data.rows)
+
+    // Required for &layout=bar — resizes between the collapsed bar and full chat
+    if (e.data.type === 'dm:resize') {
+      iframe.style.width  = e.data.width  + 'px'
+      iframe.style.height = e.data.height + 'px'
+      iframe.style.borderRadius = e.data.expanded ? '12px' : '9999px'
+    }
+
+    // Optional: widget lifecycle events
+    if (e.data.type === 'dm:ready')         console.log('[DataMind] widget ready')
+    if (e.data.type === 'dm:chat_open')     console.log('[DataMind] chat open')
+    if (e.data.type === 'dm:sync_complete') console.log('[DataMind] sync done, rows:', e.data.rows)
   })
 })()
 </script>
 ```
 
-**Replace `sp_live_XXXXXXXXXXXXXXXXXXXXXXXX`** with the partner key from the `embed_partners` table.
+**`https://datamindev.nvision.lk`** is the dev/staging host with the `sp_dev_test`
+partner key — swap to the production widget host and the real `sp_live_...`
+partner key (from the `embed_partners` table) before going live.
+
+**Don't want the collapsed search bar?** Remove `&layout=bar` from `iframe.src`,
+the `dm:resize` handler, and the floating/`position:fixed` styles, and set
+`iframe.width = '420'` / `iframe.height = '680'` instead — this is exactly the
+snippet already deployed today. No backend or DataMind-side changes are
+required either way; `?layout=bar` is purely an opt-in query param.
 
 ---
 
@@ -424,8 +455,30 @@ const aat = aatToken || new URLSearchParams(window.location.search).get('aat') |
 | `dm:onboarding_sync_started` | First sync beginning | — |
 | `dm:sync_complete` | Sync finished | `{ rows: number }` |
 | `dm:chat_open` | Chat interface ready | — |
+| `dm:resize` | Collapsed/expanded layout changed (`?layout=bar` only) | `{ width, height, expanded }` |
 
 The parent page can also send `{ type: "dm:logout" }` to the widget to force a logout.
+
+---
+
+## Collapsed "Search Bar" Layout (`?layout=bar`)
+
+By default the widget renders the full chat box. Adding `&layout=bar` to the
+iframe URL (as in the snippet above) makes it start as a small search-bar
+pill instead — giving a much lighter first impression. Clicking the bar (or
+the minimize button in the chat header) expands/collapses the widget.
+Onboarding and sync continue running in the background while collapsed, so
+the chat is ready the instant the user expands it.
+
+Because the iframe's on-page size is controlled by Salesplay's container —
+not the widget — the widget can't resize itself. Instead it asks the parent
+page to do so via `dm:resize`:
+
+```js
+// width/height are in pixels; expanded tells you which size this is
+{ type: 'dm:resize', width: 320, height: 64,  expanded: false } // collapsed bar
+{ type: 'dm:resize', width: 420, height: 680, expanded: true  } // full chat
+```
 
 ---
 

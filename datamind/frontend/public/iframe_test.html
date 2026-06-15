@@ -66,13 +66,23 @@
       const src = 'http://localhost:5173/src/embed/embed.html'
                 + '?pk='  + encodeURIComponent(PK)
                 + '&aat=' + encodeURIComponent(aat)
+                + '&layout=bar' // collapsed search-bar layout — remove to test the full box
 
+      // Mirrors the production snippet: fixed bottom-right pill that grows
+      // into the full chat panel on click.
       const iframe = document.createElement('iframe')
+      iframe.id          = 'datamind-iframe'
       iframe.src         = src
-      iframe.width       = '420'
-      iframe.height      = '640'
       iframe.frameBorder = '0'
-      iframe.style.cssText = 'border-radius:12px; box-shadow:0 4px 24px rgba(0,0,0,0.2);'
+      iframe.allow       = 'clipboard-write'
+      iframe.style.cssText = [
+        'position:fixed', 'right:24px', 'bottom:24px',
+        'width:320px', 'height:64px',
+        'border:none', 'border-radius:9999px',
+        'box-shadow:0 4px 24px rgba(0,0,0,0.2)',
+        'z-index:9999',
+        'transition:width .2s ease, height .2s ease, border-radius .2s ease',
+      ].join(';')
 
       container.appendChild(iframe)
       logEvent('Widget loaded with fresh aat')
@@ -82,6 +92,15 @@
     window.addEventListener('message', (event) => {
       if (!event.data?.type?.startsWith('dm:')) return
       logEvent(event.data.type + ' ' + JSON.stringify(event.data))
+
+      // Resize the iframe in response to ?layout=bar collapse/expand
+      if (event.data.type === 'dm:resize') {
+        const iframe = document.getElementById('datamind-iframe')
+        if (!iframe) return
+        iframe.style.width  = event.data.width + 'px'
+        iframe.style.height = event.data.height + 'px'
+        iframe.style.borderRadius = event.data.expanded ? '12px' : '9999px'
+      }
     })
 
     function logEvent(msg) {

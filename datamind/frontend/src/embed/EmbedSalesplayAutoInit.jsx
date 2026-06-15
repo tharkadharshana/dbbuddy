@@ -253,7 +253,7 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
     <div style={{
       height: '100%', overflowY: 'auto',
       display: 'flex', flexDirection: 'column',
-      alignItems: 'center', justifyContent: 'center',
+      alignItems: 'center', justifyContent: phase === 'consent' ? 'flex-start' : 'center',
       padding: '24px 20px', textAlign: 'center',
       background: sp ? SP.bg : undefined,
     }}>
