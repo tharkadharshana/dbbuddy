@@ -65,6 +65,12 @@ input, textarea { font-family: var(--font); }
   100% { transform: translateX(400%);  }
 }
 
+/* ── Collapsed search-bar layout (?layout=bar) ──────────────────────────────── */
+/* Let the partner page show through around the pill instead of a filled box. */
+html.dm-collapsed, body.dm-collapsed, body.dm-collapsed #embed-root {
+  background: transparent !important;
+}
+
 /* ── Hide scrollbar (SalesPlay embed) ───────────────────────────────────────── */
 .dm-scroll-hidden {
   scrollbar-width: none;

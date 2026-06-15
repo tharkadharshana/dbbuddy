@@ -14,6 +14,16 @@ import { embedValidateContext, salesplayGetProfile, salesplayCheckUser, salespla
 import EmbedOnboarding from './EmbedOnboarding'
 import EmbedChat from './EmbedChat'
 import EmbedSalesplayAutoInit from './EmbedSalesplayAutoInit'
+import EmbedSearchBar from './EmbedSearchBar'
+
+// ── Collapsed "search bar" layout (?layout=bar) ─────────────────────────────
+// The widget can start as a small search-bar pill instead of the full chat
+// box. Clicking it expands to the full chat. Since the iframe's on-page size
+// is controlled by the partner page (not us), we ask it to resize via
+// `dm:resize` postMessage — the partner snippet must apply width/height to
+// the <iframe> element. See docs/SALESPLAY_EMBED.md.
+const SIZE_COLLAPSED = { width: 320, height: 64 }
+const SIZE_EXPANDED  = { width: 420, height: 680 }
 
 // ── postMessage helper ────────────────────────────────────────────────────────
 // Populated once /embed/context loads; used to validate incoming messages and
@@ -51,11 +61,24 @@ function EmbedApp() {
   const [errorMsg, setError]    = useState('')
   const [aatToken, setAatToken] = useState('')
 
+  const layoutBar = params.get('layout') === 'bar'
+  const [expanded, setExpanded] = useState(!layoutBar)
+
   // Apply saved theme on first load so onboarding is themed consistently
   useEffect(() => {
     const saved = localStorage.getItem('dm_embed_theme') || 'light'
     document.documentElement.setAttribute('data-theme', saved)
   }, [])
+
+  // Tell the parent page how big the iframe should be, and let the page
+  // behind a collapsed bar show through (transparent background).
+  useEffect(() => {
+    if (!layoutBar) return
+    const size = expanded ? SIZE_EXPANDED : SIZE_COLLAPSED
+    notifyParent('dm:resize', { ...size, expanded })
+    document.documentElement.classList.toggle('dm-collapsed', !expanded)
+    document.body.classList.toggle('dm-collapsed', !expanded)
+  }, [expanded, layoutBar])
 
   useEffect(() => {
     if (!partnerKey) {
@@ -164,6 +187,13 @@ function EmbedApp() {
     notifyParent('dm:logout')
   }
 
+  // Collapsed search-bar — shown regardless of internal state (loading,
+  // onboarding, chat, etc. all continue resolving in the background so the
+  // full experience is ready the moment the user expands it).
+  if (layoutBar && !expanded) {
+    return <EmbedSearchBar context={context} onExpand={() => setExpanded(true)} />
+  }
+
   if (state === 'loading') {
     return (
       <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100%' }}>
@@ -214,6 +244,7 @@ function EmbedApp() {
       context={context}
       onExpired={handleExpired}
       onLogout={handleLogout}
+      onCollapse={layoutBar ? () => setExpanded(false) : undefined}
     />
   )
 }

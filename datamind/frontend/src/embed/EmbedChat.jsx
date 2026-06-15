@@ -249,9 +249,12 @@ function Message({ msg, theme }) {
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function EmbedChat({ context, onExpired, onLogout }) {
+export default function EmbedChat({ context, onExpired, onLogout, onCollapse }) {
   const productTitle = context?.branding?.product_name || 'Ask Your Data'
   const isSalesplay = context?.provider_id === 'salesplay'
+  // Same accent used by the collapsed search bar (EmbedSearchBar) — keeps the
+  // "closed" pill and the "open" input bar visually identical.
+  const accent = context?.branding?.accent_color || '#3B82F6'
   const [messages, setMessages] = useState([])
   const [input, setInput]       = useState('')
   const [loading, setLoading]   = useState(false)
@@ -396,6 +399,23 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
               <BetaBadge isSalesplay={isSalesplay} />
             </div>
             <div style={{ display:'flex', alignItems:'center', gap:8, flexShrink:0 }}>
+              {/* Minimize back to the collapsed search bar (?layout=bar only) */}
+              {onCollapse && (
+                <button
+                  onClick={onCollapse}
+                  title="Minimize"
+                  style={{
+                    width:34, height:34, borderRadius:'50%',
+                    background:'#fff', border:'1.5px solid #191C1E', cursor:'pointer',
+                    display:'flex', alignItems:'center', justifyContent:'center',
+                    color:'#191C1E', flexShrink:0,
+                  }}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M6 9l6 6 6-6" />
+                  </svg>
+                </button>
+              )}
               {/* Open in main DataMind app — leaves the partner iframe in a new tab */}
               <button
                 onClick={openMainApp}
@@ -486,6 +506,23 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
             >
               {theme === 'dark' ? '☀️' : '🌙'}
             </button>
+            {/* Minimize back to the collapsed search bar (?layout=bar only) */}
+            {onCollapse && (
+              <button
+                onClick={onCollapse}
+                title="Minimize"
+                style={{
+                  background:'none', border:'none',
+                  borderRadius:8, cursor:'pointer', padding:'4px 6px',
+                  display:'flex', alignItems:'center', justifyContent:'center',
+                  color:'var(--text3)',
+                }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M6 9l6 6 6-6" />
+                </svg>
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -631,14 +668,19 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
           <div style={{
             display:'flex', alignItems:'center', gap:10,
             background:'#FFFFFF', borderRadius:9999,
-            padding:'8px 8px 8px 20px',
+            padding:'8px 8px 8px 14px',
             boxShadow: '0 10px 40px rgba(0,0,0,0.12)',
-            border: `1.5px solid ${inputFocused ? '#3B82F6' : 'transparent'}`,
+            border: `1.5px solid ${inputFocused ? accent : 'transparent'}`,
             transition:'border-color .15s',
           }}>
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink:0 }}>
-              <path d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
-            </svg>
+            <span style={{
+              width:28, height:28, borderRadius:'50%', flexShrink:0,
+              background:`${accent}1A`, display:'flex', alignItems:'center', justifyContent:'center', color:accent,
+            }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+              </svg>
+            </span>
             <textarea
               ref={inputRef}
               value={input}
@@ -654,18 +696,17 @@ export default function EmbedChat({ context, onExpired, onLogout }) {
               onClick={() => send()}
               disabled={loading || !input.trim()}
               style={{
-                width:44, height:44, borderRadius:'50%', flexShrink:0,
-                background: loading || !input.trim() ? '#CBD5E1' : '#3B82F6',
+                width:32, height:32, borderRadius:'50%', flexShrink:0,
+                background: loading || !input.trim() ? '#CBD5E1' : accent,
                 color:'#fff', border:'none',
                 display:'flex', alignItems:'center', justifyContent:'center',
-                boxShadow: !loading && input.trim() ? '0 4px 12px rgba(59,130,246,0.35)' : 'none',
-                transition:'background .15s, box-shadow .15s',
+                transition:'background .15s',
               }}
             >
               {loading
-                ? <div style={{ width:16, height:16, border:'1.5px solid #fff', borderTopColor:'transparent', borderRadius:'50%', animation:'spin 0.7s linear infinite' }} />
-                : <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ transform:'rotate(45deg) translate(-1.5px, 1.5px)' }}>
-                    <path d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
+                ? <div style={{ width:14, height:14, border:'1.5px solid #fff', borderTopColor:'transparent', borderRadius:'50%', animation:'spin 0.7s linear infinite' }} />
+                : <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M2 21l21-9L2 3v7l15 2-15 2v7z" />
                   </svg>
               }
             </button>
