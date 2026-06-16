@@ -12,8 +12,16 @@ NEW: Token tracking and credit deduction integrated.
 import os
 import re
 import json
+import time
 import requests
 from typing import Dict, Any, List, Optional
+
+# HTTP status codes that are transient and safe to retry after a short wait
+_TRANSIENT_STATUS = {429, 500, 502, 503, 504}
+
+
+class LLMTransientError(Exception):
+    """Raised when all LLM retry attempts fail due to rate limits or server errors."""
 
 from logger import get_logger
 from db import schema_to_text
@@ -74,7 +82,7 @@ def call_openai(prompt: str, system: str = "", max_tokens: int = 2000,
         "max_tokens": max_tokens,
     }
     log.debug("Calling OpenAI API", max_tokens=max_tokens, prompt_len=len(prompt))
-    for attempt in range(2):
+    for attempt in range(3):
         try:
             resp = requests.post(url, json=body, headers=headers, timeout=90)
             if not resp.ok:
@@ -84,6 +92,12 @@ def call_openai(prompt: str, system: str = "", max_tokens: int = 2000,
                 if resp.status_code in (401, 403):
                     raise ValueError(f"OpenAI API key is invalid or has no credits. "
                                      f"Status {resp.status_code}: {err_body}")
+                if resp.status_code in _TRANSIENT_STATUS and attempt < 2:
+                    wait = int(resp.headers.get("Retry-After", 2 ** (attempt + 1)))
+                    log.warning("OpenAI transient error, backing off",
+                                status=resp.status_code, attempt=attempt, wait_s=wait)
+                    time.sleep(wait)
+                    continue
                 resp.raise_for_status()
 
             data = resp.json()
@@ -98,14 +112,16 @@ def call_openai(prompt: str, system: str = "", max_tokens: int = 2000,
 
         except requests.exceptions.Timeout:
             log.warning("OpenAI API timeout", attempt=attempt)
-            if attempt == 1:
-                raise Exception("OpenAI API timed out after 90s on both attempts.")
+            if attempt == 2:
+                raise LLMTransientError("OpenAI API timed out. Please try again in a moment.")
+            time.sleep(2 ** (attempt + 1))
         except ValueError:
             raise
         except Exception as e:
             log.error("OpenAI API exception", error=str(e), attempt=attempt)
-            if attempt == 1:
-                raise
+            if attempt == 2:
+                raise LLMTransientError(f"OpenAI is temporarily unavailable. Please try again in a moment.")
+            time.sleep(2 ** (attempt + 1))
 
 
 def call_gemini(prompt: str, system: str = "", max_tokens: int = 2000,
@@ -136,7 +152,6 @@ def call_gemini(prompt: str, system: str = "", max_tokens: int = 2000,
     }
     log.debug("Calling Gemini API", max_tokens=max_tokens, prompt_len=len(prompt))
 
-    last_error = None
     for model in MODELS:
         url = f"{BASE}/{model}:generateContent?key={key}"
         log.debug("Trying Gemini model", model=model)
@@ -155,6 +170,12 @@ def call_gemini(prompt: str, system: str = "", max_tokens: int = 2000,
                     raise ValueError(
                         f"Gemini API key error (status {resp.status_code}): {err_body}"
                     )
+                if resp.status_code in _TRANSIENT_STATUS:
+                    wait = int(resp.headers.get("Retry-After", 4))
+                    log.warning("Gemini transient error, backing off",
+                                model=model, status=resp.status_code, wait_s=wait)
+                    time.sleep(wait)
+                    continue
                 resp.raise_for_status()
 
             data = resp.json()
@@ -165,26 +186,24 @@ def call_gemini(prompt: str, system: str = "", max_tokens: int = 2000,
                 raise ValueError(f"Gemini blocked the request: {block_reason}")
 
             result = candidates[0]["content"]["parts"][0]["text"].strip()
-            
+
             # Extract token usage
             usage_metadata = data.get("usageMetadata", {})
             tokens_used = usage_metadata.get("totalTokenCount", 0)
-            
+
             log.debug("Gemini response OK", model=model, response_len=len(result), tokens=tokens_used)
             return result, tokens_used
 
         except requests.exceptions.Timeout:
             log.warning("Gemini timeout", model=model)
-            last_error = Exception(f"Gemini model {model} timed out.")
             continue
         except ValueError:
             raise  # key / block errors bubble up immediately
         except Exception as e:
             log.error("Gemini exception", model=model, error=str(e))
-            last_error = e
             continue
 
-    raise last_error or Exception("All Gemini models failed. Check your API key and quota.")
+    raise LLMTransientError("Gemini is temporarily unavailable. Please try again in a moment.")
 
 
 def call_deepseek(prompt: str, system: str = "", max_tokens: int = 2000,
@@ -213,7 +232,7 @@ def call_deepseek(prompt: str, system: str = "", max_tokens: int = 2000,
         "max_tokens": max_tokens,
     }
     log.debug("Calling DeepSeek API", max_tokens=max_tokens, prompt_len=len(prompt))
-    for attempt in range(2):
+    for attempt in range(3):
         try:
             resp = requests.post(url, json=body, headers=headers, timeout=90)
             if not resp.ok:
@@ -223,28 +242,36 @@ def call_deepseek(prompt: str, system: str = "", max_tokens: int = 2000,
                 if resp.status_code in (401, 403):
                     raise ValueError(f"DeepSeek API key is invalid or has no credits. "
                                      f"Status {resp.status_code}: {err_body}")
+                if resp.status_code in _TRANSIENT_STATUS and attempt < 2:
+                    wait = int(resp.headers.get("Retry-After", 2 ** (attempt + 1)))
+                    log.warning("DeepSeek transient error, backing off",
+                                status=resp.status_code, attempt=attempt, wait_s=wait)
+                    time.sleep(wait)
+                    continue
                 resp.raise_for_status()
-            
+
             data = resp.json()
             result = data["choices"][0]["message"]["content"].strip()
-            
+
             # Extract token usage
             usage = data.get("usage", {})
             tokens_used = usage.get("total_tokens", 0)
-            
+
             log.debug("DeepSeek response received", response_len=len(result), tokens=tokens_used)
             return result, tokens_used
-            
+
         except requests.exceptions.Timeout:
             log.warning("DeepSeek API timeout", attempt=attempt)
-            if attempt == 1:
-                raise Exception("DeepSeek API timed out after 90s on both attempts.")
+            if attempt == 2:
+                raise LLMTransientError("DeepSeek API timed out. Please try again in a moment.")
+            time.sleep(2 ** (attempt + 1))
         except ValueError:
             raise
         except Exception as e:
             log.error("DeepSeek API exception", error=str(e), attempt=attempt)
-            if attempt == 1:
-                raise
+            if attempt == 2:
+                raise LLMTransientError("DeepSeek is temporarily unavailable. Please try again in a moment.")
+            time.sleep(2 ** (attempt + 1))
 
 
 _PLACEHOLDER_KEYS = {"", "your_gemini_api_key_here", "your_deepseek_api_key_here", "your_openai_api_key_here"}
