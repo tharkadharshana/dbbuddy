@@ -377,8 +377,10 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse }) 
   const hasMessages = messages.length > 0
 
   return (
-    <div style={{
-      position:'relative', display:'flex', flexDirection:'column', height:'100%', overflow:'hidden',
+    <div className={onCollapse ? 'dm-panel-enter' : undefined} style={{
+      position: onCollapse ? 'absolute' : 'relative',
+      ...(onCollapse ? { left:0, right:0, bottom:0 } : {}),
+      display:'flex', flexDirection:'column', height:'100%', overflow:'hidden',
       background: isSalesplay ? 'linear-gradient(180deg, #E6F2FD 0%, #FFFFFF 100%)' : undefined,
     }}>
 
