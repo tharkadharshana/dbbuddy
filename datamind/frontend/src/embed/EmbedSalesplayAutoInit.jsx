@@ -30,6 +30,46 @@ const SP = {
   shadow:    '0px 4px 20px 0px rgba(84,95,115,0.12)',
 }
 
+// Backend stores small "AI credit" values (e.g. 50); the Billing page displays
+// these multiplied out as "Tokens" (50 -> 500K). Mirrors PLAN_FEATURES/fmtTok
+// in pages/BillingPage.jsx so the embed consent screen matches exactly.
+const TDM = 10_000
+const fmtTok = (raw) => {
+  const n = (raw || 0) * TDM
+  if (n >= 1_000_000) return `${parseFloat((n / 1_000_000).toFixed(2))}M`
+  if (n >= 1_000)     return `${parseFloat((n / 1_000).toFixed(1))}K`
+  return Math.round(n).toLocaleString()
+}
+
+const PLAN_FEATURES = {
+  Starter: [
+    { text: 'Ask Your Data (AI)',        ok: true  },
+    { text: 'All Analytics',             ok: true  },
+    { text: 'All Reports',               ok: true  },
+    { text: 'Forecasting & Anomalies',   ok: false },
+    { text: 'Priority Support',          ok: false },
+    { text: '1 Month data history',      ok: true  },
+  ],
+  Growth: [
+    { text: 'Ask Your Data (AI)',        ok: true  },
+    { text: 'All Analytics',             ok: true  },
+    { text: 'All Reports',               ok: true  },
+    { text: 'Forecasting & Anomalies',   ok: true  },
+    { text: 'Priority Support',          ok: false },
+    { text: '3 Months data history',     ok: true  },
+  ],
+  Pro: [
+    { text: 'Ask Your Data (AI)',        ok: true  },
+    { text: 'All Analytics',             ok: true  },
+    { text: 'All Reports',               ok: true  },
+    { text: 'Forecasting & Anomalies',   ok: true  },
+    { text: 'Priority Support',          ok: true  },
+    { text: 'External API integrations', ok: true  },
+    { text: 'Web widget',                ok: true  },
+    { text: '1 Year data history',       ok: true  },
+  ],
+}
+
 // ── Shared styles ──────────────────────────────────────────────────────────
 const primaryBtn = (disabled, sp) => ({
   width: '100%', padding: sp ? '14px' : '12px', borderRadius: sp ? 9999 : 8, fontSize: 13, fontWeight: 700,
@@ -321,29 +361,42 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
                 {plans.map((p, i) => {
                   const pid = p.id ?? p.name
                   const isSelected = selectedPlan === pid
+                  const features = PLAN_FEATURES[p.name] || []
                   return (
                     <label key={pid} onClick={() => setSelectedPlan(pid)} style={{
-                      position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      position: 'relative', display: 'block',
                       padding: '12px 14px', borderRadius: 12, cursor: 'pointer',
                       border: isSelected ? `2px solid ${SP.blue}` : `1px solid ${SP.outline}`,
                       background: isSelected ? 'rgba(0,88,190,0.05)' : 'transparent',
                       transition: 'border-color .15s, background .15s',
                     }}>
-                      <div style={{ display: 'flex', flexDirection: 'column' }}>
-                        <span style={{ fontSize: 12, fontWeight: 700, color: SP.heading }}>{p.name}</span>
-                        <span style={{ fontSize: 11, color: SP.text, marginTop: 2 }}>{p.ai_credits} AI credits</span>
-                      </div>
-                      <span style={{ fontSize: 14, fontWeight: 700, color: SP.heading }}>
-                        ${Number(p.price_usd).toFixed(2)}/mo
-                      </span>
-                      {i === 0 && (
-                        <span style={{
-                          position: 'absolute', top: -9, right: 14,
-                          background: SP.blue, color: '#fff', fontSize: 9, fontWeight: 700,
-                          padding: '2px 8px', borderRadius: 9999, letterSpacing: '.04em',
-                        }}>
-                          POPULAR
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: SP.heading }}>{p.name}</span>
+                          <span style={{ fontSize: 11, color: SP.text, marginTop: 2 }}>{fmtTok(p.tokens_limit)} Tokens / month</span>
+                        </div>
+                        <span style={{ fontSize: 14, fontWeight: 700, color: SP.heading }}>
+                          ${Number(p.price_usd).toFixed(2)}/mo
                         </span>
+                        {i === 0 && (
+                          <span style={{
+                            position: 'absolute', top: -9, right: 14,
+                            background: SP.blue, color: '#fff', fontSize: 9, fontWeight: 700,
+                            padding: '2px 8px', borderRadius: 9999, letterSpacing: '.04em',
+                          }}>
+                            POPULAR
+                          </span>
+                        )}
+                      </div>
+                      {isSelected && features.length > 0 && (
+                        <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${SP.outline}`, display: 'flex', flexDirection: 'column', gap: 5 }}>
+                          {features.map(({ text, ok }) => (
+                            <div key={text} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                              <span style={{ fontSize: 11, color: ok ? SP.green : SP.text3, flexShrink: 0 }}>{ok ? '✓' : '–'}</span>
+                              <span style={{ fontSize: 11, color: ok ? SP.text : SP.text3 }}>{text}</span>
+                            </div>
+                          ))}
+                        </div>
                       )}
                     </label>
                   )
@@ -407,7 +460,7 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
                   <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>
                     ${Number(p.price_usd).toFixed(2)}/mo
                     <span style={{ fontWeight: 400, color: 'var(--text3)', marginLeft: 6 }}>
-                      · {p.ai_credits} AI credits
+                      · {fmtTok(p.tokens_limit)} Tokens/mo
                     </span>
                   </span>
                 </div>

@@ -410,7 +410,9 @@ when clicked (the `?layout=bar` + `dm:resize` feature, see below).
     'border:none', 'border-radius:9999px',
     'box-shadow:0 4px 24px rgba(0,0,0,0.15)',
     'z-index:9999',
-    'transition:width .2s ease, height .2s ease, border-radius .2s ease',
+    // No size/shape transition on the iframe itself — it snaps to the full
+    // panel instantly. The "slide up" motion comes from the chat panel's
+    // own entrance animation (dm-panel-enter) inside the iframe.
   ].join(';')
 
   document.getElementById('datamind-widget').appendChild(iframe)
