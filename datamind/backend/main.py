@@ -25,7 +25,7 @@ load_dotenv()  # must run before any local module reads os.getenv at import time
 
 from logger import get_logger
 from db import get_connection, get_table_schemas, get_foreign_keys, get_sample_data
-from llm import query_to_sql, generate_report_summary, call_llm, validate_llm_key, list_gemini_models
+from llm import query_to_sql, generate_report_summary, call_llm, validate_llm_key, list_gemini_models, LLMTransientError
 from cache import get_cache, save_cache, invalidate_cache, get_cache_status
 from schema_builder import build_schema_cache
 from analytics import (
@@ -183,6 +183,14 @@ def _enforce_tenant_isolation(sql: str, tenant_id: str) -> str:
                 f"your account. Cross-tenant queries are not allowed."
             )
 
+    # SQL keywords that can never be a table alias — if the regex captures one of
+    # these it means the table has no alias and the keyword belongs to the next clause.
+    _ALIAS_KEYWORDS = frozenset({
+        'WHERE', 'GROUP', 'ORDER', 'HAVING', 'LIMIT', 'ON', 'SET',
+        'INNER', 'LEFT', 'RIGHT', 'CROSS', 'FULL', 'JOIN', 'UNION',
+        'AND', 'OR', 'NOT', 'SELECT', 'FROM', 'AS', 'BY', 'WITH',
+    })
+
     # Find all sp_*/ly_* table references: (FROM|JOIN) table_name [AS] alias
     # Captures: group1=clause, group2=table, group3=alias (may be None)
     table_re = re.compile(
@@ -198,7 +206,9 @@ def _enforce_tenant_isolation(sql: str, tenant_id: str) -> str:
         clause = m.group(1).strip().upper()
         clause_type = "FROM" if clause == "FROM" else "JOIN"
         table_raw = m.group(2).strip('`')
-        alias_raw = (m.group(3) or m.group(2)).strip('`')
+        captured_alias = (m.group(3) or "").strip('`')
+        # If the captured alias is a SQL keyword, the table has no alias — use table name.
+        alias_raw = table_raw if (not captured_alias or captured_alias.upper() in _ALIAS_KEYWORDS) else captured_alias
         refs.append((alias_raw, clause_type, m.end()))
 
     if not refs:
@@ -1707,6 +1717,9 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
         return response
     except HTTPException:
         raise
+    except LLMTransientError as e:
+        log.warning("NL query failed — LLM transient error", user=user["email"], error=str(e))
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         log.error("NL query failed", user=user["email"], error=str(e))
         raise _server_error("Query execution failed. Please try rephrasing your question.")

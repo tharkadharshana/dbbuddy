@@ -112,7 +112,12 @@ function Message({ msg, llm }) {
       </div>
       <div style={{ flex:1, minWidth:0 }}>
         {msg.loading ? (
-          <TypingDots />
+          <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+            <TypingDots />
+            {msg.loadingText && (
+              <span style={{ fontSize:11, color:'var(--text3)' }}>{msg.loadingText}</span>
+            )}
+          </div>
         ) : msg.error ? (
           <div style={{ background:'var(--red-dim)', border:'1px solid rgba(240,80,80,0.2)', borderRadius:10, padding:'10px 14px', fontSize:13, color:'var(--red)' }}>
             ⚠ {msg.error}
@@ -244,6 +249,15 @@ export default function ChatPage({
     const thinkMsg = { role: 'ai', loading: true, id: Date.now() + 1 }
     setMessages(m => [...m, userMsg, thinkMsg])
     setLoading(true)
+
+    const slowTimer = setTimeout(() => {
+      setMessages(m => m.map(msg =>
+        msg.id === thinkMsg.id && msg.loading
+          ? { ...msg, loadingText: 'Complex queries can take a moment...' }
+          : msg
+      ))
+    }, 10000)
+
     try {
       const data = await runNLQuery(q, llm, thinkMode, currentConvId)
       const rowCount = data.row_count
@@ -267,6 +281,7 @@ export default function ChatPage({
         msg.id === thinkMsg.id ? { role: 'ai', error: err, id: thinkMsg.id } : msg
       ))
     } finally {
+      clearTimeout(slowTimer)
       setLoading(false)
       onQueryComplete?.()
     }
