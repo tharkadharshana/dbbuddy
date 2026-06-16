@@ -250,14 +250,14 @@ function Message({ msg, theme }) {
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function EmbedChat({ context, onExpired, onLogout, onCollapse }) {
+export default function EmbedChat({ context, onExpired, onLogout, onCollapse, initialInput = '' }) {
   const productTitle = context?.branding?.product_name || 'Ask Your Data'
   const isSalesplay = context?.provider_id === 'salesplay'
   // Same accent used by the collapsed search bar (EmbedSearchBar) — keeps the
   // "closed" pill and the "open" input bar visually identical.
   const accent = context?.branding?.accent_color || '#3B82F6'
   const [messages, setMessages] = useState([])
-  const [input, setInput]       = useState('')
+  const [input, setInput]       = useState(initialInput)
   const [loading, setLoading]   = useState(false)
   const [thinkMode, setThinkMode] = useState(true) // always on for the SalesPlay embed — toggle UI hidden below
   const [hoveredSuggestion, setHoveredSuggestion] = useState(null)
@@ -271,6 +271,16 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse }) 
   // Token usage for the header indicator — non-fatal if it fails.
   useEffect(() => {
     embedGetSubscription().then(setSub).catch(() => setSub(null))
+  }, [])
+
+  // Auto-focus the textarea when opened from the collapsed search bar
+  useEffect(() => {
+    if (inputRef.current) {
+      inputRef.current.focus()
+      // Place cursor at end if text was carried over from the collapsed bar
+      const len = inputRef.current.value.length
+      inputRef.current.setSelectionRange(len, len)
+    }
   }, [])
 
   // ── Theme ───────────────────────────────────────────────────────────────────
