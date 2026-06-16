@@ -11,6 +11,7 @@ import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Respons
 import { embedRunQuery, embedGetSSOHandoff, embedCreateConversation, embedGetSubscription } from './embedApi'
 import { notifyParent } from './EmbedApp'
 import EmbedHistoryDrawer from './EmbedHistoryDrawer'
+const APP_NAME = import.meta.env.VITE_APP_NAME || 'SalesPlay AI'
 
 const TT = {
   background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)',
@@ -493,7 +494,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse }) 
                 fontSize:11, color:'var(--text2)',
               }}
             >
-              <span style={{ fontSize:12 }}>↗</span> Open in DataMind
+              <span style={{ fontSize:12 }}>↗</span> Open in {APP_NAME}
             </button>
             {/* Light / dark toggle */}
             <button
@@ -626,7 +627,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse }) 
                 width: isSalesplay ? 8 : 6, height: isSalesplay ? 8 : 6, borderRadius:'50%',
                 background: isSalesplay ? '#4ADE80' : 'var(--green)', display:'inline-block', flexShrink:0,
               }} />
-              Real-time data {isSalesplay ? '•' : '·'} Powered by DataMind
+              Real-time data {isSalesplay ? '•' : '·'} Powered by {APP_NAME}
             </div>
           </div>
         ) : (

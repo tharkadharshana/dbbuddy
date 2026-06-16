@@ -71,23 +71,25 @@ from auth import (
     create_sso_handoff_token, redeem_sso_handoff_token,
 )
 
+_APP_NAME = os.getenv("APP_NAME", "SalesPlay AI")
+
 app = FastAPI(
-    title="DataMind AI",
+    title=_APP_NAME,
     version="3.0.0",
     description=(
-        "DataMind AI API.\n\n"
+        f"{_APP_NAME} API.\n\n"
         "## Partner API (v1)\n"
         "Server-to-server endpoints for embed partners. "
-        "Authenticate with `X-API-Key: <partner_key>` obtained from the DataMind partner dashboard.\n\n"
+        f"Authenticate with `X-API-Key: <partner_key>` obtained from the {_APP_NAME} partner dashboard.\n\n"
         "All `/v1/` endpoints also require a `user_email` parameter to identify which end-user "
         "is being queried.\n\n"
         "## Embed API\n"
-        "Iframe embedding bootstrap flow (`/embed/*`). Used by the DataMind embed SDK.\n\n"
+        f"Iframe embedding bootstrap flow (`/embed/*`). Used by the {_APP_NAME} embed SDK.\n\n"
         "## User API\n"
         "Standard user-facing endpoints (`/auth/*`, `/query`, `/analytics/*`, etc.). "
         "Authenticate with `Authorization: Bearer <jwt>`."
     ),
-    contact={"name": "DataMind Support", "email": "support@datamind.ai"},
+    contact={"name": f"{_APP_NAME} Support", "email": "support@datamind.ai"},
     license_info={"name": "Proprietary"},
 )
 
