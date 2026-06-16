@@ -356,6 +356,15 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
 
     notifyParent('dm:query', { question: q })
 
+    // After 10s still loading → surface a hint so user knows it's working
+    const slowTimer = setTimeout(() => {
+      setMessages(m => m.map(msg =>
+        msg.id === thinkMsg.id && msg.loading
+          ? { ...msg, loadingText: 'Complex queries can take a moment...' }
+          : msg
+      ))
+    }, 10000)
+
     try {
       const data = await embedRunQuery(q, 'default', thinkMode, currentConvId)
       const rowCount = data.row_count
@@ -384,6 +393,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
         msg.id === thinkMsg.id ? { role:'ai', error:err, id:thinkMsg.id } : msg
       ))
     } finally {
+      clearTimeout(slowTimer)
       setLoading(false)
     }
   }
