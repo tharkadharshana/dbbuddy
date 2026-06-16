@@ -202,7 +202,7 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
   // through React state and can be empty on the first render in some React versions.
   const aat = aatToken || new URLSearchParams(window.location.search).get('aat') || ''
 
-  const productTitle  = context?.branding?.product_name || 'DataMind AI'
+  const productTitle  = context?.branding?.product_name || import.meta.env.VITE_APP_NAME || 'SalesPlay AI'
   const providerName  = context?.partner_name || 'Salesplay'
 
   // Called when the user clicks "Accept & Connect"

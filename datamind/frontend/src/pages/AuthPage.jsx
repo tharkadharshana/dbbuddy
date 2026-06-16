@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { login, register, getErrorMessage } from '../utils/api'
+import { APP_NAME } from '../appName'
 
 export default function AuthPage({ onAuth }) {
   const [mode, setMode] = useState('login') // 'login' | 'register'
@@ -51,7 +52,7 @@ export default function AuthPage({ onAuth }) {
               <rect x="9" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.95)"/>
             </svg>
           </div>
-          <div style={{ fontSize:26, fontWeight:700, color:'#f0f1fa', marginBottom:4 }}>DataMind AI</div>
+          <div style={{ fontSize:26, fontWeight:700, color:'#f0f1fa', marginBottom:4 }}>{APP_NAME}</div>
           <div style={{ fontSize:13, color:'#5a5f7d' }}>Transform Data into Actionable Intelligence</div>
         </div>
 

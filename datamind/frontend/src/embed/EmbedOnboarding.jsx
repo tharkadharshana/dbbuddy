@@ -95,7 +95,7 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete }) {
   const [error, setError]             = useState('')
 
   const providerName = context?.partner_name || 'Salesplay'
-  const productTitle = context?.branding?.product_name || 'DataMind AI'
+  const productTitle = context?.branding?.product_name || import.meta.env.VITE_APP_NAME || 'SalesPlay AI'
 
   // Fetch plans when entering step 2
   useEffect(() => {

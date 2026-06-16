@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { onboardingValidateKey, onboardingTestDB, onboardingConnectDB, patchSettings, fetchProviders, validateProviderCreds, connectProvider, fetchProviderStatus, fetchConnectedProviders, fetchBillingPlans, subscribeToPlan, getErrorMessage } from '../utils/api'
 import { Spinner } from '../components/UI'
+import { APP_NAME } from '../appName'
 
 // ── Step indicator ────────────────────────────────────────────────────────────
 function StepDots({ total, current }) {
@@ -251,7 +252,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
             <rect x="9" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.95)"/>
           </svg>
         </div>
-        <div style={{ fontSize:22, fontWeight:700, color:'var(--text)' }}>Welcome to DataMind</div>
+        <div style={{ fontSize:22, fontWeight:700, color:'var(--text)' }}>Welcome to {APP_NAME}</div>
         <div style={{ fontSize:13, color:'var(--text2)', marginTop:4 }}>Let's get you set up in 3 quick steps</div>
       </div>
 
@@ -277,7 +278,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
             })()}
             <div style={{ textAlign:'center', padding:'60px 20px', color:'var(--text3)' }}>
               <Spinner size={32} />
-              <div style={{ marginTop:16, fontSize:14 }}>Setting up DataMind AI...</div>
+              <div style={{ marginTop:16, fontSize:14 }}>Setting up {APP_NAME}...</div>
             </div>
           </Card>
         )}
@@ -517,7 +518,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
             <div style={{ fontSize:11, color:'var(--text3)', textTransform:'uppercase', letterSpacing:'.1em', marginBottom:6 }}>Step 3 of 3</div>
             <div style={{ fontSize:19, fontWeight:700, color:'var(--text)', marginBottom:4 }}>Set up your analytics</div>
             <div style={{ fontSize:13, color:'var(--text2)', marginBottom:22, lineHeight:1.6 }}>
-              DataMind will now look at your database and build custom analytics for you. This only runs <strong style={{color:'rgba(255,255,255,.6)'}}>once</strong> and everything is saved for future use.
+              {APP_NAME} will now look at your database and build custom analytics for you. This only runs <strong style={{color:'rgba(255,255,255,.6)'}}>once</strong> and everything is saved for future use.
             </div>
 
             {/* Summary */}
