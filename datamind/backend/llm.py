@@ -394,6 +394,70 @@ def validate_llm_key(llm: str, api_key: str) -> Dict[str, Any]:
         return {"ok": False, "error": str(e)}
 
 
+# ── Question classification ───────────────────────────────────────────────────
+
+def classify_question(
+    question: str, table_names: str,
+    llm: str, api_key: str, user_email: str
+) -> dict:
+    """
+    Classify the user question to determine handling strategy.
+    Returns a dict with 'type' and type-specific fields.
+    Falls back to {"type": "data_query"} if classification fails.
+    """
+    system = (
+        "You are a data assistant classifier. Respond ONLY with valid JSON — no markdown, no explanation.\n"
+        "Classify the question into exactly one type:\n"
+        '{"type":"data_query"} — question about data that exists in the database\n'
+        '{"type":"multi_step","sub_questions":["q1","q2"]} — clearly contains 2+ separate data queries; '
+        "only use this when two or more genuinely distinct SQL queries are needed\n"
+        '{"type":"conversational","response":"..."} — greeting, small talk, or meta-questions (who are you, help, what can you do)\n'
+        '{"type":"clarification_needed","clarification":"..."} — too vague to answer without more context\n'
+        "For conversational: respond as DataMind, a friendly AI data assistant.\n"
+        "For clarification_needed: ask one specific clarifying question."
+    )
+    prompt = f"Available tables: {table_names}\nQuestion: {question}"
+    try:
+        raw = call_llm(prompt, system, llm, max_tokens=400, api_key=api_key, user_email=user_email)
+        raw = raw.strip()
+        if raw.startswith("```"):
+            raw = re.sub(r"^```[a-z]*\n?", "", raw).rstrip("`").strip()
+        result = json.loads(raw)
+        if result.get("type") not in ("data_query", "multi_step", "conversational", "clarification_needed"):
+            return {"type": "data_query"}
+        return result
+    except Exception as _e:
+        log.debug("Question classification failed, treating as data_query", error=str(_e))
+        return {"type": "data_query"}
+
+
+def synthesize_multi_step_answer(
+    original_question: str, step_results: list,
+    llm: str, api_key: str, user_email: str
+) -> Optional[str]:
+    """Combine results from multiple sub-queries into a single coherent answer."""
+    parts = []
+    for i, step in enumerate(step_results, 1):
+        q = step.get("question", f"Step {i}")
+        cols = step.get("columns", [])
+        rows = step.get("data", [])[:5]
+        parts.append(
+            f"Query {i}: {q}\n"
+            f"Columns: {', '.join(cols)}\n"
+            f"Top rows: {json.dumps(rows, default=str)}"
+        )
+    system = (
+        "You are a data analyst. Combine the query results below into a concise, clear answer to "
+        "the original question. Use specific numbers from the data. No preamble."
+    )
+    prompt = f"Question: {original_question}\n\n" + "\n\n".join(parts) + "\n\nAnswer:"
+    try:
+        return call_llm(prompt, system, llm, max_tokens=600, api_key=api_key, user_email=user_email)
+    except Exception as _se:
+        log.warning("Multi-step synthesis failed", error=str(_se))
+        return None
+
+
 # ── Text-to-SQL ───────────────────────────────────────────────────────────────
 
 def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "openai",
