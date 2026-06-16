@@ -480,7 +480,7 @@ export default function SettingsPage({ user, onLogout, onNavigate, sub }) {
       </Section>
 
       {/* ── How caching works ─────────────────────────────────────────────── */}
-      {/* ── How Billing Works ────────────────────────────────────────────── */}
+      {/* BILLING HIDDEN — "How Billing Works" section commented out
       <Section title="How Billing Works" subtitle="Every operation — AI queries, analytics templates, forecasting, data syncs — consumes Tokens from your plan.">
         <Card style={{ padding: '18px 20px' }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10, marginBottom: 16 }}>
@@ -496,24 +496,16 @@ export default function SettingsPage({ user, onLogout, onNavigate, sub }) {
               </div>
             ))}
           </div>
-
           <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 14 }}>
             Every operation deducts Tokens based on what it does and how much of your data it touches.
             Check the <strong style={{ color: 'var(--text2)' }}>Billing → Usage</strong> tab to see a full breakdown of your activity.
           </div>
-
-          <button
-            onClick={() => onNavigate && onNavigate('docs')}
-            style={{
-              padding: '8px 18px', borderRadius: 7, border: '1px solid var(--blue)',
-              background: 'var(--blue-dim)', color: 'var(--blue)',
-              fontWeight: 600, fontSize: 12, cursor: 'pointer',
-            }}
-          >
+          <button onClick={() => onNavigate && onNavigate('docs')} style={{ padding: '8px 18px', borderRadius: 7, border: '1px solid var(--blue)', background: 'var(--blue-dim)', color: 'var(--blue)', fontWeight: 600, fontSize: 12, cursor: 'pointer' }}>
             View full billing docs →
           </button>
         </Card>
       </Section>
+      */}
 
       {/* ── API Access (Pro only) ──────────────────────────────────────── */}
       {isPro && (

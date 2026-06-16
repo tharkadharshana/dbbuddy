@@ -346,6 +346,7 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
             </div>
           </div>
 
+          {/* BILLING HIDDEN — subscription plan selection commented out
           {plans.length > 0 && (
             <div style={{
               textAlign: 'left', background: SP.card, padding: 16, borderRadius: 16,
@@ -404,6 +405,7 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
               </div>
             </div>
           )}
+          */}
 
           <button onClick={handleAccept} disabled={loading} style={primaryBtn(loading, sp)}>
             {loading ? <><Spin sp={sp} /> Setting up…</> : 'Start your 14-day trial'}

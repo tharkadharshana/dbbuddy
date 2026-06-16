@@ -51,38 +51,41 @@ function BetaBadge({ isSalesplay }) {
 }
 
 // ── Token usage indicator ──────────────────────────────────────────────────────
-function TokenUsage({ sub, isSalesplay }) {
-  if (!sub || sub.status === 'no_subscription') return null
-  const used  = sub.tokens_used || 0
-  const total = sub.tokens_total_available || sub.tokens_limit || 1
-  const pct   = Math.min(100, Math.round((used / total) * 100))
-
-  if (isSalesplay) {
-    const color = pct >= 100 ? '#EF4444' : pct >= 80 ? '#F59E0B' : '#3B82F6'
-    return (
-      <div title={`${used.toLocaleString()} / ${total.toLocaleString()} tokens used`} style={{ marginTop: 12 }}>
-        <div style={{ position:'relative', height:6, borderRadius:99, background:'#E2E8F0' }}>
-          <div style={{ position:'absolute', left:0, top:0, height:'100%', width:`${pct}%`, borderRadius:99, background:color, transition:'width .3s' }} />
-          <div style={{ position:'absolute', top:'50%', left:`${pct}%`, transform:'translate(-50%, -50%)', width:14, height:14, borderRadius:'50%', background:color, border:'2px solid #fff', boxShadow:'0 1px 3px rgba(0,0,0,0.15)', transition:'left .3s' }} />
-        </div>
-        <div style={{ textAlign:'right', fontSize:12, fontWeight:700, color, marginTop:6 }}>{pct}% Tokens Used</div>
-      </div>
-    )
-  }
-
-  const color = pct >= 100 ? 'var(--red)' : pct >= 80 ? 'var(--amber)' : 'var(--blue)'
-  return (
-    <div title={`${used.toLocaleString()} / ${total.toLocaleString()} tokens used`} style={{ display:'flex', flexDirection:'column', gap:3, minWidth:46 }}>
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:4 }}>
-        <span style={{ fontSize:9, color:'var(--text3)' }}>⚡</span>
-        <span style={{ fontSize:9, color, fontFamily:'var(--mono)' }}>{pct}%</span>
-      </div>
-      <div style={{ height:3, borderRadius:99, background:'var(--bg3)', overflow:'hidden' }}>
-        <div style={{ height:'100%', width:`${pct}%`, borderRadius:99, background:color, transition:'width .3s' }} />
-      </div>
-    </div>
-  )
-}
+// {/* BILLING HIDDEN — token usage meter commented out
+// function TokenUsage({ sub, isSalesplay }) {
+//   if (!sub || sub.status === 'no_subscription') return null
+//   const used  = sub.tokens_used || 0
+//   const total = sub.tokens_total_available || sub.tokens_limit || 1
+//   const pct   = Math.min(100, Math.round((used / total) * 100))
+//
+//   if (isSalesplay) {
+//     const color = pct >= 100 ? '#EF4444' : pct >= 80 ? '#F59E0B' : '#3B82F6'
+//     return (
+//       <div title={`${used.toLocaleString()} / ${total.toLocaleString()} tokens used`} style={{ marginTop: 12 }}>
+//         <div style={{ position:'relative', height:6, borderRadius:99, background:'#E2E8F0' }}>
+//           <div style={{ position:'absolute', left:0, top:0, height:'100%', width:`${pct}%`, borderRadius:99, background:color, transition:'width .3s' }} />
+//           <div style={{ position:'absolute', top:'50%', left:`${pct}%`, transform:'translate(-50%, -50%)', width:14, height:14, borderRadius:'50%', background:color, border:'2px solid #fff', boxShadow:'0 1px 3px rgba(0,0,0,0.15)', transition:'left .3s' }} />
+//         </div>
+//         <div style={{ textAlign:'right', fontSize:12, fontWeight:700, color, marginTop:6 }}>{pct}% Tokens Used</div>
+//       </div>
+//     )
+//   }
+//
+//   const color = pct >= 100 ? 'var(--red)' : pct >= 80 ? 'var(--amber)' : 'var(--blue)'
+//   return (
+//     <div title={`${used.toLocaleString()} / ${total.toLocaleString()} tokens used`} style={{ display:'flex', flexDirection:'column', gap:3, minWidth:46 }}>
+//       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:4 }}>
+//         <span style={{ fontSize:9, color:'var(--text3)' }}>⚡</span>
+//         <span style={{ fontSize:9, color, fontFamily:'var(--mono)' }}>{pct}%</span>
+//       </div>
+//       <div style={{ height:3, borderRadius:99, background:'var(--bg3)', overflow:'hidden' }}>
+//         <div style={{ height:'100%', width:`${pct}%`, borderRadius:99, background:color, transition:'width .3s' }} />
+//       </div>
+//     </div>
+//   )
+// }
+// */
+function TokenUsage() { return null }
 
 // ── Typing indicator ──────────────────────────────────────────────────────────
 function TypingDots() {
@@ -250,14 +253,14 @@ function Message({ msg, theme }) {
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function EmbedChat({ context, onExpired, onLogout, onCollapse }) {
+export default function EmbedChat({ context, onExpired, onLogout, onCollapse, initialInput = '' }) {
   const productTitle = context?.branding?.product_name || 'Ask Your Data'
   const isSalesplay = context?.provider_id === 'salesplay'
   // Same accent used by the collapsed search bar (EmbedSearchBar) — keeps the
   // "closed" pill and the "open" input bar visually identical.
   const accent = context?.branding?.accent_color || '#3B82F6'
   const [messages, setMessages] = useState([])
-  const [input, setInput]       = useState('')
+  const [input, setInput]       = useState(initialInput)
   const [loading, setLoading]   = useState(false)
   const [thinkMode, setThinkMode] = useState(true) // always on for the SalesPlay embed — toggle UI hidden below
   const [hoveredSuggestion, setHoveredSuggestion] = useState(null)
@@ -271,6 +274,16 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse }) 
   // Token usage for the header indicator — non-fatal if it fails.
   useEffect(() => {
     embedGetSubscription().then(setSub).catch(() => setSub(null))
+  }, [])
+
+  // Auto-focus the textarea when opened from the collapsed search bar
+  useEffect(() => {
+    if (inputRef.current) {
+      inputRef.current.focus()
+      // Place cursor at end if text was carried over from the collapsed bar
+      const len = inputRef.current.value.length
+      inputRef.current.setSelectionRange(len, len)
+    }
   }, [])
 
   // ── Theme ───────────────────────────────────────────────────────────────────
