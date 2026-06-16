@@ -220,7 +220,7 @@ export default function App() {
         onConvDelete={handleConvDeleted}
       />
       <main style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', minWidth:0 }}>
-        <UsageLimitBanner sub={sub} onNavigate={setPage} />
+        {/* BILLING HIDDEN — <UsageLimitBanner sub={sub} onNavigate={setPage} /> */}
         <div style={{ flex:1, overflow: noScroll ? 'hidden' : 'auto' }}>
           {pageEl}
         </div>

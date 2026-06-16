@@ -387,8 +387,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
                 : provResult.error} />
             )}
 
-            {/* Plan selection — shown AFTER test succeeds, BEFORE sync starts.
-                The backend reads the plan to determine how many months to sync. */}
+            {/* BILLING HIDDEN — plan selection after provider test commented out
             {provResult?.ok && (
               <div style={{ marginTop:14 }}>
                 <div style={{ fontSize:12, color:'var(--text2)', marginBottom:8, fontWeight:600 }}>
@@ -405,15 +404,12 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
                           padding:'10px 14px', borderRadius:10, textAlign:'left', cursor:'pointer',
                           background: isSelected ? 'rgba(79,142,247,0.12)' : 'var(--bg2)',
                           border: `1px solid ${isSelected ? 'rgba(79,142,247,0.4)' : 'var(--border)'}`,
-                          color:'var(--text)', display:'flex', justifyContent:'space-between',
-                          alignItems:'center',
+                          color:'var(--text)', display:'flex', justifyContent:'space-between', alignItems:'center',
                         }}>
                         <span style={{ fontSize:13, fontWeight: isSelected ? 600 : 400 }}>
                           {isSelected ? '✓ ' : ''}{plan.name} — {dataMonths} of data
                         </span>
-                        <span style={{ fontSize:12, color:'var(--text2)' }}>
-                          ${plan.price_usd}/mo
-                        </span>
+                        <span style={{ fontSize:12, color:'var(--text2)' }}>${plan.price_usd}/mo</span>
                       </button>
                     )
                   })}
@@ -425,6 +421,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
                 )}
               </div>
             )}
+            */}
 
             <div style={{ display:'flex', gap:8, marginTop: provResult?.ok ? 6 : 0 }}>
               <button onClick={() => setSelProvider(null)} style={{ padding:'9px 14px', borderRadius:10, fontSize:13, background:'transparent', border:'1px solid var(--border)', color:'var(--text2)', cursor:'pointer' }}>← Back</button>
