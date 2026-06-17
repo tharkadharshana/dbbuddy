@@ -190,13 +190,27 @@ def _enforce_tenant_isolation(sql: str, tenant_id: str) -> str:
         re.IGNORECASE,
     )
 
+    # SQL keywords that must never be treated as table aliases.
+    # The LLM often omits aliases, causing the regex to capture the next keyword
+    # (e.g. WHERE, JOIN, ON) as the alias, which then produces invalid SQL like
+    # WHERE.tenant_id = '...'. Guard by falling back to the table name.
+    _SQL_RESERVED = frozenset({
+        'WHERE', 'GROUP', 'ORDER', 'LIMIT', 'HAVING', 'ON', 'SET',
+        'INNER', 'LEFT', 'RIGHT', 'CROSS', 'FULL', 'JOIN', 'UNION',
+        'SELECT', 'FROM', 'AND', 'OR', 'NOT', 'IN', 'IS', 'NULL',
+        'AS', 'BY', 'ASC', 'DESC', 'WITH', 'USING',
+    })
+
     # Build list of (alias, clause_type, match_end_pos)
     refs = []
     for m in table_re.finditer(sql):
         clause = m.group(1).strip().upper()
         clause_type = "FROM" if clause == "FROM" else "JOIN"
         table_raw = m.group(2).strip('`')
-        alias_raw = (m.group(3) or m.group(2)).strip('`')
+        alias_candidate = m.group(3)
+        if alias_candidate and alias_candidate.strip('`').upper() in _SQL_RESERVED:
+            alias_candidate = None
+        alias_raw = (alias_candidate or m.group(2)).strip('`')
         refs.append((alias_raw, clause_type, m.end()))
 
     if not refs:
