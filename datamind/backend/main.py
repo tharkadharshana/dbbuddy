@@ -1505,10 +1505,10 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
     # ── AI limit check ────────────────────────────────────────────────────────
     ok, reason = check_ai_limit(user["email"])
     if not ok:
-        log.warning("AI limit exceeded", user=user["email"])
+        log.warning("AI limit exceeded", user=user["email"], reason=reason)
         return _base_query_response(
             success=False, type="error", conversation_id=conv_id,
-            message="You've reached your AI usage limit. Please upgrade your plan to continue.",
+            message=reason,
         )
 
     llm = _effective_llm(user, req.llm)
