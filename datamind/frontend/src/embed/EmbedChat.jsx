@@ -9,6 +9,7 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { embedRunQuery, embedGetSSOHandoff, embedCreateConversation, embedGetSubscription } from './embedApi'
+import { getErrorMessage } from '../utils/api'
 import { notifyParent } from './EmbedApp'
 import EmbedHistoryDrawer from './EmbedHistoryDrawer'
 const APP_NAME = import.meta.env.VITE_APP_NAME || 'SalesPlay AI'
@@ -394,7 +395,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
         onExpired()
         return
       }
-      const err = e.response?.data?.detail || e.message
+      const err = getErrorMessage(e)
       setMessages(m => m.map(msg =>
         msg.id === thinkMsg.id ? { role:'ai', error:err, id:thinkMsg.id } : msg
       ))
