@@ -1624,10 +1624,12 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
             if nl_tenant_id not in sql:
                 log.error("Tenant isolation enforcement failed — refusing to execute",
                           user=user["email"], tenant_id=nl_tenant_id, sql=sql[:300])
-                raise HTTPException(
-                    status_code=500,
-                    detail="Could not generate a safely scoped query. Please rephrase your question."
-                )
+                return {
+                    "columns": [], "data": [], "row_count": 0,
+                    "analysis": "I wasn't able to answer that safely. Could you try rephrasing your question?",
+                    "think_mode": req.think_mode, "conversation_id": conv_id,
+                    "data_as_of": nl_last_sync_at,
+                }
             # Enforce data-history window for integration users.
             # The LLM hint is advisory; this is mandatory. Prevents follow-up
             # questions from pulling all-time data beyond the plan's allowed window.
@@ -1741,8 +1743,13 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
     except HTTPException:
         raise
     except Exception as e:
-        log.error("NL query failed", user=user["email"], error=str(e))
-        raise _server_error("Query execution failed. Please try rephrasing your question.")
+        log.error("NL query failed", user=user["email"], error=str(e), exc_info=True)
+        return {
+            "columns": [], "data": [], "row_count": 0,
+            "analysis": "I wasn't able to answer that. Could you try rephrasing your question?",
+            "think_mode": req.think_mode, "conversation_id": conv_id,
+            "data_as_of": nl_last_sync_at,
+        }
     finally:
         conn.close()  # always returned to pool (or closed for own-DB users)
 
