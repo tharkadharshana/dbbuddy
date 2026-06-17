@@ -148,11 +148,11 @@ function ResultPanel({ result, templateId }) {
     if (templateId === 'revenue_trend') {
       const chartData = [...data].reverse()
       return (
-        <ChartCard title="Monthly Revenue & Transactions">
+        <ChartCard title="Daily Revenue & Transactions">
           <ResponsiveContainer width="100%" height={240}>
             <ComposedChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
-              <XAxis dataKey={strCols[0]||'month'} tick={{fontSize:10,fill:'#5a5f7d'}} axisLine={false} tickLine={false} />
+              <XAxis dataKey={strCols[0]||'date'} tick={{fontSize:10,fill:'#5a5f7d'}} axisLine={false} tickLine={false} />
               <YAxis yAxisId="l" tick={{fontSize:10,fill:'#5a5f7d'}} axisLine={false} tickLine={false} />
               <YAxis yAxisId="r" orientation="right" tick={{fontSize:10,fill:'#5a5f7d'}} axisLine={false} tickLine={false} />
               <Tooltip contentStyle={TT} />
@@ -163,9 +163,19 @@ function ResultPanel({ result, templateId }) {
         </ChartCard>
       )
     }
-    if (templateId === 'payment_methods') {
+    if (templateId === 'payment_methods' || templateId === 'payment_breakdown') {
       const nameKey = strCols[0] || 'payment_method'
-      return <ChartCard title="Payment Share"><PieChartSimple data={data} nameKey={nameKey} valueKey={numCols[0]||'revenue'} height={220} /></ChartCard>
+      const valueKey = numCols.find(c => c.includes('revenue') || c.includes('total')) || numCols[0]
+      return <ChartCard title="Revenue by Payment Method"><PieChartSimple data={data} nameKey={nameKey} valueKey={valueKey} height={220} /></ChartCard>
+    }
+    if (templateId === 'customer_analysis') {
+      const yKey = numCols.find(c => c.includes('lifetime')) || numCols[1] || numCols[0]
+      return <ChartCard title="Lifetime Value by Customer"><BarChartSimple data={data.slice(0,15)} xKey={strCols[0]||'customer'} yKey={yKey} color="var(--purple)" horizontal /></ChartCard>
+    }
+    if (templateId === 'hourly_performance') {
+      const chartData = data.map(r => ({ ...r, hour: `${r.hour_of_day}:00` }))
+      const yKey = numCols.find(c => c.includes('revenue')) || numCols[1] || numCols[0]
+      return <ChartCard title="Revenue by Hour of Day"><BarChartSimple data={chartData} xKey="hour" yKey={yKey} color="var(--blue)" /></ChartCard>
     }
     if (templateId === 'loyalty_tiers') {
       return <ChartCard title="Customers per Tier"><PieChartSimple data={data} nameKey={strCols[0]||'tier'} valueKey={numCols[0]||'customers'} height={220} /></ChartCard>
@@ -187,7 +197,9 @@ function ResultPanel({ result, templateId }) {
   }
 
   const numCols = columns?.filter(c => typeof data[0]?.[c] === 'number') || []
-  const kpiCols = numCols.slice(0, 4)
+  // Exclude pure dimension columns that happen to be numeric (hour number, day index, etc.)
+  const _KPI_DIMENSIONS = /^(hour_of_day|hour|day_of_week|week_num|month_num|year_num)$/i
+  const kpiCols = numCols.filter(c => !_KPI_DIMENSIONS.test(c)).slice(0, 4)
 
   return (
     <div className="fade-up" style={{ display:'flex', flexDirection:'column', gap:14 }}>
@@ -203,10 +215,11 @@ function ResultPanel({ result, templateId }) {
           {kpiCols.map((col, i) => {
             const vals = data.map(r => r[col]||0)
             const total = vals.reduce((a,b)=>a+b,0)
-            const isAvg = col.includes('avg')||col.includes('pct')||col.includes('rate')||col.includes('margin')
+            const isAvg = col.includes('avg')||col.includes('pct')||col.includes('rate')||col.includes('margin')||col.includes('days_since')
             const val = data.length===1 ? data[0][col] : (isAvg ? total/vals.length : total)
             const colors = ['var(--blue)','var(--green)','var(--purple)','var(--amber)']
-            return <KPICard key={col} label={col.replace(/_/g,' ')} value={typeof val==='number'?(isCurrencyColumn(col)?formatCurrency(val):formatNumber(val,null,1)):val} color={colors[i%4]} />
+            const decimals = Number.isInteger(val) ? 0 : 1
+            return <KPICard key={col} label={col.replace(/_/g,' ')} value={typeof val==='number'?(isCurrencyColumn(col)?formatCurrency(val):formatNumber(val,null,decimals)):val} color={colors[i%4]} />
           })}
         </div>
       )}

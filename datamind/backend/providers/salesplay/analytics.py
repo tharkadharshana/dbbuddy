@@ -85,7 +85,7 @@ TEMPLATES = {
         "sql": """
             SELECT
                 product_name                            AS product,
-                COALESCE(category_name, '—')            AS category,
+                COALESCE(NULLIF(category_name, ''), 'Uncategorized') AS category,
                 SUM(quantity)                           AS units_sold,
                 ROUND(SUM(total_money), 2)              AS revenue,
                 ROUND(AVG(price), 2)                    AS avg_price
@@ -168,7 +168,7 @@ TEMPLATES = {
         "type": "table",
         "sql": """
             SELECT
-                COALESCE(category_name, 'Uncategorized') AS category,
+                COALESCE(NULLIF(category_name, ''), 'Uncategorized') AS category,
                 COUNT(DISTINCT product_name)             AS products_count,
                 SUM(quantity)                            AS units_sold,
                 ROUND(SUM(total_money), 2)               AS revenue,
@@ -176,7 +176,7 @@ TEMPLATES = {
             FROM sp_receipt_line_items
             WHERE tenant_id = '{tenant_id}'
               AND created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
-            GROUP BY category_name
+            GROUP BY COALESCE(NULLIF(category_name, ''), 'Uncategorized')
             ORDER BY revenue DESC
         """
     },
@@ -209,7 +209,7 @@ TEMPLATES = {
         "type": "table",
         "sql": """
             SELECT
-                COALESCE(shop_name, shop_id)            AS shop,
+                COALESCE(NULLIF(shop_name, ''), NULLIF(shop_id, ''), 'Unknown Shop') AS shop,
                 COUNT(*)                                AS transactions,
                 ROUND(SUM(total_money), 2)              AS revenue,
                 ROUND(AVG(total_money), 2)              AS avg_ticket,
@@ -218,7 +218,7 @@ TEMPLATES = {
             WHERE tenant_id = '{tenant_id}'
               AND created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
               AND receipt_type = 'SALE'
-            GROUP BY shop_id, shop_name
+            GROUP BY COALESCE(NULLIF(shop_name, ''), NULLIF(shop_id, ''), 'Unknown Shop')
             ORDER BY revenue DESC
         """
     },
