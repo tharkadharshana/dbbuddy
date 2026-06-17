@@ -179,16 +179,29 @@ class DataMindLogger:
     Thin wrapper that lets you pass keyword args as structured fields:
       log.info("msg", user="alice", duration_ms=42)
       log.info("Add DB config", name="prod")  # 'name' is safe — auto-prefixed to '_name'
+
+    Use bind() to create a child logger with pre-attached fields (e.g. user + tenant_id)
+    that appear automatically on every log call without repeating them:
+      _log = log.bind(user=email, tenant_id=tid)
+      _log.info("SQL generated", sql=sql)  # → {user, tenant_id, sql, ...}
     """
     def __init__(self, name: str):
         self._log = logging.getLogger(f"datamind.{name}")
+        self._ctx: dict = {}
+
+    def bind(self, **kwargs) -> "DataMindLogger":
+        """Return a new logger with these fields merged into every log call."""
+        child = DataMindLogger.__new__(DataMindLogger)
+        child._log = self._log
+        child._ctx = {**self._ctx, **kwargs}
+        return child
 
     def _emit(self, level: int, msg: str, **kwargs):
         if self._log.isEnabledFor(level):
-            # Rename any key that would collide with a built-in LogRecord field
+            merged = {**self._ctx, **kwargs}
             extra = {
                 (f"_{k}" if k in _RESERVED_LOG_ATTRS else k): v
-                for k, v in kwargs.items()
+                for k, v in merged.items()
             }
             self._log.log(level, msg, extra=extra, stacklevel=3)
 

@@ -1582,6 +1582,10 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
             message="Could not connect to your data source. Please check your connection settings.",
         )
 
+    # Bind user + tenant_id to every log call for the rest of this request
+    # so we can filter logs by user or tenant without grepping manually.
+    log = log.bind(user=user["email"], tenant_id=nl_tenant_id or "own-db")
+
     try:
         # ── Conversation history ──────────────────────────────────────────────
         conv_history = ""
