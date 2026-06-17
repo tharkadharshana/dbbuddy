@@ -1622,7 +1622,7 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
         # ── Question classification ───────────────────────────────────────────
         steps.append({"label": "Analyzing your question", "status": "done"})
         table_names_str = ", ".join(list(schemas.keys())[:20])
-        classification = classify_question(req.question, table_names_str, llm, api_key, user["email"])
+        classification = classify_question(req.question, table_names_str, llm, api_key, user["email"], app_name=_APP_NAME)
         q_type = classification.get("type", "data_query")
 
         row_limit = history["row_limit"]
@@ -1633,7 +1633,7 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
         if q_type == "conversational":
             response_text = classification.get(
                 "response",
-                "Hello! I'm DataMind, your AI data assistant. "
+                f"Hello! I'm {_APP_NAME}, your AI data assistant. "
                 "Ask me anything about your data — for example: "
                 "'Show me sales from last month' or 'Who are my top customers?'"
             )

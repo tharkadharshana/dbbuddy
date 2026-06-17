@@ -398,7 +398,8 @@ def validate_llm_key(llm: str, api_key: str) -> Dict[str, Any]:
 
 def classify_question(
     question: str, table_names: str,
-    llm: str, api_key: str, user_email: str
+    llm: str, api_key: str, user_email: str,
+    app_name: str = "DataMind",
 ) -> dict:
     """
     Classify the user question to determine handling strategy.
@@ -413,7 +414,7 @@ def classify_question(
         "only use this when two or more genuinely distinct SQL queries are needed\n"
         '{"type":"conversational","response":"..."} — greeting, small talk, or meta-questions (who are you, help, what can you do)\n'
         '{"type":"clarification_needed","clarification":"..."} — too vague to answer without more context\n'
-        "For conversational: respond as DataMind, a friendly AI data assistant.\n"
+        f"For conversational: respond as {app_name}, a friendly AI data assistant.\n"
         "For clarification_needed: ask one specific clarifying question."
     )
     prompt = f"Available tables: {table_names}\nQuestion: {question}"
