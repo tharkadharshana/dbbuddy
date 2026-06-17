@@ -1910,8 +1910,14 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
             response["sql"] = sql
         return response
 
+    except LLMTransientError as e:
+        log.warning("NL query failed — all LLM keys exhausted", error=str(e))
+        return _base_query_response(
+            success=False, type="error", steps=steps, conversation_id=conv_id,
+            message="Our AI service is currently busy. Please try again in a moment.",
+        )
     except Exception as e:
-        log.error("NL query failed", user=user["email"], error=str(e))
+        log.error("NL query failed", error=str(e))
         return _base_query_response(
             success=False, type="error", steps=steps, conversation_id=conv_id,
             message="Something went wrong while processing your question. Please try rephrasing it or try again shortly.",
