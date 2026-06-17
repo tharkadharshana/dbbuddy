@@ -1870,6 +1870,7 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                     conv_id, "assistant", answer_summary,
                     sql_query=sql, row_count=len(data),
                     columns=columns, data=data, stat_col=stat_col,
+                    analysis=analysis,
                 )
                 convo = _conv.get_conversation(conv_id, user["email"])
                 msg_count = convo["message_count"] if convo else 0
