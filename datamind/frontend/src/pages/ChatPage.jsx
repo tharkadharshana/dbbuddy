@@ -324,7 +324,6 @@ export default function ChatPage({
 
   const hasMessages = messages.length > 0
 
-  if (sub && !sub.can_use_ai) return <AIQuotaWall sub={sub} onNavigate={onNavigate} />
 
   return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%', overflow:'hidden' }}>
