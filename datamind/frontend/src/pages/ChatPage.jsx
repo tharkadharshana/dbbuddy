@@ -26,13 +26,39 @@ function TypingDots() {
   )
 }
 
+// Prefer a short-code column (sku, code, customer_code, shop_id) for chart
+// labels so long names don't overflow. Falls back to the first string column.
+const _CODE_COLS = /^(sku|code|customer_code|shop_id|product_code|item_code)$/i
+
 function ResultChart({ columns, data }) {
   if (!data?.length || !columns?.length) return null
   const numCols = columns.filter(c => typeof data[0]?.[c] === 'number')
   const strCols = columns.filter(c => typeof data[0]?.[c] === 'string')
   if (!numCols.length || !strCols.length || data.length < 2) return null
-  const xKey = strCols[0], y1 = numCols[0], y2 = numCols[1]
-  const chartData = data.slice(0,20).map(r => ({ name: String(r[xKey]||'').slice(0,16), [y1]: r[y1], ...(y2 ? {[y2]: r[y2]} : {}) }))
+  const y1 = numCols[0], y2 = numCols[1]
+  // Use a short code column as label if available; fall back to first string col
+  const labelKey = strCols.find(c => _CODE_COLS.test(c)) || strCols[0]
+  // Keep the full-name column for tooltip if we're using a code as label
+  const nameKey  = labelKey !== strCols[0] ? strCols[0] : null
+  const chartData = data.slice(0,20).map(r => ({
+    name:     String(r[labelKey] || '').slice(0, 14),
+    _tooltip: nameKey ? String(r[nameKey] || '') : null,
+    [y1]: r[y1],
+    ...(y2 ? {[y2]: r[y2]} : {}),
+  }))
+
+  const CustomTooltip = ({ active, payload, label }) => {
+    if (!active || !payload?.length) return null
+    const fullName = payload[0]?.payload?._tooltip
+    return (
+      <div style={TT}>
+        <p style={{ margin:'0 0 4px', color:'var(--text)', fontWeight:500 }}>{fullName || label}</p>
+        {payload.map(p => (
+          <p key={p.dataKey} style={{ margin:'2px 0', color: p.color }}>{p.name}: {p.value?.toLocaleString()}</p>
+        ))}
+      </div>
+    )
+  }
 
   return (
     <div style={{ marginTop:14, background:'rgba(255,255,255,0.02)', borderRadius:10, padding:14, border:'1px solid var(--border)' }}>
@@ -41,7 +67,7 @@ function ResultChart({ columns, data }) {
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
           <XAxis dataKey="name" tick={{fontSize:10,fill:'#5a5f7d'}} axisLine={false} tickLine={false} />
           <YAxis tick={{fontSize:10,fill:'#5a5f7d'}} axisLine={false} tickLine={false} />
-          <Tooltip contentStyle={TT} />
+          <Tooltip content={<CustomTooltip />} />
           <Bar dataKey={y1} fill="var(--blue)" radius={[4,4,0,0]} barSize={data.length > 10 ? 8 : 20} />
           {y2 && <Line dataKey={y2} stroke="var(--green)" strokeWidth={2} dot={false} />}
         </ComposedChart>
