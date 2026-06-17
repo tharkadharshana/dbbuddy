@@ -906,8 +906,13 @@ def delete_user_data(user_email: str):
         (user_email,)
     )
     cursor.execute("DELETE FROM user_integrations WHERE user_email = %s", (user_email,))
-    cursor.execute("DELETE FROM user_credits WHERE user_email = %s", (user_email,))
-    cursor.execute("DELETE FROM credit_usage_log WHERE user_email = %s", (user_email,))
+    # user_credits / credit_usage_log are legacy tables dropped by billing migrations —
+    # guard against environments where they no longer exist
+    for _legacy in ("user_credits", "credit_usage_log"):
+        try:
+            cursor.execute(f"DELETE FROM {_legacy} WHERE user_email = %s", (user_email,))
+        except Exception:
+            pass
     conn.commit()
     conn.close()
     log.info("All user data deleted", user=user_email)
