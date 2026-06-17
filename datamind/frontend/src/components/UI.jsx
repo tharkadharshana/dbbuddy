@@ -49,27 +49,25 @@ const _fmtTok = (raw) => {
   return Math.round(n).toLocaleString()
 }
 
-// BILLING HIDDEN — UsageMeter commented out
-// export function UsageMeter({ sub }) {
-//   if (!sub || sub.status === 'no_subscription') return null
-//   const used  = sub.tokens_used  || 0
-//   const total = sub.tokens_total_available || sub.tokens_limit || 1
-//   const pct   = Math.min(100, Math.round((used / total) * 100))
-//   const color = pct >= 100 ? 'var(--red)' : pct >= 80 ? 'var(--amber)' : 'var(--blue)'
-//   return (
-//     <div style={{ display:'flex', flexDirection:'column', gap:4, padding:'7px 12px', borderRadius:'var(--r-md)', border:'1px solid var(--border)', background:'var(--bg2)', minWidth:160 }}>
-//       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:6 }}>
-//         <span style={{ fontSize:12, fontWeight:600, color:'var(--text2)' }}>⚡ Tokens</span>
-//         <span style={{ fontSize:10, color, fontFamily:'var(--mono)' }}>{pct}%</span>
-//       </div>
-//       <div style={{ height:3, borderRadius:99, background:'var(--bg3)', overflow:'hidden' }}>
-//         <div style={{ height:'100%', width:`${pct}%`, borderRadius:99, background:color, transition:'width .3s' }} />
-//       </div>
-//       <div style={{ fontSize:9, color:'var(--text3)', fontFamily:'var(--mono)' }}>{_fmtTok(used)} / {_fmtTok(total)}</div>
-//     </div>
-//   )
-// }
-export function UsageMeter() { return null }
+export function UsageMeter({ sub }) {
+  if (!sub || sub.status === 'no_subscription') return null
+  const used  = sub.tokens_used  || 0
+  const total = sub.tokens_total_available || sub.tokens_limit || 1
+  const pct   = Math.min(100, Math.round((used / total) * 100))
+  const color = pct >= 100 ? 'var(--red)' : pct >= 80 ? 'var(--amber)' : 'var(--blue)'
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:4, padding:'7px 12px', borderRadius:'var(--r-md)', border:'1px solid var(--border)', background:'var(--bg2)', minWidth:160 }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:6 }}>
+        <span style={{ fontSize:12, fontWeight:600, color:'var(--text2)' }}>⚡ Tokens</span>
+        <span style={{ fontSize:10, color, fontFamily:'var(--mono)' }}>{pct}%</span>
+      </div>
+      <div style={{ height:3, borderRadius:99, background:'var(--bg3)', overflow:'hidden' }}>
+        <div style={{ height:'100%', width:`${pct}%`, borderRadius:99, background:color, transition:'width .3s' }} />
+      </div>
+      <div style={{ fontSize:9, color:'var(--text3)', fontFamily:'var(--mono)' }}>{_fmtTok(used)} / {_fmtTok(total)}</div>
+    </div>
+  )
+}
 
 export function Spinner2({ label='Loading…' }) {
   return (

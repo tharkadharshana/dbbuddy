@@ -1622,7 +1622,10 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
         # ── Question classification ───────────────────────────────────────────
         steps.append({"label": "Analyzing your question", "status": "done"})
         table_names_str = ", ".join(list(schemas.keys())[:20])
-        classification = classify_question(req.question, table_names_str, llm, api_key, user["email"], app_name=_APP_NAME)
+        classification = classify_question(
+            req.question, table_names_str, llm, api_key, user["email"],
+            app_name=_APP_NAME, conversation_history=conv_history,
+        )
         q_type = classification.get("type", "data_query")
 
         row_limit = history["row_limit"]

@@ -400,6 +400,7 @@ def classify_question(
     question: str, table_names: str,
     llm: str, api_key: str, user_email: str,
     app_name: str = "DataMind",
+    conversation_history: str = "",
 ) -> dict:
     """
     Classify the user question to determine handling strategy.
@@ -412,12 +413,16 @@ def classify_question(
         '{"type":"data_query"} — question about data that exists in the database\n'
         '{"type":"multi_step","sub_questions":["q1","q2"]} — clearly contains 2+ separate data queries; '
         "only use this when two or more genuinely distinct SQL queries are needed\n"
-        '{"type":"conversational","response":"..."} — greeting, small talk, or meta-questions (who are you, help, what can you do)\n'
-        '{"type":"clarification_needed","clarification":"..."} — too vague to answer without more context\n'
-        f"For conversational: respond as {app_name}, a friendly AI data assistant.\n"
-        "For clarification_needed: ask one specific clarifying question."
+        '{"type":"conversational","response":"..."} — greeting, small talk, thank-you, out-of-scope questions, '
+        "or any request to modify/delete/create data (INSERT/UPDATE/DELETE/DROP/TRUNCATE/ALTER). "
+        f"For harmful/destructive requests respond with a polite refusal as {app_name}. "
+        f"For all others respond as {app_name}, a friendly AI data assistant.\n"
+        '{"type":"clarification_needed","clarification":"..."} — the question is about data but too vague to answer; '
+        "ask ONE specific clarifying question. Only use this when the intent is clearly a data query but key details are missing.\n"
+        "IMPORTANT: Use conversation history (if provided) to understand follow-up questions and pronouns like 'they', 'those', 'it'."
     )
-    prompt = f"Available tables: {table_names}\nQuestion: {question}"
+    history_block = f"\nConversation so far:\n{conversation_history}\n" if conversation_history else ""
+    prompt = f"Available tables: {table_names}{history_block}\nQuestion: {question}"
     try:
         raw = call_llm(prompt, system, llm, max_tokens=400, api_key=api_key, user_email=user_email)
         raw = raw.strip()
