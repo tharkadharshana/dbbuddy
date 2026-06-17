@@ -242,7 +242,7 @@ function Message({ msg, theme }) {
                 <ResultTable columns={msg.data.columns} data={msg.data.data} rowCount={msg.data.row_count} />
               </>
             )}
-            {msg.data?.row_count === 0 && (
+            {msg.data?.type === 'data' && msg.data?.row_count === 0 && (
               <div style={{ fontSize:11, color:'var(--text3)', marginTop:6 }}>No results found.</div>
             )}
           </>
@@ -368,13 +368,22 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
     try {
       const data = await embedRunQuery(q, 'default', thinkMode, currentConvId)
       const rowCount = data.row_count
-      const numCol   = data.columns?.find(c => typeof data.data?.[0]?.[c] === 'number')
-      let summary = `Found ${rowCount} result${rowCount !== 1 ? 's' : ''}`
-      if (numCol && data.data?.[0]) {
-        const total = data.data.reduce((s, r) => s + (r[numCol] || 0), 0)
-        summary += ` · ${numCol.replace(/_/g, ' ')}: ${total.toLocaleString(undefined, { maximumFractionDigits:2 })}`
+      const type     = data.type
+      let summary
+
+      if (type === 'conversational' || type === 'clarification') {
+        summary = data.message || 'How can I help you with your data?'
+      } else if (!data.success || type === 'error') {
+        summary = data.message || 'Something went wrong. Please try again.'
+      } else {
+        const numCol = data.columns?.find(c => typeof data.data?.[0]?.[c] === 'number')
+        summary = `Found ${rowCount} result${rowCount !== 1 ? 's' : ''}`
+        if (numCol && data.data?.[0]) {
+          const total = data.data.reduce((s, r) => s + (r[numCol] || 0), 0)
+          summary += ` · ${numCol.replace(/_/g, ' ')}: ${total.toLocaleString(undefined, { maximumFractionDigits:2 })}`
+        }
+        if (rowCount === 0) summary = 'No matching records found for your query.'
       }
-      if (rowCount === 0) summary = 'No matching records found for your query.'
 
       setMessages(m => m.map(msg =>
         msg.id === thinkMsg.id
