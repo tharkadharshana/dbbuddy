@@ -1505,10 +1505,10 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
     # ── AI limit check ────────────────────────────────────────────────────────
     ok, reason = check_ai_limit(user["email"])
     if not ok:
-        log.warning("AI limit exceeded", user=user["email"])
+        log.warning("AI limit exceeded", user=user["email"], reason=reason)
         return _base_query_response(
             success=False, type="error", conversation_id=conv_id,
-            message="You've reached your AI usage limit. Please upgrade your plan to continue.",
+            message=reason,
         )
 
     llm = _effective_llm(user, req.llm)
@@ -1519,6 +1519,7 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
     nl_tenant_id = None
     nl_shop_timezone = "UTC"
     nl_last_sync_at = None
+    nl_currency = (s.get("locale") or {}).get("currency") or "$"
     loyverse_hints: list = []
 
     # ── DB connection + table scope setup ────────────────────────────────────
@@ -1635,7 +1636,17 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
         q_type = classification.get("type", "data_query")
 
         row_limit = history["row_limit"]
-        extra_hints = " ".join(loyverse_hints) if loyverse_hints else ""
+        currency_hint = (
+            f"The user's currency is '{nl_currency}'. "
+            f"When writing any narrative that includes monetary amounts, use '{nl_currency}' as the currency symbol — never assume USD or '$'."
+        )
+        extra_hints = " ".join(loyverse_hints + [currency_hint]) if loyverse_hints else currency_hint
+        if nl_tenant_id:
+            # SalesPlay: tell LLM to always include sku in product queries so the
+            # frontend can use it as a short label in charts instead of long product names
+            extra_hints += (
+                " When querying products, always SELECT sku alongside product_name so the UI can use the short code as a chart label."
+            )
         is_integration = s.get("db_configs") is None
 
         # ── Conversational / greeting ─────────────────────────────────────────

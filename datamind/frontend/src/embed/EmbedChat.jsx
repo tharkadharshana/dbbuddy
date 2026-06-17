@@ -10,6 +10,7 @@ import React, { useState, useRef, useEffect } from 'react'
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { embedRunQuery, embedGetSSOHandoff, embedCreateConversation, embedGetSubscription } from './embedApi'
 import { getErrorMessage } from '../utils/api'
+import { formatCurrency } from '../utils/locale'
 import { notifyParent } from './EmbedApp'
 import EmbedHistoryDrawer from './EmbedHistoryDrawer'
 const APP_NAME = import.meta.env.VITE_APP_NAME || 'SalesPlay AI'
@@ -96,21 +97,38 @@ function TypingDots() {
   )
 }
 
+const _CODE_COLS = /^(sku|code|customer_code|shop_id|product_code|item_code)$/i
+
 // ── Chart ─────────────────────────────────────────────────────────────────────
 function ResultChart({ columns, data, theme }) {
   if (!data?.length || !columns?.length) return null
   const numCols = columns.filter(c => typeof data[0]?.[c] === 'number')
   const strCols = columns.filter(c => typeof data[0]?.[c] === 'string')
   if (!numCols.length || !strCols.length || data.length < 2) return null
-  const xKey = strCols[0], y1 = numCols[0], y2 = numCols[1]
+  const y1 = numCols[0], y2 = numCols[1]
   const isLight    = theme === 'light'
   const gridColor  = isLight ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.06)'
   const tickColor  = isLight ? '#6b7280' : '#5a5f7d'
+  const labelKey = strCols.find(c => _CODE_COLS.test(c)) || strCols[0]
+  const nameKey  = labelKey !== strCols[0] ? strCols[0] : null
   const chartData = data.slice(0, 15).map(r => ({
-    name: String(r[xKey] || '').slice(0, 14),
+    name:     String(r[labelKey] || '').slice(0, 14),
+    _tooltip: nameKey ? String(r[nameKey] || '') : null,
     [y1]: r[y1],
     ...(y2 ? { [y2]: r[y2] } : {}),
   }))
+  const CustomTooltip = ({ active, payload, label }) => {
+    if (!active || !payload?.length) return null
+    const fullName = payload[0]?.payload?._tooltip
+    return (
+      <div style={TT}>
+        <p style={{ margin:'0 0 4px', color:'var(--text)', fontWeight:500 }}>{fullName || label}</p>
+        {payload.map(p => (
+          <p key={p.dataKey} style={{ margin:'2px 0', color:p.color }}>{p.name}: {p.value?.toLocaleString()}</p>
+        ))}
+      </div>
+    )
+  }
   return (
     <div style={{ marginTop:10, background:'var(--bg2)', borderRadius:8, padding:10, border:'1px solid var(--border)' }}>
       <ResponsiveContainer width="100%" height={140}>
@@ -118,7 +136,7 @@ function ResultChart({ columns, data, theme }) {
           <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
           <XAxis dataKey="name" tick={{ fontSize:9, fill:tickColor }} axisLine={false} tickLine={false} />
           <YAxis tick={{ fontSize:9, fill:tickColor }} axisLine={false} tickLine={false} />
-          <Tooltip contentStyle={TT} />
+          <Tooltip content={<CustomTooltip />} />
           <Bar dataKey={y1} fill="var(--blue)" radius={[3,3,0,0]} barSize={data.length > 10 ? 6 : 16} />
           {y2 && <Line dataKey={y2} stroke="var(--green)" strokeWidth={1.5} dot={false} />}
         </ComposedChart>
@@ -138,7 +156,7 @@ function ResultTable({ columns, data, rowCount }) {
     if (typeof v === 'number') {
       if (col.includes('revenue') || col.includes('total') || col.includes('amount') ||
           col.includes('price') || col.includes('value') || col.includes('spent'))
-        return <span style={{ color:'var(--blue)', fontFamily:'var(--mono)' }}>${Number(v).toLocaleString()}</span>
+        return <span style={{ color:'var(--blue)', fontFamily:'var(--mono)' }}>{formatCurrency(v)}</span>
       if (col.includes('pct') || col.includes('rate') || col.includes('percent'))
         return <span style={{ color: v > 0 ? 'var(--green)' : 'var(--red)', fontFamily:'var(--mono)' }}>{v > 0 ? '+' : ''}{v}%</span>
       return <span style={{ fontFamily:'var(--mono)', color:'var(--blue)' }}>{Number(v).toLocaleString()}</span>
