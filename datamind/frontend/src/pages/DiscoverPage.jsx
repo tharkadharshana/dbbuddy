@@ -307,7 +307,6 @@ export default function DiscoverPage({ llm, setLlm, sub, onNavigate, onQueryComp
   const categories = ['All', ...new Set(catalogue.map(c => c.category))]
   const visible = filter === 'All' ? catalogue : catalogue.filter(c => c.category === filter)
 
-  if (sub && !sub.can_use_ai) return <AIQuotaWall sub={sub} onNavigate={onNavigate} />
 
   // Show build progress screen
   if (building) return <BuildProgress onDone={() => { setBuilding(false); load() }} />

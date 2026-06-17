@@ -50,7 +50,6 @@ export default function AnomalyPage({ sub, onNavigate, onQueryComplete }) {
 
   const chartData = result?.series.map(s => ({ date:s.date, score:s.score, anomaly: s.is_anomaly ? s.score : null })) || []
 
-  if (sub && !sub.can_use_ai) return <AIQuotaWall sub={sub} onNavigate={onNavigate} />
 
   return (
     <div style={{ padding:20, display:'flex', flexDirection:'column', gap:14, height:'100%', overflowY:'auto' }}>

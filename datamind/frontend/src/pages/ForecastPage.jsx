@@ -59,7 +59,6 @@ export default function ForecastPage({ sub, onNavigate, onQueryComplete }) {
   const weeklyData = result ? Object.entries(result.weekly_seasonality||{}).map(([day,val]) => ({ day: day.slice(0,3), value:+val.toFixed(2) })) : []
   const { summary } = result || {}
 
-  if (sub && !sub.can_use_ai) return <AIQuotaWall sub={sub} onNavigate={onNavigate} />
 
   return (
     <div style={{ padding:20, display:'flex', flexDirection:'column', gap:14, height:'100%', overflowY:'auto' }}>
