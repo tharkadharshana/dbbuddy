@@ -299,16 +299,28 @@ def _enforce_date_filter(sql: str, history_months: int) -> str:
     this function is mandatory server-side enforcement.
 
     Strategy:
-      - If the SQL already contains a created_at comparison (the LLM handled it),
-        return unchanged.
-      - Otherwise find the primary sp_*/ly_* FROM table alias and inject
-        AND alias.created_at >= DATE_SUB(CURDATE(), INTERVAL N MONTH)
-        into the WHERE clause (or create one if absent).
+      - Only applies when the query touches a transactional table (sp_receipts or
+        sp_receipt_line_items / ly_receipts or ly_receipt_line_items). Reference
+        tables (products, categories, shops, customers, payment_types) are catalogue
+        data that must never be date-filtered — their created_at reflects when the
+        record was created in the POS, not a transaction date, and for products it
+        is often NULL entirely.
+      - If the SQL already contains a created_at comparison, trust the LLM.
+      - Otherwise inject AND alias.created_at >= DATE_SUB(CURDATE(), INTERVAL N MONTH)
+        into the WHERE clause of the primary transactional table.
 
     Only applied to integration users (sp_*/ly_* tables) where the date column
     is always created_at. Not applied to own-DB users — unknown schema.
     """
     if not history_months:
+        return sql
+
+    # Only enforce on transactional tables — never on reference/catalogue tables.
+    _TRANSACTIONAL = re.compile(
+        r'\b(sp_receipts|sp_receipt_line_items|ly_receipts|ly_receipt_line_items)\b',
+        re.IGNORECASE,
+    )
+    if not _TRANSACTIONAL.search(sql):
         return sql
 
     # If LLM already applied a date filter on created_at, trust it.
@@ -324,7 +336,16 @@ def _enforce_date_filter(sql: str, history_months: int) -> str:
     if not m:
         return sql  # no shared table found — nothing to inject
 
-    alias = (m.group(2) or m.group(1)).strip('`')
+    _SQL_RESERVED = frozenset({
+        'WHERE', 'GROUP', 'ORDER', 'LIMIT', 'HAVING', 'ON', 'SET',
+        'INNER', 'LEFT', 'RIGHT', 'CROSS', 'FULL', 'JOIN', 'UNION',
+        'SELECT', 'FROM', 'AND', 'OR', 'NOT', 'IN', 'IS', 'NULL',
+        'AS', 'BY', 'ASC', 'DESC', 'WITH', 'USING',
+    })
+    alias_candidate = m.group(2)
+    if alias_candidate and alias_candidate.strip('`').upper() in _SQL_RESERVED:
+        alias_candidate = None
+    alias = (alias_candidate or m.group(1)).strip('`')
     date_cond = (
         f"{alias}.created_at >= DATE_SUB(CURDATE(), INTERVAL {history_months} MONTH)"
     )
