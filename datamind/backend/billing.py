@@ -188,12 +188,15 @@ def bootstrap_billing_tables():
                 id              INT AUTO_INCREMENT PRIMARY KEY,
                 user_email      VARCHAR(255)  NOT NULL,
                 tokens          INT           NOT NULL DEFAULT 0,
-                model           VARCHAR(50),
-                endpoint        VARCHAR(255),
+                provider        VARCHAR(30)   DEFAULT NULL,
+                model           VARCHAR(100)  DEFAULT NULL,
+                endpoint        VARCHAR(100)  DEFAULT NULL,
                 credits_charged DECIMAL(10,4) NOT NULL DEFAULT 0,
                 created_at      TIMESTAMP     DEFAULT CURRENT_TIMESTAMP,
-                INDEX idx_llm_email   (user_email),
-                INDEX idx_llm_created (created_at)
+                INDEX idx_llm_email    (user_email),
+                INDEX idx_llm_created  (created_at),
+                INDEX idx_llm_provider (provider),
+                INDEX idx_llm_model    (model)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """)
 
@@ -221,6 +224,19 @@ def bootstrap_billing_tables():
                 cur.execute(_stmt)
             except Exception:
                 pass  # column already exists
+
+        # ── Add new columns to existing tables (idempotent — skipped if already present) ──
+        for _stmt in [
+            "ALTER TABLE llm_usage_log ADD COLUMN provider VARCHAR(30) DEFAULT NULL AFTER tokens",
+            "ALTER TABLE llm_usage_log MODIFY COLUMN model VARCHAR(100) DEFAULT NULL",
+            "ALTER TABLE llm_usage_log MODIFY COLUMN endpoint VARCHAR(100) DEFAULT NULL",
+            "ALTER TABLE llm_usage_log ADD INDEX idx_llm_provider (provider)",
+            "ALTER TABLE llm_usage_log ADD INDEX idx_llm_model (model)",
+        ]:
+            try:
+                cur.execute(_stmt)
+            except Exception:
+                pass  # column/index already exists
 
         # ── Drop stale columns (idempotent — already-gone columns are silently skipped) ──
         for _stmt in [
@@ -900,19 +916,26 @@ def charge_tokens(user_email: str, tokens: float, operation_type: str,
         conn.close()
 
 
-def charge_ai_usage(user_email: str, tokens: int, model: str, endpoint: str, api_key_cost: float = 0.0):
-    """Log an LLM call to llm_usage_log (historical) and forward to charge_tokens for unified tracking."""
+def charge_ai_usage(user_email: str, tokens: int, provider: str,
+                    model: str, operation: str = "llm_call"):
+    """Log an LLM call to llm_usage_log and forward to charge_tokens for unified tracking.
+
+    provider  — LLM vendor: "openai" | "gemini" | "deepseek"
+    model     — specific model ID returned by the API: "gpt-4o-mini", "gemini-2.0-flash", etc.
+    operation — logical call type: "classify" | "sql_gen" | "synthesize" | "think" | "report" | ...
+                stored in endpoint for cost-per-operation breakdown queries.
+    """
     rate = get_ai_credit_rate()
     credits_charged = round(tokens / 1000 * rate, 4)
 
-    # 1. LLM-specific audit log (historical — kept for LLM call detail)
+    # 1. LLM-specific audit log
     try:
         conn = _get_conn()
         cur = conn.cursor()
         cur.execute("""
-            INSERT INTO llm_usage_log (user_email, tokens, model, endpoint, credits_charged)
-            VALUES (%s, %s, %s, %s, %s)
-        """, (user_email, tokens, model, endpoint, credits_charged))
+            INSERT INTO llm_usage_log (user_email, tokens, provider, model, endpoint, credits_charged)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (user_email, tokens, provider, model, operation, credits_charged))
         conn.commit()
         cur.close(); conn.close()
     except Exception as e:

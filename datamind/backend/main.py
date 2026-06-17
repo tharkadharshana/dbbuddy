@@ -783,7 +783,7 @@ def _background_build(email: str, db_config: dict, llm: str, api_key: str):
             log.debug("Cache build progress", user=email, step=msg)
 
         def llm_caller(prompt, system, llm_name, max_tokens):
-            return call_llm(prompt, system, llm_name, max_tokens, api_key=api_key, user_email=email)
+            return call_llm(prompt, system, llm_name, max_tokens, api_key=api_key, user_email=email, operation="cache_build")
 
         cache_data = build_schema_cache(
             conn=conn, schemas=schemas, fkeys=fkeys, samples=samples,
@@ -1483,6 +1483,7 @@ def _run_think_analysis(question: str, columns: list, data: list,
         max_tokens=400,
         api_key=api_key,
         user_email=user_email,
+        operation="think",
     )
 
 

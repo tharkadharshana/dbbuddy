@@ -155,8 +155,10 @@ def call_openai(prompt: str, system: str = "", max_tokens: int = 2000,
             result = data["choices"][0]["message"]["content"].strip()
             usage = data.get("usage", {})
             tokens_used = usage.get("total_tokens", 0)
-            log.debug("OpenAI response received", response_len=len(result), tokens=tokens_used, user=user_email)
-            return result, tokens_used
+            model_used = data.get("model", body["model"])
+            log.debug("OpenAI response received", response_len=len(result), tokens=tokens_used,
+                      model=model_used, user=user_email)
+            return result, tokens_used, model_used
 
         except requests.exceptions.Timeout:
             log.warning("OpenAI API timeout", attempt=attempt, user=user_email)
@@ -236,7 +238,7 @@ def call_gemini(prompt: str, system: str = "", max_tokens: int = 2000,
             usage_metadata = data.get("usageMetadata", {})
             tokens_used = usage_metadata.get("totalTokenCount", 0)
             log.debug("Gemini response OK", model=model, response_len=len(result), tokens=tokens_used, user=user_email)
-            return result, tokens_used
+            return result, tokens_used, model
 
         except requests.exceptions.Timeout:
             log.warning("Gemini timeout", model=model, user=user_email)
@@ -299,8 +301,10 @@ def call_deepseek(prompt: str, system: str = "", max_tokens: int = 2000,
             usage = data.get("usage", {})
             tokens_used = usage.get("total_tokens", 0)
 
-            log.debug("DeepSeek response received", response_len=len(result), tokens=tokens_used, user=user_email)
-            return result, tokens_used
+            model_used = data.get("model", body["model"])
+            log.debug("DeepSeek response received", response_len=len(result), tokens=tokens_used,
+                      model=model_used, user=user_email)
+            return result, tokens_used, model_used
 
         except requests.exceptions.Timeout:
             log.warning("DeepSeek API timeout", attempt=attempt, user=user_email)
@@ -348,9 +352,14 @@ def get_llm_priority() -> list:
 
 
 def call_llm(prompt: str, system: str = "", llm: str = "openai",
-             max_tokens: int = 2000, api_key: str = "", user_email: str = None) -> str:
+             max_tokens: int = 2000, api_key: str = "", user_email: str = None,
+             operation: str = "llm_call") -> str:
     """
     Main dispatcher with per-provider key pool + cross-provider fallback.
+
+    operation — logical name of the call (classify / sql_gen / synthesize /
+                think / report / validate) stored in llm_usage_log.endpoint
+                so cost-per-operation queries are possible.
 
     For each provider in priority order:
       - Builds a key pool (user key first, then any comma-separated env keys)
@@ -386,15 +395,16 @@ def call_llm(prompt: str, system: str = "", llm: str = "openai",
             try:
                 log.debug("LLM dispatch attempt", provider=provider,
                           key_tail=key[-4:], user=user_email)
-                result, tokens = _call_one(provider, key)
+                result, tokens, model_id = _call_one(provider, key)
                 _unpark_key(provider, key)
                 if provider != requested:
                     log.info("LLM provider fallback succeeded",
-                             requested=requested, used=provider, user=user_email)
+                             requested=requested, used=provider, model=model_id,
+                             user=user_email)
                 if user_email:
                     try:
                         from billing import charge_ai_usage, invalidate_sub_cache
-                        charge_ai_usage(user_email, tokens or 0, provider, "llm_call")
+                        charge_ai_usage(user_email, tokens or 0, provider, model_id, operation)
                         invalidate_sub_cache(user_email)
                     except Exception as _ce:
                         log.warning("charge_ai_usage failed silently", error=str(_ce))
@@ -443,7 +453,7 @@ def validate_llm_key(llm: str, api_key: str) -> Dict[str, Any]:
     log.info("Validating LLM API key", llm=llm)
     test_prompt = "Reply with exactly the word: WORKING"
     try:
-        result = call_llm(test_prompt, "", llm, max_tokens=20, api_key=api_key, user_email=None)
+        result = call_llm(test_prompt, "", llm, max_tokens=20, api_key=api_key, user_email=None, operation="validate")
         ok = "WORKING" in result.upper() or len(result.strip()) > 0
         log.info("LLM key validation result", llm=llm, ok=ok, response=result[:50])
         return {"ok": ok, "model": llm, "response": result.strip()}
@@ -485,7 +495,7 @@ def classify_question(
     history_block = f"\nConversation so far:\n{conversation_history}\n" if conversation_history else ""
     prompt = f"Available tables: {table_names}{history_block}\nQuestion: {question}"
     try:
-        raw = call_llm(prompt, system, llm, max_tokens=400, api_key=api_key, user_email=user_email)
+        raw = call_llm(prompt, system, llm, max_tokens=400, api_key=api_key, user_email=user_email, operation="classify")
         raw = raw.strip()
         if raw.startswith("```"):
             raw = re.sub(r"^```[a-z]*\n?", "", raw).rstrip("`").strip()
@@ -519,7 +529,7 @@ def synthesize_multi_step_answer(
     )
     prompt = f"Question: {original_question}\n\n" + "\n\n".join(parts) + "\n\nAnswer:"
     try:
-        return call_llm(prompt, system, llm, max_tokens=600, api_key=api_key, user_email=user_email)
+        return call_llm(prompt, system, llm, max_tokens=600, api_key=api_key, user_email=user_email, operation="synthesize")
     except Exception as _se:
         log.warning("Multi-step synthesis failed", error=str(_se))
         return None
@@ -592,7 +602,7 @@ def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "openai",
     )
     prompt = f"Schema:\n{schema_text}\n\nQuestion: {question}\n\nSQL:"
     log.info("Generating SQL from NL question", llm=llm, question=question[:80])
-    raw = call_llm(prompt, system, llm, max_tokens=800, api_key=api_key, user_email=user_email)
+    raw = call_llm(prompt, system, llm, max_tokens=800, api_key=api_key, user_email=user_email, operation="sql_gen")
     sql = raw.replace("```sql", "").replace("```", "").strip()
     log.debug("SQL generated", sql=sql[:200])
     return sql
@@ -633,7 +643,7 @@ def generate_report_summary(title: str, kpis: Dict, section_data: Dict,
         f"Instructions: {length_instruction}"
     )
     log.info("Generating report", llm=llm, title=title, sections=list(section_data.keys()), format=format)
-    return call_llm(prompt, system, llm, max_tokens=2500, api_key=api_key, user_email=user_email)
+    return call_llm(prompt, system, llm, max_tokens=2500, api_key=api_key, user_email=user_email, operation="report")
 
 
 def list_gemini_models(api_key: str) -> list:
