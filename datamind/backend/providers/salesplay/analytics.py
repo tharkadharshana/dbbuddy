@@ -85,7 +85,7 @@ TEMPLATES = {
         "sql": """
             SELECT
                 product_name                            AS product,
-                COALESCE(NULLIF(category_name, ''), '—') AS category,
+                COALESCE(NULLIF(category_name, ''), 'Uncategorized') AS category,
                 SUM(quantity)                           AS units_sold,
                 ROUND(SUM(total_money), 2)              AS revenue,
                 ROUND(AVG(price), 2)                    AS avg_price
