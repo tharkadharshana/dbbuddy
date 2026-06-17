@@ -1497,6 +1497,7 @@ class NLQueryRequest(BaseModel):
 @v1.post("/query")
 @_limiter.limit(RL_COMPUTE)
 def natural_language_query(request: Request, req: NLQueryRequest, user: dict = Depends(current_user)):
+    log = get_logger(__name__)   # local — lets us rebind with log = log.bind(...) later without UnboundLocalError
     conn = None
     steps: list = []
     conv_id = req.conversation_id or None
