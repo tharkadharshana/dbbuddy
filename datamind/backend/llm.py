@@ -27,18 +27,34 @@ _SENSITIVE_COL_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Columns that are internal system plumbing on every sp_*/ly_* shared table.
+# tenant_id  — multi-tenancy routing key, injected by server, never a user column.
+# synced_at  — our internal write timestamp, meaningless to business users.
+# The LLM must not SELECT these; keeping them out of the schema it sees is the
+# cleanest way to enforce that without relying on prompt instructions alone.
+_SP_INTERNAL_COLS = frozenset({"tenant_id", "synced_at"})
+
 def _filter_sensitive_schema(schemas: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Strip columns whose names match sensitive security patterns before the
-    schema is sent to an external LLM provider. Analytics queries have no
-    legitimate need for password hashes, API keys, or card numbers.
+    Strip columns before the schema is sent to an external LLM provider:
+    - Security-sensitive columns (passwords, API keys, card numbers).
+    - Internal system columns on sp_*/ly_* shared tables (tenant_id, synced_at)
+      that are routing/audit fields with no business meaning to end users.
     """
     filtered: Dict[str, Any] = {}
     for table, cols in schemas.items():
-        safe_cols = [c for c in cols if not _SENSITIVE_COL_RE.search(c.get("name", ""))]
+        is_shared = table.startswith(("sp_", "ly_"))
+        safe_cols = []
+        for c in cols:
+            name = c.get("name", "")
+            if _SENSITIVE_COL_RE.search(name):
+                continue
+            if is_shared and name in _SP_INTERNAL_COLS:
+                continue
+            safe_cols.append(c)
         dropped = len(cols) - len(safe_cols)
         if dropped:
-            log.debug("Schema filter: dropped sensitive columns",
+            log.debug("Schema filter: dropped internal/sensitive columns",
                       table=table, dropped=dropped)
         filtered[table] = safe_cols
     return filtered
@@ -410,6 +426,9 @@ def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "openai",
             f"due to customer_id linkage gaps. Only join sp_receipts if you need individual "
             f"receipt-level rows (e.g. itemised breakdown), never for aggregates.\n\n"
             f"{_sp_rules}"
+            f"\n\nNever include tenant_id or synced_at in SELECT output — "
+            f"they are internal system columns that mean nothing to business users. "
+            f"Only SELECT columns that have direct business meaning."
         )
     else:
         tenant_hint = ""
