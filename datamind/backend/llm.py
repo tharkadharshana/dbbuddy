@@ -21,7 +21,58 @@ _TRANSIENT_STATUS = {429, 500, 502, 503, 504}
 
 
 class LLMTransientError(Exception):
-    """Raised when all LLM retry attempts fail due to rate limits or server errors."""
+    """Raised when all retry attempts for one key fail due to rate limits or server errors."""
+
+
+# ── API Key Pool ──────────────────────────────────────────────────────────────
+# Maps (provider, key_fingerprint) → unix timestamp when the key can be retried.
+# Values:
+#   < now  → key is available
+#   > now  → key is in cooldown (rate-limited or auth-failed)
+#   == inf → key is permanently blacklisted (401/403)
+_key_cooldowns: Dict[str, float] = {}
+_KEY_RL_COOLDOWN  = 60.0    # seconds to park a key after a 429 / transient error
+_KEY_AUTH_COOLDOWN = 3600.0  # seconds to park a key after a 401/403
+
+
+def _key_fp(provider: str, key: str) -> str:
+    """Stable, non-sensitive fingerprint for (provider, key) pair."""
+    return f"{provider}:{key[-8:] if len(key) > 8 else key}"
+
+
+def _key_available(provider: str, key: str) -> bool:
+    return time.time() >= _key_cooldowns.get(_key_fp(provider, key), 0.0)
+
+
+def _park_key(provider: str, key: str, duration: float):
+    _key_cooldowns[_key_fp(provider, key)] = time.time() + duration
+
+
+def _unpark_key(provider: str, key: str):
+    _key_cooldowns.pop(_key_fp(provider, key), None)
+
+
+def _build_key_pool(provider: str, user_key: str = "") -> List[str]:
+    """
+    Return ordered list of real keys to try for a provider.
+    User's own key is always first (if valid).
+    Remaining keys come from the env var, which may be comma-separated:
+      OPENAI_API_KEY=sk-key1,sk-key2,sk-key3
+    Available (non-cooled) keys come first; cooled keys are appended as fallback
+    so the pool never completely empties.
+    """
+    env_raw = os.getenv(f"{provider.upper()}_API_KEY", "")
+    seen: set = set()
+    candidates: List[str] = []
+    for k in ([user_key] + env_raw.split(",")):
+        k = k.strip()
+        if _is_real_key(k) and k not in seen:
+            seen.add(k)
+            candidates.append(k)
+    # Put available keys first, cooled keys at the end
+    available = [k for k in candidates if _key_available(provider, k)]
+    cooled    = [k for k in candidates if not _key_available(provider, k)]
+    return available + cooled
 
 from logger import get_logger
 from db import schema_to_text
@@ -57,11 +108,11 @@ log = get_logger(__name__)
 # ── Core callers ──────────────────────────────────────────────────────────────
 
 def call_openai(prompt: str, system: str = "", max_tokens: int = 2000,
-                api_key: str = "") -> tuple:
+                api_key: str = "", user_email: str = None) -> tuple:
     """
     Call OpenAI's Chat Completions API and return (response_text, tokens_used).
     """
-    key = api_key or os.getenv("OPENAI_API_KEY", "")
+    key = api_key or os.getenv("OPENAI_API_KEY", "").split(",")[0].strip()
     if not key or key in ("your_openai_api_key_here", ""):
         raise ValueError(
             "OpenAI API key is not set. Go to Settings → LLM API Keys and add your key."
@@ -81,55 +132,54 @@ def call_openai(prompt: str, system: str = "", max_tokens: int = 2000,
         "temperature": 0.2,
         "max_tokens": max_tokens,
     }
-    log.debug("Calling OpenAI API", max_tokens=max_tokens, prompt_len=len(prompt))
+    log.debug("Calling OpenAI API", max_tokens=max_tokens, prompt_len=len(prompt), user=user_email)
     for attempt in range(3):
         try:
             resp = requests.post(url, json=body, headers=headers, timeout=90)
             if not resp.ok:
                 err_body = resp.text[:300]
                 log.warning("OpenAI API error response",
-                            status=resp.status_code, body=err_body, attempt=attempt)
+                            status=resp.status_code, body=err_body, attempt=attempt, user=user_email)
                 if resp.status_code in (401, 403):
                     raise ValueError(f"OpenAI API key is invalid or has no credits. "
                                      f"Status {resp.status_code}: {err_body}")
                 if resp.status_code in _TRANSIENT_STATUS and attempt < 2:
                     wait = int(resp.headers.get("Retry-After", 2 ** (attempt + 1)))
                     log.warning("OpenAI transient error, backing off",
-                                status=resp.status_code, attempt=attempt, wait_s=wait)
+                                status=resp.status_code, attempt=attempt, wait_s=wait, user=user_email)
                     time.sleep(wait)
                     continue
                 resp.raise_for_status()
 
             data = resp.json()
             result = data["choices"][0]["message"]["content"].strip()
-
-            # Extract token usage
             usage = data.get("usage", {})
             tokens_used = usage.get("total_tokens", 0)
-
-            log.debug("OpenAI response received", response_len=len(result), tokens=tokens_used)
-            return result, tokens_used
+            model_used = data.get("model", body["model"])
+            log.debug("OpenAI response received", response_len=len(result), tokens=tokens_used,
+                      model=model_used, user=user_email)
+            return result, tokens_used, model_used
 
         except requests.exceptions.Timeout:
-            log.warning("OpenAI API timeout", attempt=attempt)
+            log.warning("OpenAI API timeout", attempt=attempt, user=user_email)
             if attempt == 2:
                 raise LLMTransientError("OpenAI API timed out. Please try again in a moment.")
             time.sleep(2 ** (attempt + 1))
         except ValueError:
             raise
         except Exception as e:
-            log.error("OpenAI API exception", error=str(e), attempt=attempt)
+            log.error("OpenAI API exception", error=str(e), attempt=attempt, user=user_email)
             if attempt == 2:
-                raise LLMTransientError(f"OpenAI is temporarily unavailable. Please try again in a moment.")
+                raise LLMTransientError("OpenAI is temporarily unavailable. Please try again in a moment.")
             time.sleep(2 ** (attempt + 1))
 
 
 def call_gemini(prompt: str, system: str = "", max_tokens: int = 2000,
-                api_key: str = "") -> tuple:
+                api_key: str = "", user_email: str = None) -> tuple:
     """
     Call Gemini API and return (response_text, tokens_used).
     """
-    key = api_key or os.getenv("GEMINI_API_KEY", "")
+    key = api_key or os.getenv("GEMINI_API_KEY", "").split(",")[0].strip()
     if not key or key in ("your_gemini_api_key_here", ""):
         raise ValueError(
             "Gemini API key is not set. Go to Settings → LLM API Keys and add your key."
@@ -150,22 +200,22 @@ def call_gemini(prompt: str, system: str = "", max_tokens: int = 2000,
         "contents": [{"parts": [{"text": f"{system}\n\n{prompt}" if system else prompt}]}],
         "generationConfig": {"temperature": 0.2, "maxOutputTokens": max_tokens},
     }
-    log.debug("Calling Gemini API", max_tokens=max_tokens, prompt_len=len(prompt))
+    log.debug("Calling Gemini API", max_tokens=max_tokens, prompt_len=len(prompt), user=user_email)
 
     for model in MODELS:
         url = f"{BASE}/{model}:generateContent?key={key}"
-        log.debug("Trying Gemini model", model=model)
+        log.debug("Trying Gemini model", model=model, user=user_email)
         try:
             resp = requests.post(url, json=body, timeout=90)
 
             if resp.status_code == 404:
-                log.debug("Gemini model not found, trying next", model=model)
-                continue  # try next model in chain
+                log.debug("Gemini model not found, trying next", model=model, user=user_email)
+                continue
 
             if not resp.ok:
                 err_body = resp.text[:400]
                 log.warning("Gemini API error", model=model,
-                            status=resp.status_code, body=err_body)
+                            status=resp.status_code, body=err_body, user=user_email)
                 if resp.status_code in (400, 401, 403):
                     raise ValueError(
                         f"Gemini API key error (status {resp.status_code}): {err_body}"
@@ -173,45 +223,41 @@ def call_gemini(prompt: str, system: str = "", max_tokens: int = 2000,
                 if resp.status_code in _TRANSIENT_STATUS:
                     wait = int(resp.headers.get("Retry-After", 4))
                     log.warning("Gemini transient error, backing off",
-                                model=model, status=resp.status_code, wait_s=wait)
+                                model=model, status=resp.status_code, wait_s=wait, user=user_email)
                     time.sleep(wait)
                     continue
                 resp.raise_for_status()
 
             data = resp.json()
-            # Handle blocked / empty responses
             candidates = data.get("candidates", [])
             if not candidates:
                 block_reason = data.get("promptFeedback", {}).get("blockReason", "unknown")
                 raise ValueError(f"Gemini blocked the request: {block_reason}")
 
             result = candidates[0]["content"]["parts"][0]["text"].strip()
-
-            # Extract token usage
             usage_metadata = data.get("usageMetadata", {})
             tokens_used = usage_metadata.get("totalTokenCount", 0)
-
-            log.debug("Gemini response OK", model=model, response_len=len(result), tokens=tokens_used)
-            return result, tokens_used
+            log.debug("Gemini response OK", model=model, response_len=len(result), tokens=tokens_used, user=user_email)
+            return result, tokens_used, model
 
         except requests.exceptions.Timeout:
-            log.warning("Gemini timeout", model=model)
+            log.warning("Gemini timeout", model=model, user=user_email)
             continue
         except ValueError:
-            raise  # key / block errors bubble up immediately
+            raise
         except Exception as e:
-            log.error("Gemini exception", model=model, error=str(e))
+            log.error("Gemini exception", model=model, error=str(e), user=user_email)
             continue
 
     raise LLMTransientError("Gemini is temporarily unavailable. Please try again in a moment.")
 
 
 def call_deepseek(prompt: str, system: str = "", max_tokens: int = 2000,
-                  api_key: str = "") -> tuple:
+                  api_key: str = "", user_email: str = None) -> tuple:
     """
     Call DeepSeek API and return (response_text, tokens_used).
     """
-    key = api_key or os.getenv("DEEPSEEK_API_KEY", "")
+    key = api_key or os.getenv("DEEPSEEK_API_KEY", "").split(",")[0].strip()
     if not key or key in ("your_deepseek_api_key_here", ""):
         raise ValueError(
             "DeepSeek API key is not set. Go to Settings → LLM API Keys and add your key."
@@ -231,44 +277,44 @@ def call_deepseek(prompt: str, system: str = "", max_tokens: int = 2000,
         "temperature": 0.2,
         "max_tokens": max_tokens,
     }
-    log.debug("Calling DeepSeek API", max_tokens=max_tokens, prompt_len=len(prompt))
+    log.debug("Calling DeepSeek API", max_tokens=max_tokens, prompt_len=len(prompt), user=user_email)
     for attempt in range(3):
         try:
             resp = requests.post(url, json=body, headers=headers, timeout=90)
             if not resp.ok:
                 err_body = resp.text[:300]
                 log.warning("DeepSeek API error response",
-                            status=resp.status_code, body=err_body, attempt=attempt)
+                            status=resp.status_code, body=err_body, attempt=attempt, user=user_email)
                 if resp.status_code in (401, 403):
                     raise ValueError(f"DeepSeek API key is invalid or has no credits. "
                                      f"Status {resp.status_code}: {err_body}")
                 if resp.status_code in _TRANSIENT_STATUS and attempt < 2:
                     wait = int(resp.headers.get("Retry-After", 2 ** (attempt + 1)))
                     log.warning("DeepSeek transient error, backing off",
-                                status=resp.status_code, attempt=attempt, wait_s=wait)
+                                status=resp.status_code, attempt=attempt, wait_s=wait, user=user_email)
                     time.sleep(wait)
                     continue
                 resp.raise_for_status()
 
             data = resp.json()
             result = data["choices"][0]["message"]["content"].strip()
-
-            # Extract token usage
             usage = data.get("usage", {})
             tokens_used = usage.get("total_tokens", 0)
 
-            log.debug("DeepSeek response received", response_len=len(result), tokens=tokens_used)
-            return result, tokens_used
+            model_used = data.get("model", body["model"])
+            log.debug("DeepSeek response received", response_len=len(result), tokens=tokens_used,
+                      model=model_used, user=user_email)
+            return result, tokens_used, model_used
 
         except requests.exceptions.Timeout:
-            log.warning("DeepSeek API timeout", attempt=attempt)
+            log.warning("DeepSeek API timeout", attempt=attempt, user=user_email)
             if attempt == 2:
                 raise LLMTransientError("DeepSeek API timed out. Please try again in a moment.")
             time.sleep(2 ** (attempt + 1))
         except ValueError:
             raise
         except Exception as e:
-            log.error("DeepSeek API exception", error=str(e), attempt=attempt)
+            log.error("DeepSeek API exception", error=str(e), attempt=attempt, user=user_email)
             if attempt == 2:
                 raise LLMTransientError("DeepSeek is temporarily unavailable. Please try again in a moment.")
             time.sleep(2 ** (attempt + 1))
@@ -306,65 +352,90 @@ def get_llm_priority() -> list:
 
 
 def call_llm(prompt: str, system: str = "", llm: str = "openai",
-             max_tokens: int = 2000, api_key: str = "", user_email: str = None) -> str:
+             max_tokens: int = 2000, api_key: str = "", user_email: str = None,
+             operation: str = "llm_call") -> str:
     """
-    Main dispatcher with priority-based fallback.
+    Main dispatcher with per-provider key pool + cross-provider fallback.
 
-    Priority order is determined by:
-      1. The requested `llm` (if it has a real key)
-      2. Then the remaining providers in LLM_PRIORITY env var order
+    operation — logical name of the call (classify / sql_gen / synthesize /
+                think / report / validate) stored in llm_usage_log.endpoint
+                so cost-per-operation queries are possible.
 
-    If a provider has a key but the call fails at runtime (quota, timeout, etc.),
-    it falls through to the next provider in the priority list.
+    For each provider in priority order:
+      - Builds a key pool (user key first, then any comma-separated env keys)
+      - Tries each key in the pool in order
+      - On LLMTransientError (429 / timeout): parks that key for 60 s, tries next key
+      - On ValueError (401/403 bad key): parks that key for 1 h, tries next key
+      - When all keys for a provider are exhausted: moves to the next provider
     """
     requested = (llm or "openai").lower().strip()
 
-    def _env_key(name: str) -> str:
-        return os.getenv(f"{name.upper()}_API_KEY", "").strip()
-
-    def _effective_key(name: str, explicit_key: str = "") -> str:
-        k = (explicit_key or "").strip()
-        return k if _is_real_key(k) else _env_key(name)
-
     def _call_one(name: str, key: str):
         if name == "openai":
-            return call_openai(prompt, system, max_tokens, key)
+            return call_openai(prompt, system, max_tokens, key, user_email=user_email)
         elif name == "deepseek":
-            return call_deepseek(prompt, system, max_tokens, key)
+            return call_deepseek(prompt, system, max_tokens, key, user_email=user_email)
         elif name == "gemini":
-            return call_gemini(prompt, system, max_tokens, key)
+            return call_gemini(prompt, system, max_tokens, key, user_email=user_email)
         raise ValueError(f"Unknown LLM provider: '{name}'")
 
-    # Build the ordered list: requested provider first, then priority order for the rest
     priority = get_llm_priority()
     order = [requested] + [p for p in priority if p != requested]
 
     last_error = None
     for provider in order:
-        key = _effective_key(provider, api_key if provider == requested else "")
-        if not _is_real_key(key):
-            log.debug("LLM provider skipped — no key", provider=provider)
+        user_key = (api_key or "").strip() if provider == requested else ""
+        pool = _build_key_pool(provider, user_key)
+        if not pool:
+            log.debug("LLM provider skipped — no keys in pool",
+                      provider=provider, user=user_email)
             continue
-        try:
-            log.debug("LLM dispatch attempt", provider=provider, user=user_email)
-            result, tokens = _call_one(provider, key)
-            if provider != requested:
-                log.info("LLM fallback succeeded", requested=requested, used=provider, user=user_email)
-            if user_email:
-                try:
-                    from billing import charge_ai_usage, invalidate_sub_cache
-                    charge_ai_usage(user_email, tokens or 0, provider, "llm_call")
-                    invalidate_sub_cache(user_email)
-                except Exception as _ce:
-                    log.warning("charge_ai_usage failed silently", error=str(_ce))
-            return result
-        except ValueError:
-            raise  # key/auth errors are fatal — don't try the next provider
-        except Exception as e:
-            log.warning("LLM provider failed, trying next", provider=provider,
-                        error=str(e), user=user_email)
-            last_error = e
-            continue
+
+        for key in pool:
+            try:
+                log.debug("LLM dispatch attempt", provider=provider,
+                          key_tail=key[-4:], user=user_email)
+                result, tokens, model_id = _call_one(provider, key)
+                _unpark_key(provider, key)
+                if provider != requested:
+                    log.info("LLM provider fallback succeeded",
+                             requested=requested, used=provider, model=model_id,
+                             user=user_email)
+                if user_email:
+                    try:
+                        from billing import charge_ai_usage, invalidate_sub_cache
+                        charge_ai_usage(user_email, tokens or 0, provider, model_id, operation)
+                        invalidate_sub_cache(user_email)
+                    except Exception as _ce:
+                        log.warning("charge_ai_usage failed silently", error=str(_ce))
+                return result
+
+            except LLMTransientError as e:
+                _park_key(provider, key, _KEY_RL_COOLDOWN)
+                log.warning("LLM key rate-limited, cycling to next key",
+                            provider=provider, key_tail=key[-4:],
+                            cooldown_s=_KEY_RL_COOLDOWN, user=user_email)
+                last_error = e
+                continue
+
+            except ValueError as e:
+                _park_key(provider, key, _KEY_AUTH_COOLDOWN)
+                log.warning("LLM key auth failed, cycling to next key",
+                            provider=provider, key_tail=key[-4:],
+                            error=str(e)[:100], cooldown_s=_KEY_AUTH_COOLDOWN,
+                            user=user_email)
+                last_error = e
+                continue
+
+            except Exception as e:
+                log.warning("LLM key call failed, cycling to next key",
+                            provider=provider, key_tail=key[-4:],
+                            error=str(e)[:100], user=user_email)
+                last_error = e
+                continue
+
+        log.warning("All keys exhausted for provider, trying next provider",
+                    provider=provider, pool_size=len(pool), user=user_email)
 
     raise last_error or ValueError(
         f"No LLM provider available. Set at least one API key in Settings or .env "
@@ -382,7 +453,7 @@ def validate_llm_key(llm: str, api_key: str) -> Dict[str, Any]:
     log.info("Validating LLM API key", llm=llm)
     test_prompt = "Reply with exactly the word: WORKING"
     try:
-        result = call_llm(test_prompt, "", llm, max_tokens=20, api_key=api_key, user_email=None)
+        result = call_llm(test_prompt, "", llm, max_tokens=20, api_key=api_key, user_email=None, operation="validate")
         ok = "WORKING" in result.upper() or len(result.strip()) > 0
         log.info("LLM key validation result", llm=llm, ok=ok, response=result[:50])
         return {"ok": ok, "model": llm, "response": result.strip()}
@@ -392,6 +463,76 @@ def validate_llm_key(llm: str, api_key: str) -> Dict[str, Any]:
     except Exception as e:
         log.error("LLM key validation failed (unexpected)", llm=llm, error=str(e))
         return {"ok": False, "error": str(e)}
+
+
+# ── Question classification ───────────────────────────────────────────────────
+
+def classify_question(
+    question: str, table_names: str,
+    llm: str, api_key: str, user_email: str,
+    app_name: str = "DataMind",
+    conversation_history: str = "",
+) -> dict:
+    """
+    Classify the user question to determine handling strategy.
+    Returns a dict with 'type' and type-specific fields.
+    Falls back to {"type": "data_query"} if classification fails.
+    """
+    system = (
+        "You are a data assistant classifier. Respond ONLY with valid JSON — no markdown, no explanation.\n"
+        "Classify the question into exactly one type:\n"
+        '{"type":"data_query"} — question about data that exists in the database\n'
+        '{"type":"multi_step","sub_questions":["q1","q2"]} — clearly contains 2+ separate data queries; '
+        "only use this when two or more genuinely distinct SQL queries are needed\n"
+        '{"type":"conversational","response":"..."} — greeting, small talk, thank-you, out-of-scope questions, '
+        "or any request to modify/delete/create data (INSERT/UPDATE/DELETE/DROP/TRUNCATE/ALTER). "
+        f"For harmful/destructive requests respond with a polite refusal as {app_name}. "
+        f"For all others respond as {app_name}, a friendly AI data assistant.\n"
+        '{"type":"clarification_needed","clarification":"..."} — the question is about data but too vague to answer; '
+        "ask ONE specific clarifying question. Only use this when the intent is clearly a data query but key details are missing.\n"
+        "IMPORTANT: Use conversation history (if provided) to understand follow-up questions and pronouns like 'they', 'those', 'it'."
+    )
+    history_block = f"\nConversation so far:\n{conversation_history}\n" if conversation_history else ""
+    prompt = f"Available tables: {table_names}{history_block}\nQuestion: {question}"
+    try:
+        raw = call_llm(prompt, system, llm, max_tokens=400, api_key=api_key, user_email=user_email, operation="classify")
+        raw = raw.strip()
+        if raw.startswith("```"):
+            raw = re.sub(r"^```[a-z]*\n?", "", raw).rstrip("`").strip()
+        result = json.loads(raw)
+        if result.get("type") not in ("data_query", "multi_step", "conversational", "clarification_needed"):
+            return {"type": "data_query"}
+        return result
+    except Exception as _e:
+        log.debug("Question classification failed, treating as data_query", error=str(_e))
+        return {"type": "data_query"}
+
+
+def synthesize_multi_step_answer(
+    original_question: str, step_results: list,
+    llm: str, api_key: str, user_email: str
+) -> Optional[str]:
+    """Combine results from multiple sub-queries into a single coherent answer."""
+    parts = []
+    for i, step in enumerate(step_results, 1):
+        q = step.get("question", f"Step {i}")
+        cols = step.get("columns", [])
+        rows = step.get("data", [])[:5]
+        parts.append(
+            f"Query {i}: {q}\n"
+            f"Columns: {', '.join(cols)}\n"
+            f"Top rows: {json.dumps(rows, default=str)}"
+        )
+    system = (
+        "You are a data analyst. Combine the query results below into a concise, clear answer to "
+        "the original question. Use specific numbers from the data. No preamble."
+    )
+    prompt = f"Question: {original_question}\n\n" + "\n\n".join(parts) + "\n\nAnswer:"
+    try:
+        return call_llm(prompt, system, llm, max_tokens=600, api_key=api_key, user_email=user_email, operation="synthesize")
+    except Exception as _se:
+        log.warning("Multi-step synthesis failed", error=str(_se))
+        return None
 
 
 # ── Text-to-SQL ───────────────────────────────────────────────────────────────
@@ -461,7 +602,7 @@ def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "openai",
     )
     prompt = f"Schema:\n{schema_text}\n\nQuestion: {question}\n\nSQL:"
     log.info("Generating SQL from NL question", llm=llm, question=question[:80])
-    raw = call_llm(prompt, system, llm, max_tokens=800, api_key=api_key, user_email=user_email)
+    raw = call_llm(prompt, system, llm, max_tokens=800, api_key=api_key, user_email=user_email, operation="sql_gen")
     sql = raw.replace("```sql", "").replace("```", "").strip()
     log.debug("SQL generated", sql=sql[:200])
     return sql
@@ -502,7 +643,7 @@ def generate_report_summary(title: str, kpis: Dict, section_data: Dict,
         f"Instructions: {length_instruction}"
     )
     log.info("Generating report", llm=llm, title=title, sections=list(section_data.keys()), format=format)
-    return call_llm(prompt, system, llm, max_tokens=2500, api_key=api_key, user_email=user_email)
+    return call_llm(prompt, system, llm, max_tokens=2500, api_key=api_key, user_email=user_email, operation="report")
 
 
 def list_gemini_models(api_key: str) -> list:

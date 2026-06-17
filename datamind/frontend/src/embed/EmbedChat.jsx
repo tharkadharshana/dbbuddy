@@ -51,41 +51,38 @@ function BetaBadge({ isSalesplay }) {
 }
 
 // ── Token usage indicator ──────────────────────────────────────────────────────
-// {/* BILLING HIDDEN — token usage meter commented out
-// function TokenUsage({ sub, isSalesplay }) {
-//   if (!sub || sub.status === 'no_subscription') return null
-//   const used  = sub.tokens_used || 0
-//   const total = sub.tokens_total_available || sub.tokens_limit || 1
-//   const pct   = Math.min(100, Math.round((used / total) * 100))
-//
-//   if (isSalesplay) {
-//     const color = pct >= 100 ? '#EF4444' : pct >= 80 ? '#F59E0B' : '#3B82F6'
-//     return (
-//       <div title={`${used.toLocaleString()} / ${total.toLocaleString()} tokens used`} style={{ marginTop: 12 }}>
-//         <div style={{ position:'relative', height:6, borderRadius:99, background:'#E2E8F0' }}>
-//           <div style={{ position:'absolute', left:0, top:0, height:'100%', width:`${pct}%`, borderRadius:99, background:color, transition:'width .3s' }} />
-//           <div style={{ position:'absolute', top:'50%', left:`${pct}%`, transform:'translate(-50%, -50%)', width:14, height:14, borderRadius:'50%', background:color, border:'2px solid #fff', boxShadow:'0 1px 3px rgba(0,0,0,0.15)', transition:'left .3s' }} />
-//         </div>
-//         <div style={{ textAlign:'right', fontSize:12, fontWeight:700, color, marginTop:6 }}>{pct}% Tokens Used</div>
-//       </div>
-//     )
-//   }
-//
-//   const color = pct >= 100 ? 'var(--red)' : pct >= 80 ? 'var(--amber)' : 'var(--blue)'
-//   return (
-//     <div title={`${used.toLocaleString()} / ${total.toLocaleString()} tokens used`} style={{ display:'flex', flexDirection:'column', gap:3, minWidth:46 }}>
-//       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:4 }}>
-//         <span style={{ fontSize:9, color:'var(--text3)' }}>⚡</span>
-//         <span style={{ fontSize:9, color, fontFamily:'var(--mono)' }}>{pct}%</span>
-//       </div>
-//       <div style={{ height:3, borderRadius:99, background:'var(--bg3)', overflow:'hidden' }}>
-//         <div style={{ height:'100%', width:`${pct}%`, borderRadius:99, background:color, transition:'width .3s' }} />
-//       </div>
-//     </div>
-//   )
-// }
-// */
-function TokenUsage() { return null }
+function TokenUsage({ sub, isSalesplay }) {
+  if (!sub || sub.status === 'no_subscription') return null
+  const used  = sub.tokens_used || 0
+  const total = sub.tokens_total_available || sub.tokens_limit || 1
+  const pct   = Math.min(100, Math.round((used / total) * 100))
+
+  if (isSalesplay) {
+    const color = pct >= 100 ? '#EF4444' : pct >= 80 ? '#F59E0B' : '#3B82F6'
+    return (
+      <div title={`${used.toLocaleString()} / ${total.toLocaleString()} tokens used`} style={{ marginTop: 12 }}>
+        <div style={{ position:'relative', height:6, borderRadius:99, background:'#E2E8F0' }}>
+          <div style={{ position:'absolute', left:0, top:0, height:'100%', width:`${pct}%`, borderRadius:99, background:color, transition:'width .3s' }} />
+          <div style={{ position:'absolute', top:'50%', left:`${pct}%`, transform:'translate(-50%, -50%)', width:14, height:14, borderRadius:'50%', background:color, border:'2px solid #fff', boxShadow:'0 1px 3px rgba(0,0,0,0.15)', transition:'left .3s' }} />
+        </div>
+        <div style={{ textAlign:'right', fontSize:12, fontWeight:700, color, marginTop:6 }}>{pct}% Tokens Used</div>
+      </div>
+    )
+  }
+
+  const color = pct >= 100 ? 'var(--red)' : pct >= 80 ? 'var(--amber)' : 'var(--blue)'
+  return (
+    <div title={`${used.toLocaleString()} / ${total.toLocaleString()} tokens used`} style={{ display:'flex', flexDirection:'column', gap:3, minWidth:46 }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:4 }}>
+        <span style={{ fontSize:9, color:'var(--text3)' }}>⚡</span>
+        <span style={{ fontSize:9, color, fontFamily:'var(--mono)' }}>{pct}%</span>
+      </div>
+      <div style={{ height:3, borderRadius:99, background:'var(--bg3)', overflow:'hidden' }}>
+        <div style={{ height:'100%', width:`${pct}%`, borderRadius:99, background:color, transition:'width .3s' }} />
+      </div>
+    </div>
+  )
+}
 
 // ── Typing indicator ──────────────────────────────────────────────────────────
 function TypingDots() {
@@ -242,7 +239,7 @@ function Message({ msg, theme }) {
                 <ResultTable columns={msg.data.columns} data={msg.data.data} rowCount={msg.data.row_count} />
               </>
             )}
-            {msg.data?.row_count === 0 && (
+            {msg.data?.type === 'data' && msg.data?.row_count === 0 && (
               <div style={{ fontSize:11, color:'var(--text3)', marginTop:6 }}>No results found.</div>
             )}
           </>
@@ -368,13 +365,22 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
     try {
       const data = await embedRunQuery(q, 'default', thinkMode, currentConvId)
       const rowCount = data.row_count
-      const numCol   = data.columns?.find(c => typeof data.data?.[0]?.[c] === 'number')
-      let summary = `Found ${rowCount} result${rowCount !== 1 ? 's' : ''}`
-      if (numCol && data.data?.[0]) {
-        const total = data.data.reduce((s, r) => s + (r[numCol] || 0), 0)
-        summary += ` · ${numCol.replace(/_/g, ' ')}: ${total.toLocaleString(undefined, { maximumFractionDigits:2 })}`
+      const type     = data.type
+      let summary
+
+      if (type === 'conversational' || type === 'clarification') {
+        summary = data.message || 'How can I help you with your data?'
+      } else if (!data.success || type === 'error') {
+        summary = data.message || 'Something went wrong. Please try again.'
+      } else {
+        const numCol = data.columns?.find(c => typeof data.data?.[0]?.[c] === 'number')
+        summary = `Found ${rowCount} result${rowCount !== 1 ? 's' : ''}`
+        if (numCol && data.data?.[0]) {
+          const total = data.data.reduce((s, r) => s + (r[numCol] || 0), 0)
+          summary += ` · ${numCol.replace(/_/g, ' ')}: ${total.toLocaleString(undefined, { maximumFractionDigits:2 })}`
+        }
+        if (rowCount === 0) summary = 'No matching records found for your query.'
       }
-      if (rowCount === 0) summary = 'No matching records found for your query.'
 
       setMessages(m => m.map(msg =>
         msg.id === thinkMsg.id

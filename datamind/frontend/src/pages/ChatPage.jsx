@@ -162,7 +162,7 @@ function Message({ msg, llm }) {
                   <ResultChart columns={msg.data.columns} data={msg.data.data} />
                   <ResultTable columns={msg.data.columns} data={msg.data.data} rowCount={msg.data.row_count} />
                 </>}
-                {msg.data.row_count === 0 && <div style={{ fontSize:12, color:'var(--text3)', marginTop:8 }}>No results returned.</div>}
+                {msg.data.type === 'data' && msg.data.row_count === 0 && <div style={{ fontSize:12, color:'var(--text3)', marginTop:8 }}>No results returned.</div>}
               </>
             )}
           </>
@@ -261,13 +261,22 @@ export default function ChatPage({
     try {
       const data = await runNLQuery(q, llm, thinkMode, currentConvId)
       const rowCount = data.row_count
-      const numCol   = data.columns?.find(c => typeof data.data?.[0]?.[c] === 'number')
-      let summary = `Found ${rowCount} result${rowCount !== 1 ? 's' : ''}`
-      if (numCol && data.data?.[0]) {
-        const total = data.data.reduce((s, r) => s + (r[numCol] || 0), 0)
-        summary += ` · Total ${numCol.replace(/_/g, ' ')}: ${formatNumber(total)}`
+      const type     = data.type
+      let summary
+
+      if (type === 'conversational' || type === 'clarification') {
+        summary = data.message || 'How can I help you with your data?'
+      } else if (!data.success || type === 'error') {
+        summary = data.message || 'Something went wrong. Please try again.'
+      } else {
+        const numCol = data.columns?.find(c => typeof data.data?.[0]?.[c] === 'number')
+        summary = `Found ${rowCount} result${rowCount !== 1 ? 's' : ''}`
+        if (numCol && data.data?.[0]) {
+          const total = data.data.reduce((s, r) => s + (r[numCol] || 0), 0)
+          summary += ` · Total ${numCol.replace(/_/g, ' ')}: ${formatNumber(total)}`
+        }
+        if (rowCount === 0) summary = 'No matching records found for your query.'
       }
-      if (rowCount === 0) summary = 'No matching records found for your query.'
 
       setMessages(m => m.map(msg =>
         msg.id === thinkMsg.id
