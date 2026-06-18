@@ -498,16 +498,36 @@ def classify_question(
     system = (
         "You are a data assistant classifier. Respond ONLY with valid JSON — no markdown, no explanation.\n"
         "Classify the question into exactly one type:\n"
+
         '{"type":"data_query"} — question about data that exists in the database\n'
+
         '{"type":"multi_step","sub_questions":["q1","q2"]} — clearly contains 2+ separate data queries; '
         "only use this when two or more genuinely distinct SQL queries are needed\n"
-        '{"type":"conversational","response":"..."} — greeting, small talk, thank-you, out-of-scope questions, '
-        "or any request to modify/delete/create data (INSERT/UPDATE/DELETE/DROP/TRUNCATE/ALTER). "
+
+        '{"type":"unsupported_query","response":"..."} — the question requires data that does NOT exist in the '
+        "database: future predictions, next-month forecasts, external market data, competitor data, weather, or "
+        "city-wide/industry trends. Respond helpfully by explaining what CAN be shown instead "
+        "(e.g. 'I can't predict next month, but I can show you historical top sellers by month — would that help?').\n"
+
+        '{"type":"conversational","response":"..."} — greeting, small talk, thank-you, or a request to '
+        "modify/delete/create data (INSERT/UPDATE/DELETE/DROP/TRUNCATE/ALTER). "
         f"For harmful/destructive requests respond with a polite refusal as {app_name}. "
-        f"For all others respond as {app_name}, a friendly AI data assistant.\n"
+        "Also use this type when: "
+        "(1) the user asks what data, tables, or information is available ('what data do you have', 'what can you show me', "
+        "'what tables are there') — respond with a friendly list of the available tables from the table list provided; "
+        "(2) the user asks about their own account details (country, currency, timezone) — answer directly from the "
+        "context provided in these instructions, do NOT deflect or say 'I'm a data assistant'; "
+        f"for all other conversational cases respond as {app_name}, a friendly AI data assistant.\n"
+
         '{"type":"clarification_needed","clarification":"..."} — the question is about data but too vague to answer; '
-        "ask ONE specific clarifying question. Only use this when the intent is clearly a data query but key details are missing.\n"
-        "IMPORTANT: Use conversation history (if provided) to understand follow-up questions and pronouns like 'they', 'those', 'it'. "
+        "ask ONE specific clarifying question. "
+        "IMPORTANT RULE: if the conversation history shows the last assistant message was already a clarification "
+        "question and the user has now given ANY response (even a single word like 'sales', 'any', a category name, "
+        "or a number), do NOT return clarification_needed again — instead reconstruct the full original intent from "
+        "history combined with the user's answer, and return data_query.\n"
+
+        "IMPORTANT: Use conversation history (if provided) to understand follow-up questions and pronouns like "
+        "'they', 'those', 'it'. "
         + (language_hint if language_hint else "Always respond in the same language the user used to write their question.")
     )
     history_block = f"\nConversation so far:\n{conversation_history}\n" if conversation_history else ""
@@ -518,7 +538,7 @@ def classify_question(
         if raw.startswith("```"):
             raw = re.sub(r"^```[a-z]*\n?", "", raw).rstrip("`").strip()
         result = json.loads(raw)
-        if result.get("type") not in ("data_query", "multi_step", "conversational", "clarification_needed"):
+        if result.get("type") not in ("data_query", "multi_step", "conversational", "clarification_needed", "unsupported_query"):
             return {"type": "data_query"}
         return result
     except Exception as _e:
