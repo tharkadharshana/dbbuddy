@@ -485,7 +485,7 @@ def sync_products(client: SalesPlayAPIClient, conn, prefix: str, user_email: str
             "barcode":      _str(first.get("barcode"), 100),
             "cost":         _dec(first.get("default_cost") or first.get("cost") or p.get("cost"), 0),
             "price":        price or 0.0,
-            "created_at":   _dt(p.get("created_at")),
+            "created_at":   _dt(p.get("created_at") or p.get("created_date")),
             "updated_at":   _dt(p.get("updated_at") or p.get("updated_date")),
         }
         # Enrich with category_name from already-synced sp_categories
