@@ -31,7 +31,7 @@ _SNAPSHOT_ROWS      = 10
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _make_snapshot(columns: list, data: list, stat_col: str = None) -> dict:
+def _make_snapshot(columns: list, data: list, stat_col: str = None, analysis: str = None) -> dict:
     """
     Build a compact data snapshot for storing with an assistant message.
     Stores column names + first SNAPSHOT_ROWS rows + one stat line.
@@ -45,7 +45,10 @@ def _make_snapshot(columns: list, data: list, stat_col: str = None) -> dict:
             stat = f"{stat_col}={total:,.2f} (total of {len(data)} rows)"
         except Exception:
             pass
-    return {"columns": columns, "rows": rows, "stat": stat}
+    snapshot = {"columns": columns, "rows": rows, "stat": stat}
+    if analysis:
+        snapshot["analysis"] = analysis
+    return snapshot
 
 
 def _fmt_snapshot(snapshot: dict) -> str:
@@ -110,6 +113,7 @@ def save_message(
     columns: list = None,
     data: list = None,
     stat_col: str = None,
+    analysis: str = None,
 ) -> int:
     """
     Insert one message and increment the parent conversation's counter.
@@ -120,7 +124,7 @@ def save_message(
     """
     snapshot = None
     if role == "assistant" and columns and data is not None:
-        snapshot = _make_snapshot(columns, data, stat_col)
+        snapshot = _make_snapshot(columns, data, stat_col, analysis)
 
     conn = _get_conn()
     try:

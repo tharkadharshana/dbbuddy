@@ -95,7 +95,7 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete }) {
   const [error, setError]             = useState('')
 
   const providerName = context?.partner_name || 'Salesplay'
-  const productTitle = context?.branding?.product_name || 'DataMind AI'
+  const productTitle = context?.branding?.product_name || import.meta.env.VITE_APP_NAME || 'SalesPlay AI'
 
   // Fetch plans when entering step 2
   useEffect(() => {
@@ -303,10 +303,9 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete }) {
         </div>
       )}
 
-      {/* ── STEP 2: Choose a plan ─────────────────────────────────────────────── */}
+      {/* BILLING HIDDEN — plan selection step commented out
       {step === 2 && (
         <div>
-          {/* Trial badge */}
           <div style={{
             textAlign:'center', marginBottom:16,
             background:'var(--green-dim)', color:'var(--green)',
@@ -315,15 +314,12 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete }) {
           }}>
             ✓ Your 14-day free trial has started
           </div>
-
           <div style={{ fontSize:15, fontWeight:700, color:'var(--text)', textAlign:'center', marginBottom:4 }}>
             Choose a plan
           </div>
           <div style={{ fontSize:12, color:'var(--text3)', textAlign:'center', marginBottom:16 }}>
             Lock in your plan now or continue exploring with your trial.
           </div>
-
-          {/* Plan cards */}
           <div style={{ display:'flex', flexDirection:'column', gap:8, marginBottom:12 }}>
             {plans.length === 0
               ? [
@@ -338,13 +334,11 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete }) {
                 ))
             }
           </div>
-
           {selectedPlanId && (
             <button onClick={() => setStep(3)} style={primaryBtn(false)}>
               Continue with selected plan →
             </button>
           )}
-
           <button
             onClick={() => { setSelectedPlanId(null); setStep(3) }}
             style={{
@@ -355,10 +349,10 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete }) {
           >
             Continue with free trial →
           </button>
-
           <button onClick={() => setStep(1)} style={ghostBtn}>← Back</button>
         </div>
       )}
+      */}
 
       {/* ── STEP 3: Connect + sync ───────────────────────────────────────────── */}
       {step === 3 && (

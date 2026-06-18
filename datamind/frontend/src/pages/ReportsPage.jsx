@@ -238,7 +238,6 @@ export default function ReportsPage({ llm, setLlm, sub, onNavigate, onQueryCompl
 
   const categories = [...new Set(ALL_SECTIONS.map(s => s.category))]
 
-  if (sub && !sub.can_use_ai) return <AIQuotaWall sub={sub} onNavigate={onNavigate} />
 
   return (
     <div style={{ display:'flex', height:'100%', overflow:'hidden' }}>

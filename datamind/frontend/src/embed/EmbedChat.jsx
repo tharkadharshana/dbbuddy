@@ -9,8 +9,11 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { embedRunQuery, embedGetSSOHandoff, embedCreateConversation, embedGetSubscription } from './embedApi'
+import { getErrorMessage } from '../utils/api'
+import { formatCurrency } from '../utils/locale'
 import { notifyParent } from './EmbedApp'
 import EmbedHistoryDrawer from './EmbedHistoryDrawer'
+const APP_NAME = import.meta.env.VITE_APP_NAME || 'SalesPlay AI'
 
 const TT = {
   background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)',
@@ -94,21 +97,38 @@ function TypingDots() {
   )
 }
 
+const _CODE_COLS = /^(sku|code|customer_code|shop_id|product_code|item_code)$/i
+
 // ── Chart ─────────────────────────────────────────────────────────────────────
 function ResultChart({ columns, data, theme }) {
   if (!data?.length || !columns?.length) return null
   const numCols = columns.filter(c => typeof data[0]?.[c] === 'number')
   const strCols = columns.filter(c => typeof data[0]?.[c] === 'string')
   if (!numCols.length || !strCols.length || data.length < 2) return null
-  const xKey = strCols[0], y1 = numCols[0], y2 = numCols[1]
+  const y1 = numCols[0], y2 = numCols[1]
   const isLight    = theme === 'light'
   const gridColor  = isLight ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.06)'
   const tickColor  = isLight ? '#6b7280' : '#5a5f7d'
+  const labelKey = strCols.find(c => _CODE_COLS.test(c)) || strCols[0]
+  const nameKey  = labelKey !== strCols[0] ? strCols[0] : null
   const chartData = data.slice(0, 15).map(r => ({
-    name: String(r[xKey] || '').slice(0, 14),
+    name:     String(r[labelKey] || '').slice(0, 14),
+    _tooltip: nameKey ? String(r[nameKey] || '') : null,
     [y1]: r[y1],
     ...(y2 ? { [y2]: r[y2] } : {}),
   }))
+  const CustomTooltip = ({ active, payload, label }) => {
+    if (!active || !payload?.length) return null
+    const fullName = payload[0]?.payload?._tooltip
+    return (
+      <div style={TT}>
+        <p style={{ margin:'0 0 4px', color:'var(--text)', fontWeight:500 }}>{fullName || label}</p>
+        {payload.map(p => (
+          <p key={p.dataKey} style={{ margin:'2px 0', color:p.color }}>{p.name}: {p.value?.toLocaleString()}</p>
+        ))}
+      </div>
+    )
+  }
   return (
     <div style={{ marginTop:10, background:'var(--bg2)', borderRadius:8, padding:10, border:'1px solid var(--border)' }}>
       <ResponsiveContainer width="100%" height={140}>
@@ -116,7 +136,7 @@ function ResultChart({ columns, data, theme }) {
           <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
           <XAxis dataKey="name" tick={{ fontSize:9, fill:tickColor }} axisLine={false} tickLine={false} />
           <YAxis tick={{ fontSize:9, fill:tickColor }} axisLine={false} tickLine={false} />
-          <Tooltip contentStyle={TT} />
+          <Tooltip content={<CustomTooltip />} />
           <Bar dataKey={y1} fill="var(--blue)" radius={[3,3,0,0]} barSize={data.length > 10 ? 6 : 16} />
           {y2 && <Line dataKey={y2} stroke="var(--green)" strokeWidth={1.5} dot={false} />}
         </ComposedChart>
@@ -136,7 +156,7 @@ function ResultTable({ columns, data, rowCount }) {
     if (typeof v === 'number') {
       if (col.includes('revenue') || col.includes('total') || col.includes('amount') ||
           col.includes('price') || col.includes('value') || col.includes('spent'))
-        return <span style={{ color:'var(--blue)', fontFamily:'var(--mono)' }}>${Number(v).toLocaleString()}</span>
+        return <span style={{ color:'var(--blue)', fontFamily:'var(--mono)' }}>{formatCurrency(v)}</span>
       if (col.includes('pct') || col.includes('rate') || col.includes('percent'))
         return <span style={{ color: v > 0 ? 'var(--green)' : 'var(--red)', fontFamily:'var(--mono)' }}>{v > 0 ? '+' : ''}{v}%</span>
       return <span style={{ fontFamily:'var(--mono)', color:'var(--blue)' }}>{Number(v).toLocaleString()}</span>
@@ -238,7 +258,7 @@ function Message({ msg, theme }) {
                 <ResultTable columns={msg.data.columns} data={msg.data.data} rowCount={msg.data.row_count} />
               </>
             )}
-            {msg.data?.row_count === 0 && (
+            {msg.data?.type === 'data' && msg.data?.row_count === 0 && (
               <div style={{ fontSize:11, color:'var(--text3)', marginTop:6 }}>No results found.</div>
             )}
           </>
@@ -249,14 +269,14 @@ function Message({ msg, theme }) {
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function EmbedChat({ context, onExpired, onLogout, onCollapse }) {
+export default function EmbedChat({ context, onExpired, onLogout, onCollapse, initialInput = '' }) {
   const productTitle = context?.branding?.product_name || 'Ask Your Data'
   const isSalesplay = context?.provider_id === 'salesplay'
   // Same accent used by the collapsed search bar (EmbedSearchBar) — keeps the
   // "closed" pill and the "open" input bar visually identical.
   const accent = context?.branding?.accent_color || '#3B82F6'
   const [messages, setMessages] = useState([])
-  const [input, setInput]       = useState('')
+  const [input, setInput]       = useState(initialInput)
   const [loading, setLoading]   = useState(false)
   const [thinkMode, setThinkMode] = useState(true) // always on for the SalesPlay embed — toggle UI hidden below
   const [hoveredSuggestion, setHoveredSuggestion] = useState(null)
@@ -270,6 +290,16 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse }) 
   // Token usage for the header indicator — non-fatal if it fails.
   useEffect(() => {
     embedGetSubscription().then(setSub).catch(() => setSub(null))
+  }, [])
+
+  // Auto-focus the textarea when opened from the collapsed search bar
+  useEffect(() => {
+    if (inputRef.current) {
+      inputRef.current.focus()
+      // Place cursor at end if text was carried over from the collapsed bar
+      const len = inputRef.current.value.length
+      inputRef.current.setSelectionRange(len, len)
+    }
   }, [])
 
   // ── Theme ───────────────────────────────────────────────────────────────────
@@ -342,16 +372,34 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse }) 
 
     notifyParent('dm:query', { question: q })
 
+    // After 10s still loading → surface a hint so user knows it's working
+    const slowTimer = setTimeout(() => {
+      setMessages(m => m.map(msg =>
+        msg.id === thinkMsg.id && msg.loading
+          ? { ...msg, loadingText: 'Complex queries can take a moment...' }
+          : msg
+      ))
+    }, 10000)
+
     try {
       const data = await embedRunQuery(q, 'default', thinkMode, currentConvId)
       const rowCount = data.row_count
-      const numCol   = data.columns?.find(c => typeof data.data?.[0]?.[c] === 'number')
-      let summary = `Found ${rowCount} result${rowCount !== 1 ? 's' : ''}`
-      if (numCol && data.data?.[0]) {
-        const total = data.data.reduce((s, r) => s + (r[numCol] || 0), 0)
-        summary += ` · ${numCol.replace(/_/g, ' ')}: ${total.toLocaleString(undefined, { maximumFractionDigits:2 })}`
+      const type     = data.type
+      let summary
+
+      if (type === 'conversational' || type === 'clarification') {
+        summary = data.message || 'How can I help you with your data?'
+      } else if (!data.success || type === 'error') {
+        summary = data.message || 'Something went wrong. Please try again.'
+      } else {
+        const numCol = data.columns?.find(c => typeof data.data?.[0]?.[c] === 'number')
+        summary = `Found ${rowCount} result${rowCount !== 1 ? 's' : ''}`
+        if (numCol && data.data?.[0]) {
+          const total = data.data.reduce((s, r) => s + (r[numCol] || 0), 0)
+          summary += ` · ${numCol.replace(/_/g, ' ')}: ${total.toLocaleString(undefined, { maximumFractionDigits:2 })}`
+        }
+        if (rowCount === 0) summary = 'No matching records found for your query.'
       }
-      if (rowCount === 0) summary = 'No matching records found for your query.'
 
       setMessages(m => m.map(msg =>
         msg.id === thinkMsg.id
@@ -365,11 +413,12 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse }) 
         onExpired()
         return
       }
-      const err = e.response?.data?.detail || e.message
+      const err = getErrorMessage(e)
       setMessages(m => m.map(msg =>
         msg.id === thinkMsg.id ? { role:'ai', error:err, id:thinkMsg.id } : msg
       ))
     } finally {
+      clearTimeout(slowTimer)
       setLoading(false)
     }
   }
@@ -493,7 +542,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse }) 
                 fontSize:11, color:'var(--text2)',
               }}
             >
-              <span style={{ fontSize:12 }}>↗</span> Open in DataMind
+              <span style={{ fontSize:12 }}>↗</span> Open in {APP_NAME}
             </button>
             {/* Light / dark toggle */}
             <button
@@ -626,7 +675,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse }) 
                 width: isSalesplay ? 8 : 6, height: isSalesplay ? 8 : 6, borderRadius:'50%',
                 background: isSalesplay ? '#4ADE80' : 'var(--green)', display:'inline-block', flexShrink:0,
               }} />
-              Real-time data {isSalesplay ? '•' : '·'} Powered by DataMind
+              Real-time data {isSalesplay ? '•' : '·'} Powered by {APP_NAME}
             </div>
           </div>
         ) : (

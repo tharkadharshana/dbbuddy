@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react'
 import { deleteConversation } from '../utils/api'
+import { APP_NAME } from '../appName'
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
 const IC = {
@@ -247,7 +248,7 @@ export default function Sidebar({ active, setActive, connection, cacheStatus, to
           </div>
           <div>
             <div style={{ fontWeight:700, fontSize:14, lineHeight:1.1, display:'flex', alignItems:'center', gap:5 }}>
-              DataMind
+              {APP_NAME}
               <span style={{ fontSize:9, fontWeight:700, letterSpacing:'0.06em', background:'var(--blue-dim)', color:'var(--blue)', borderRadius:4, padding:'1px 5px', verticalAlign:'middle' }}>BETA</span>
             </div>
             <div style={{ fontSize:10, color:'var(--text3)' }}>AI Analytics</div>
@@ -306,7 +307,7 @@ export default function Sidebar({ active, setActive, connection, cacheStatus, to
         <NavGroup label="Predictions" icon={IC.trend} items={PREDICTIONS_SUB} active={active} setActive={setActive} />
         <div style={{ height:1, background:'var(--border)', margin:'8px 4px' }} />
         <NavItem id="connections" label="Connections"   icon={IC.plug}     active={active} setActive={setActive} />
-        <NavItem id="billing"     label="Billing"       icon={IC.billing}  active={active} setActive={setActive} />
+        {/* BILLING HIDDEN — <NavItem id="billing" label="Billing" icon={IC.billing} active={active} setActive={setActive} /> */}
         <NavItem id="settings"    label="Settings"      icon={IC.settings} active={active} setActive={setActive} />
       </nav>
 

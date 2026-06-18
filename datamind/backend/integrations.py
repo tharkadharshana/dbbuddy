@@ -183,11 +183,14 @@ def bootstrap_integration_tables():
             payment_amount      DECIMAL(14,4) DEFAULT 0,
             synced_at           DATETIME      DEFAULT NOW(),
             PRIMARY KEY (tenant_id, id),
-            INDEX idx_date     (tenant_id, created_at),
-            INDEX idx_customer (tenant_id, customer_id),
-            INDEX idx_shop     (tenant_id, shop_id),
-            INDEX idx_type     (tenant_id, receipt_type),
-            INDEX idx_id       (id)           -- JOIN lookup without tenant_id
+            INDEX idx_date            (tenant_id, created_at),
+            INDEX idx_customer        (tenant_id, customer_id),
+            INDEX idx_shop            (tenant_id, shop_id),
+            INDEX idx_type            (tenant_id, receipt_type),
+            INDEX idx_status_date     (tenant_id, status, created_at),
+            INDEX idx_type_date       (tenant_id, receipt_type, created_at),
+            INDEX idx_status_customer (tenant_id, status, customer_id),
+            INDEX idx_id              (id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """)
     cursor.execute("""
@@ -255,15 +258,34 @@ def bootstrap_integration_tables():
             updated_at          DATETIME,
             synced_at           DATETIME      DEFAULT NOW(),
             PRIMARY KEY (tenant_id, id),
-            INDEX idx_id        (id)                  -- JOIN without tenant_id
+            INDEX idx_spending  (tenant_id, total_spent),
+            INDEX idx_recency   (tenant_id, last_purchase_date),
+            INDEX idx_visits    (tenant_id, total_visits),
+            INDEX idx_id        (id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """)
-    # Migration: add last_purchase_date if it was missing from a pre-9de48df install
+    # Migration: add last_purchase_date if it was missing from a pre-9de48fd install
     cursor.execute("""
         ALTER TABLE sp_customers
         ADD COLUMN IF NOT EXISTS last_purchase_date DATETIME DEFAULT NULL
         AFTER points_balance
     """)
+    # Migration: add composite indexes missing from earlier installs.
+    # IF NOT EXISTS prevents duplicate-key errors on already-indexed tables.
+    _missing_indexes = [
+        ("sp_receipts",  "idx_status_date",     "(tenant_id, status, created_at)"),
+        ("sp_receipts",  "idx_type_date",        "(tenant_id, receipt_type, created_at)"),
+        ("sp_receipts",  "idx_status_customer",  "(tenant_id, status, customer_id)"),
+        ("sp_customers", "idx_spending",         "(tenant_id, total_spent)"),
+        ("sp_customers", "idx_recency",          "(tenant_id, last_purchase_date)"),
+        ("sp_customers", "idx_visits",           "(tenant_id, total_visits)"),
+    ]
+    for _tbl, _idx, _cols in _missing_indexes:
+        try:
+            cursor.execute(f"ALTER TABLE `{_tbl}` ADD INDEX `{_idx}` {_cols}")
+        except Exception as _ie:
+            if "Duplicate key name" not in str(_ie):
+                log.debug("Index migration skipped", table=_tbl, index=_idx, reason=str(_ie))
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS sp_categories (
             tenant_id       VARCHAR(64)   NOT NULL,
@@ -884,8 +906,13 @@ def delete_user_data(user_email: str):
         (user_email,)
     )
     cursor.execute("DELETE FROM user_integrations WHERE user_email = %s", (user_email,))
-    cursor.execute("DELETE FROM user_credits WHERE user_email = %s", (user_email,))
-    cursor.execute("DELETE FROM credit_usage_log WHERE user_email = %s", (user_email,))
+    # user_credits / credit_usage_log are legacy tables dropped by billing migrations —
+    # guard against environments where they no longer exist
+    for _legacy in ("user_credits", "credit_usage_log"):
+        try:
+            cursor.execute(f"DELETE FROM {_legacy} WHERE user_email = %s", (user_email,))
+        except Exception:
+            pass
     conn.commit()
     conn.close()
     log.info("All user data deleted", user=user_email)

@@ -26,13 +26,39 @@ function TypingDots() {
   )
 }
 
+// Prefer a short-code column (sku, code, customer_code, shop_id) for chart
+// labels so long names don't overflow. Falls back to the first string column.
+const _CODE_COLS = /^(sku|code|customer_code|shop_id|product_code|item_code)$/i
+
 function ResultChart({ columns, data }) {
   if (!data?.length || !columns?.length) return null
   const numCols = columns.filter(c => typeof data[0]?.[c] === 'number')
   const strCols = columns.filter(c => typeof data[0]?.[c] === 'string')
   if (!numCols.length || !strCols.length || data.length < 2) return null
-  const xKey = strCols[0], y1 = numCols[0], y2 = numCols[1]
-  const chartData = data.slice(0,20).map(r => ({ name: String(r[xKey]||'').slice(0,16), [y1]: r[y1], ...(y2 ? {[y2]: r[y2]} : {}) }))
+  const y1 = numCols[0], y2 = numCols[1]
+  // Use a short code column as label if available; fall back to first string col
+  const labelKey = strCols.find(c => _CODE_COLS.test(c)) || strCols[0]
+  // Keep the full-name column for tooltip if we're using a code as label
+  const nameKey  = labelKey !== strCols[0] ? strCols[0] : null
+  const chartData = data.slice(0,20).map(r => ({
+    name:     String(r[labelKey] || '').slice(0, 14),
+    _tooltip: nameKey ? String(r[nameKey] || '') : null,
+    [y1]: r[y1],
+    ...(y2 ? {[y2]: r[y2]} : {}),
+  }))
+
+  const CustomTooltip = ({ active, payload, label }) => {
+    if (!active || !payload?.length) return null
+    const fullName = payload[0]?.payload?._tooltip
+    return (
+      <div style={TT}>
+        <p style={{ margin:'0 0 4px', color:'var(--text)', fontWeight:500 }}>{fullName || label}</p>
+        {payload.map(p => (
+          <p key={p.dataKey} style={{ margin:'2px 0', color: p.color }}>{p.name}: {p.value?.toLocaleString()}</p>
+        ))}
+      </div>
+    )
+  }
 
   return (
     <div style={{ marginTop:14, background:'rgba(255,255,255,0.02)', borderRadius:10, padding:14, border:'1px solid var(--border)' }}>
@@ -41,7 +67,7 @@ function ResultChart({ columns, data }) {
           <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
           <XAxis dataKey="name" tick={{fontSize:10,fill:'#5a5f7d'}} axisLine={false} tickLine={false} />
           <YAxis tick={{fontSize:10,fill:'#5a5f7d'}} axisLine={false} tickLine={false} />
-          <Tooltip contentStyle={TT} />
+          <Tooltip content={<CustomTooltip />} />
           <Bar dataKey={y1} fill="var(--blue)" radius={[4,4,0,0]} barSize={data.length > 10 ? 8 : 20} />
           {y2 && <Line dataKey={y2} stroke="var(--green)" strokeWidth={2} dot={false} />}
         </ComposedChart>
@@ -112,7 +138,12 @@ function Message({ msg, llm }) {
       </div>
       <div style={{ flex:1, minWidth:0 }}>
         {msg.loading ? (
-          <TypingDots />
+          <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+            <TypingDots />
+            {msg.loadingText && (
+              <span style={{ fontSize:11, color:'var(--text3)' }}>{msg.loadingText}</span>
+            )}
+          </div>
         ) : msg.error ? (
           <div style={{ background:'var(--red-dim)', border:'1px solid rgba(240,80,80,0.2)', borderRadius:10, padding:'10px 14px', fontSize:13, color:'var(--red)' }}>
             ⚠ {msg.error}
@@ -157,7 +188,7 @@ function Message({ msg, llm }) {
                   <ResultChart columns={msg.data.columns} data={msg.data.data} />
                   <ResultTable columns={msg.data.columns} data={msg.data.data} rowCount={msg.data.row_count} />
                 </>}
-                {msg.data.row_count === 0 && <div style={{ fontSize:12, color:'var(--text3)', marginTop:8 }}>No results returned.</div>}
+                {msg.data.type === 'data' && msg.data.row_count === 0 && <div style={{ fontSize:12, color:'var(--text3)', marginTop:8 }}>No results returned.</div>}
               </>
             )}
           </>
@@ -244,16 +275,34 @@ export default function ChatPage({
     const thinkMsg = { role: 'ai', loading: true, id: Date.now() + 1 }
     setMessages(m => [...m, userMsg, thinkMsg])
     setLoading(true)
+
+    const slowTimer = setTimeout(() => {
+      setMessages(m => m.map(msg =>
+        msg.id === thinkMsg.id && msg.loading
+          ? { ...msg, loadingText: 'Complex queries can take a moment...' }
+          : msg
+      ))
+    }, 10000)
+
     try {
       const data = await runNLQuery(q, llm, thinkMode, currentConvId)
       const rowCount = data.row_count
-      const numCol   = data.columns?.find(c => typeof data.data?.[0]?.[c] === 'number')
-      let summary = `Found ${rowCount} result${rowCount !== 1 ? 's' : ''}`
-      if (numCol && data.data?.[0]) {
-        const total = data.data.reduce((s, r) => s + (r[numCol] || 0), 0)
-        summary += ` · Total ${numCol.replace(/_/g, ' ')}: ${formatNumber(total)}`
+      const type     = data.type
+      let summary
+
+      if (type === 'conversational' || type === 'clarification') {
+        summary = data.message || 'How can I help you with your data?'
+      } else if (!data.success || type === 'error') {
+        summary = data.message || 'Something went wrong. Please try again.'
+      } else {
+        const numCol = data.columns?.find(c => typeof data.data?.[0]?.[c] === 'number')
+        summary = `Found ${rowCount} result${rowCount !== 1 ? 's' : ''}`
+        if (numCol && data.data?.[0]) {
+          const total = data.data.reduce((s, r) => s + (r[numCol] || 0), 0)
+          summary += ` · Total ${numCol.replace(/_/g, ' ')}: ${formatNumber(total)}`
+        }
+        if (rowCount === 0) summary = 'No matching records found for your query.'
       }
-      if (rowCount === 0) summary = 'No matching records found for your query.'
 
       setMessages(m => m.map(msg =>
         msg.id === thinkMsg.id
@@ -267,6 +316,7 @@ export default function ChatPage({
         msg.id === thinkMsg.id ? { role: 'ai', error: err, id: thinkMsg.id } : msg
       ))
     } finally {
+      clearTimeout(slowTimer)
       setLoading(false)
       onQueryComplete?.()
     }
@@ -274,7 +324,6 @@ export default function ChatPage({
 
   const hasMessages = messages.length > 0
 
-  if (sub && !sub.can_use_ai) return <AIQuotaWall sub={sub} onNavigate={onNavigate} />
 
   return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%', overflow:'hidden' }}>

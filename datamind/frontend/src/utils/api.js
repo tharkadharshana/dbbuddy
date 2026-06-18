@@ -29,9 +29,12 @@ api.interceptors.response.use(
   }
 )
 
-// Extracts the most useful error message from an axios error, checking backend
-// fields first before falling back to the raw axios message.
-export function getErrorMessage(e, fallback = 'Something went wrong. Please try again.') {
+// Extracts the most useful error message from an axios error.
+// For 5xx errors we never expose the raw axios message ("Request failed with
+// status code 500") — always return the friendly fallback instead.
+export function getErrorMessage(e, fallback = 'Something went wrong on our end — please try again in a moment.') {
+  const status = e?.response?.status
+  if (status >= 500) return fallback
   return e?.response?.data?.error
     || e?.response?.data?.detail
     || e?.message

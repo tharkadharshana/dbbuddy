@@ -62,7 +62,8 @@ function EmbedApp() {
   const [aatToken, setAatToken] = useState('')
 
   const layoutBar = params.get('layout') === 'bar'
-  const [expanded, setExpanded] = useState(!layoutBar)
+  const [expanded, setExpanded]         = useState(!layoutBar)
+  const [initialInput, setInitialInput] = useState('')
 
   // Apply saved theme on first load so onboarding is themed consistently
   useEffect(() => {
@@ -191,7 +192,12 @@ function EmbedApp() {
   // onboarding, chat, etc. all continue resolving in the background so the
   // full experience is ready the moment the user expands it).
   if (layoutBar && !expanded) {
-    return <EmbedSearchBar context={context} onExpand={() => setExpanded(true)} />
+    return (
+      <EmbedSearchBar
+        context={context}
+        onExpand={(text = '') => { setInitialInput(text); setExpanded(true) }}
+      />
+    )
   }
 
   if (state === 'loading') {
@@ -245,6 +251,7 @@ function EmbedApp() {
       onExpired={handleExpired}
       onLogout={handleLogout}
       onCollapse={layoutBar ? () => setExpanded(false) : undefined}
+      initialInput={initialInput}
     />
   )
 }

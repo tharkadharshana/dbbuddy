@@ -25,7 +25,11 @@ load_dotenv()  # must run before any local module reads os.getenv at import time
 
 from logger import get_logger
 from db import get_connection, get_table_schemas, get_foreign_keys, get_sample_data
-from llm import query_to_sql, generate_report_summary, call_llm, validate_llm_key, list_gemini_models
+from llm import (
+    query_to_sql, generate_report_summary, call_llm, validate_llm_key,
+    list_gemini_models, LLMTransientError,
+    classify_question, synthesize_multi_step_answer,
+)
 from cache import get_cache, save_cache, invalidate_cache, get_cache_status
 from schema_builder import build_schema_cache
 from analytics import (
@@ -71,23 +75,25 @@ from auth import (
     create_sso_handoff_token, redeem_sso_handoff_token,
 )
 
+_APP_NAME = os.getenv("APP_NAME", "SalesPlay AI")
+
 app = FastAPI(
-    title="DataMind AI",
+    title=_APP_NAME,
     version="3.0.0",
     description=(
-        "DataMind AI API.\n\n"
+        f"{_APP_NAME} API.\n\n"
         "## Partner API (v1)\n"
         "Server-to-server endpoints for embed partners. "
-        "Authenticate with `X-API-Key: <partner_key>` obtained from the DataMind partner dashboard.\n\n"
+        f"Authenticate with `X-API-Key: <partner_key>` obtained from the {_APP_NAME} partner dashboard.\n\n"
         "All `/v1/` endpoints also require a `user_email` parameter to identify which end-user "
         "is being queried.\n\n"
         "## Embed API\n"
-        "Iframe embedding bootstrap flow (`/embed/*`). Used by the DataMind embed SDK.\n\n"
+        f"Iframe embedding bootstrap flow (`/embed/*`). Used by the {_APP_NAME} embed SDK.\n\n"
         "## User API\n"
         "Standard user-facing endpoints (`/auth/*`, `/query`, `/analytics/*`, etc.). "
         "Authenticate with `Authorization: Bearer <jwt>`."
     ),
-    contact={"name": "DataMind Support", "email": "support@datamind.ai"},
+    contact={"name": f"{_APP_NAME} Support", "email": "support@datamind.ai"},
     license_info={"name": "Proprietary"},
 )
 
@@ -100,7 +106,16 @@ app.state.limiter = _limiter
 
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
-    return JSONResponse(status_code=429, content={"ok": False, "error": "Too many requests. Please slow down."})
+    return JSONResponse(
+        status_code=200,
+        content={
+            "ok": False, "success": False, "type": "error",
+            "message": "You're sending requests too quickly. Please wait a moment and try again.",
+            "columns": [], "data": [], "row_count": 0,
+            "analysis": None, "think_mode": False,
+            "conversation_id": None, "data_as_of": None, "steps": [],
+        },
+    )
 
 app.add_middleware(SlowAPIMiddleware)
 
@@ -181,6 +196,15 @@ def _enforce_tenant_isolation(sql: str, tenant_id: str) -> str:
                 f"your account. Cross-tenant queries are not allowed."
             )
 
+    # SQL keywords that can never be a table alias — if the regex captures one of
+    # these it means the table has no alias and the keyword belongs to the next clause.
+    _ALIAS_KEYWORDS = frozenset({
+        'WHERE', 'GROUP', 'ORDER', 'HAVING', 'LIMIT', 'ON', 'SET',
+        'INNER', 'LEFT', 'RIGHT', 'CROSS', 'FULL', 'JOIN', 'UNION',
+        'AND', 'OR', 'NOT', 'SELECT', 'FROM', 'AS', 'BY', 'WITH',
+        'IN', 'IS', 'NULL', 'ASC', 'DESC', 'USING',
+    })
+
     # Find all sp_*/ly_* table references: (FROM|JOIN) table_name [AS] alias
     # Captures: group1=clause, group2=table, group3=alias (may be None)
     table_re = re.compile(
@@ -190,27 +214,15 @@ def _enforce_tenant_isolation(sql: str, tenant_id: str) -> str:
         re.IGNORECASE,
     )
 
-    # SQL keywords that must never be treated as table aliases.
-    # The LLM often omits aliases, causing the regex to capture the next keyword
-    # (e.g. WHERE, JOIN, ON) as the alias, which then produces invalid SQL like
-    # WHERE.tenant_id = '...'. Guard by falling back to the table name.
-    _SQL_RESERVED = frozenset({
-        'WHERE', 'GROUP', 'ORDER', 'LIMIT', 'HAVING', 'ON', 'SET',
-        'INNER', 'LEFT', 'RIGHT', 'CROSS', 'FULL', 'JOIN', 'UNION',
-        'SELECT', 'FROM', 'AND', 'OR', 'NOT', 'IN', 'IS', 'NULL',
-        'AS', 'BY', 'ASC', 'DESC', 'WITH', 'USING',
-    })
-
     # Build list of (alias, clause_type, match_end_pos)
     refs = []
     for m in table_re.finditer(sql):
         clause = m.group(1).strip().upper()
         clause_type = "FROM" if clause == "FROM" else "JOIN"
         table_raw = m.group(2).strip('`')
-        alias_candidate = m.group(3)
-        if alias_candidate and alias_candidate.strip('`').upper() in _SQL_RESERVED:
-            alias_candidate = None
-        alias_raw = (alias_candidate or m.group(2)).strip('`')
+        captured_alias = (m.group(3) or "").strip('`')
+        # If the captured alias is a SQL keyword, the table has no alias — use table name.
+        alias_raw = table_raw if (not captured_alias or captured_alias.upper() in _ALIAS_KEYWORDS) else captured_alias
         refs.append((alias_raw, clause_type, m.end()))
 
     if not refs:
@@ -482,6 +494,28 @@ def _safe(v):
 # SEC-02: never expose raw exception strings to API clients
 def _server_error(msg: str) -> HTTPException:
     return HTTPException(status_code=500, detail=msg)
+
+
+def _base_query_response(**kwargs) -> dict:
+    """Build a consistent /query response. Defaults suit error/empty cases."""
+    base = {
+        "success":         kwargs.get("success", True),
+        "type":            kwargs.get("type", "data"),
+        "message":         kwargs.get("message", None),
+        "steps":           kwargs.get("steps", []),
+        "columns":         kwargs.get("columns", []),
+        "data":            kwargs.get("data", []),
+        "row_count":       kwargs.get("row_count", 0),
+        "analysis":        kwargs.get("analysis", None),
+        "think_mode":      kwargs.get("think_mode", False),
+        "conversation_id": kwargs.get("conversation_id", None),
+        "data_as_of":      kwargs.get("data_as_of", None),
+    }
+    if "sql" in kwargs:
+        base["sql"] = kwargs["sql"]
+    if "multi_results" in kwargs:
+        base["multi_results"] = kwargs["multi_results"]
+    return base
 
 
 # SEC-04: block LLM-generated SQL from running mutating statements
@@ -771,7 +805,7 @@ def _background_build(email: str, db_config: dict, llm: str, api_key: str):
             log.debug("Cache build progress", user=email, step=msg)
 
         def llm_caller(prompt, system, llm_name, max_tokens):
-            return call_llm(prompt, system, llm_name, max_tokens, api_key=api_key, user_email=email)
+            return call_llm(prompt, system, llm_name, max_tokens, api_key=api_key, user_email=email, operation="cache_build")
 
         cache_data = build_schema_cache(
             conn=conn, schemas=schemas, fkeys=fkeys, samples=samples,
@@ -1471,6 +1505,7 @@ def _run_think_analysis(question: str, columns: list, data: list,
         max_tokens=400,
         api_key=api_key,
         user_email=user_email,
+        operation="think",
     )
 
 
@@ -1484,100 +1519,111 @@ class NLQueryRequest(BaseModel):
 @v1.post("/query")
 @_limiter.limit(RL_COMPUTE)
 def natural_language_query(request: Request, req: NLQueryRequest, user: dict = Depends(current_user)):
+    log = get_logger(__name__)   # local — lets us rebind with log = log.bind(...) later without UnboundLocalError
+    conn = None
+    steps: list = []
+    conv_id = req.conversation_id or None
+
+    # ── AI limit check ────────────────────────────────────────────────────────
     ok, reason = check_ai_limit(user["email"])
     if not ok:
-        raise HTTPException(status_code=402, detail=reason)
+        log.warning("AI limit exceeded", user=user["email"], reason=reason)
+        return _base_query_response(
+            success=False, type="error", conversation_id=conv_id,
+            message=reason,
+        )
+
     llm = _effective_llm(user, req.llm)
     log.info("NL query", user=user["email"], llm=llm, question=req.question[:80])
     api_key = _resolve_api_key(user, llm)
     history = get_plan_history_limit(user["email"])
     s = user.get("settings", {})
-    nl_tenant_id = None       # set only for SalesPlay integration users; used by SEC-15 enforcement
-    nl_shop_timezone = "UTC"  # shop's local timezone, fetched from sp_shops for CONVERT_TZ hints
-    nl_last_sync_at  = None   # ISO timestamp of the tenant's last successful sync
-    loyverse_hints: list = []  # provider-specific schema hints passed to the LLM
-    if s.get("db_configs"):
-        # Own-DB user — their database is exclusively theirs; show all tables.
-        conn = get_connection(_resolve_db(user))
-        tables_filter = None
-    else:
-        # Integration user (embed or main app).
-        user_conns = get_user_connections(user["email"])
-        prefixes = [c.get("table_prefix", "") for c in user_conns if c.get("table_prefix")]
-        provider_ids = [c.get("provider_id", "") for c in user_conns if c.get("provider_id")]
-        if not prefixes:
-            raise HTTPException(
-                status_code=422,
-                detail="No data source connected. Please connect a provider first."
-            )
+    nl_tenant_id = None
+    nl_shop_timezone = "UTC"
+    nl_last_sync_at = None
+    nl_currency = (s.get("locale") or {}).get("currency") or "$"
+    loyverse_hints: list = []
 
-        # SalesPlay uses shared sp_* tables scoped by tenant_id.
-        # Loyverse uses per-user views named {prefix}_* (no tenant_id column needed —
-        # tenant isolation is baked into each view's WHERE clause at creation time).
-        _SALESPLAY_SHARED_TABLES = [
-            "sp_receipts", "sp_receipt_line_items", "sp_products",
-            "sp_customers", "sp_categories", "sp_shops", "sp_payment_types",
-        ]
-        _LOYVERSE_VIEW_SUFFIXES = [
-            "receipts", "receipt_line_items", "products",
-            "customers", "categories", "stores", "employees", "payment_line_items",
-        ]
-        tables_filter = []
-        nl_tenant_id = None   # only set for SalesPlay (shared sp_* tables)
-        loyverse_hints = []   # per-prefix hints for Loyverse schema quirks
-        for conn_info in user_conns:
-            pid    = conn_info.get("provider_id", "")
-            prefix = conn_info.get("table_prefix", "")
-            if pid == "salesplay":
-                tables_filter.extend(_SALESPLAY_SHARED_TABLES)
-                if not nl_tenant_id:
-                    nl_tenant_id = prefix  # first SalesPlay prefix drives SEC-15 enforcement
-                    _raw_sync = conn_info.get("last_sync_at")
-                    if _raw_sync:
-                        nl_last_sync_at = str(_raw_sync)
-            elif pid == "loyverse" and prefix:
-                # Per-user views — already tenant-scoped, no tenant_id column.
-                tables_filter.extend([f"{prefix}_{s}" for s in _LOYVERSE_VIEW_SUFFIXES])
-                loyverse_hints.append(
-                    f"The {prefix}_customers table has pre-aggregated total_spent and "
-                    f"total_visits columns — use these directly for customer spending/"
-                    f"frequency analysis instead of joining {prefix}_receipts. "
-                    f"The {prefix}_receipt_line_items table already has item_name and "
-                    f"category_id — prefer these over joining {prefix}_products."
+    # ── DB connection + table scope setup ────────────────────────────────────
+    try:
+        if s.get("db_configs"):
+            conn = get_connection(_resolve_db(user))
+            tables_filter = None
+        else:
+            user_conns = get_user_connections(user["email"])
+            prefixes = [c.get("table_prefix", "") for c in user_conns if c.get("table_prefix")]
+            if not prefixes:
+                return _base_query_response(
+                    success=False, type="error", conversation_id=conv_id,
+                    message="No data source connected yet. Please connect a provider in Settings first.",
                 )
 
-        # Deduplicate in case user has multiple integrations of same type
-        tables_filter = list(dict.fromkeys(tables_filter))
+            # SalesPlay uses shared sp_* tables scoped by tenant_id.
+            # Loyverse uses per-user views named {prefix}_* (tenant isolation
+            # baked into each view's WHERE clause at creation time).
+            _SALESPLAY_SHARED_TABLES = [
+                "sp_receipts", "sp_receipt_line_items", "sp_products",
+                "sp_customers", "sp_categories", "sp_shops", "sp_payment_types",
+            ]
+            _LOYVERSE_VIEW_SUFFIXES = [
+                "receipts", "receipt_line_items", "products",
+                "customers", "categories", "stores", "employees", "payment_line_items",
+            ]
+            tables_filter = []
+            nl_tenant_id = None
+            loyverse_hints = []
+            for conn_info in user_conns:
+                pid    = conn_info.get("provider_id", "")
+                prefix = conn_info.get("table_prefix", "")
+                if pid == "salesplay":
+                    tables_filter.extend(_SALESPLAY_SHARED_TABLES)
+                    if not nl_tenant_id:
+                        nl_tenant_id = prefix
+                        _raw_sync = conn_info.get("last_sync_at")
+                        if _raw_sync:
+                            nl_last_sync_at = str(_raw_sync)
+                elif pid == "loyverse" and prefix:
+                    tables_filter.extend([f"{prefix}_{_sfx}" for _sfx in _LOYVERSE_VIEW_SUFFIXES])
+                    loyverse_hints.append(
+                        f"The {prefix}_customers table has pre-aggregated total_spent and "
+                        f"total_visits columns — use these directly for customer spending/"
+                        f"frequency analysis instead of joining {prefix}_receipts. "
+                        f"The {prefix}_receipt_line_items table already has item_name and "
+                        f"category_id — prefer these over joining {prefix}_products."
+                    )
+            tables_filter = list(dict.fromkeys(tables_filter))
+            if not tables_filter:
+                return _base_query_response(
+                    success=False, type="error", conversation_id=conv_id,
+                    message="Data sync is not complete yet. Please wait for the sync to finish and try again.",
+                )
+            log.debug("NL query scoped to shared tables",
+                      user=user["email"], table_count=len(tables_filter), tenant_id=nl_tenant_id)
+            conn = _get_internal_conn()
+    except Exception as _setup_err:
+        log.error("NL query setup failed", user=user["email"], error=str(_setup_err))
+        return _base_query_response(
+            success=False, type="error", conversation_id=conv_id,
+            message="Could not connect to your data source. Please check your connection settings.",
+        )
 
-        if not tables_filter:
-            raise HTTPException(
-                status_code=422,
-                detail="Data sync not complete yet. Please wait for sync to finish."
-            )
-        log.debug("NL query scoped to shared tables",
-                  user=user["email"], table_count=len(tables_filter),
-                  tenant_id=nl_tenant_id)
-        conn = _get_internal_conn()
-
-    # Load conversation history — compact multi-turn string injected into the
-    # LLM prompt so follow-up questions ("explain this value") work correctly.
-    conv_id = req.conversation_id or None
-    conv_history = ""
-    if conv_id:
-        try:
-            conv_history = _conv.get_history_for_prompt(conv_id)
-        except Exception as _he:
-            log.warning("Could not load conversation history",
-                        conv_id=conv_id, error=str(_he))
+    # Bind user + tenant_id to every log call for the rest of this request
+    # so we can filter logs by user or tenant without grepping manually.
+    log = log.bind(user=user["email"], tenant_id=nl_tenant_id or "own-db")
 
     try:
+        # ── Conversation history ──────────────────────────────────────────────
+        conv_history = ""
+        if conv_id:
+            try:
+                conv_history = _conv.get_history_for_prompt(conv_id)
+            except Exception as _he:
+                log.warning("Could not load conversation history", conv_id=conv_id, error=str(_he))
+
+        # ── Schema fetch ──────────────────────────────────────────────────────
+        steps.append({"label": "Loading your data schema", "status": "done"})
         schemas = get_table_schemas(conn, tables_filter)
         all_fkeys = get_foreign_keys(conn)
-
-        # For integration users, filter FK relationships to only this user's
-        # tables. get_foreign_keys() returns every FK in the entire database —
-        # without this filter, User A's LLM prompt would contain User B's
-        # table relationships.
         if tables_filter is not None:
             user_tables = set(tables_filter)
             fkeys = [
@@ -1587,8 +1633,7 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
         else:
             fkeys = all_fkeys
 
-        # For SalesPlay tenants, fetch the shop's local timezone so the LLM can
-        # emit CONVERT_TZ-aware date comparisons that match SalesPlay's reports.
+        # Fetch SalesPlay shop timezone for CONVERT_TZ-aware date comparisons.
         if nl_tenant_id:
             try:
                 _tz_cur = conn.cursor()
@@ -1603,38 +1648,204 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
             except Exception as _tze:
                 log.debug("Could not fetch shop timezone, defaulting to UTC", error=str(_tze))
 
+        # ── Question classification ───────────────────────────────────────────
+        steps.append({"label": "Analyzing your question", "status": "done"})
+        table_names_str = ", ".join(list(schemas.keys())[:20])
+        classification = classify_question(
+            req.question, table_names_str, llm, api_key, user["email"],
+            app_name=_APP_NAME, conversation_history=conv_history,
+        )
+        q_type = classification.get("type", "data_query")
+
         row_limit = history["row_limit"]
-        sql = query_to_sql(req.question, schemas, llm, fkeys, api_key=api_key,
-                           user_email=user["email"], history_months=history["months"],
-                           tenant_id=nl_tenant_id if s.get("db_configs") is None else None,
-                           row_limit=row_limit,
-                           conversation_history=conv_history,
-                           extra_schema_hints=" ".join(loyverse_hints) if loyverse_hints else "",
-                           shop_timezone=nl_shop_timezone)
+        currency_hint = (
+            f"The user's currency is '{nl_currency}'. "
+            f"When writing any narrative that includes monetary amounts, use '{nl_currency}' as the currency symbol — never assume USD or '$'."
+        )
+        extra_hints = " ".join(loyverse_hints + [currency_hint]) if loyverse_hints else currency_hint
+        if nl_tenant_id:
+            # SalesPlay: tell LLM to always include sku in product queries so the
+            # frontend can use it as a short label in charts instead of long product names
+            extra_hints += (
+                " When querying products, always SELECT sku alongside product_name so the UI can use the short code as a chart label."
+            )
+        is_integration = s.get("db_configs") is None
+
+        # ── Conversational / greeting ─────────────────────────────────────────
+        if q_type == "conversational":
+            response_text = classification.get(
+                "response",
+                f"Hello! I'm {_APP_NAME}, your AI data assistant. "
+                "Ask me anything about your data — for example: "
+                "'Show me sales from last month' or 'Who are my top customers?'"
+            )
+            if conv_id:
+                try:
+                    _conv.save_message(conv_id, "user", req.question)
+                    _conv.save_message(conv_id, "assistant", response_text)
+                except Exception:
+                    pass
+            return _base_query_response(
+                success=True, type="conversational", message=response_text,
+                steps=steps, conversation_id=conv_id, think_mode=req.think_mode,
+            )
+
+        # ── Needs clarification ───────────────────────────────────────────────
+        if q_type == "clarification_needed":
+            clarification = classification.get(
+                "clarification",
+                "Could you provide more details about what you're looking for? "
+                "For example, specify a time period, a product category, or a metric."
+            )
+            if conv_id:
+                try:
+                    _conv.save_message(conv_id, "user", req.question)
+                    _conv.save_message(conv_id, "assistant", clarification)
+                except Exception:
+                    pass
+            return _base_query_response(
+                success=True, type="clarification", message=clarification,
+                steps=steps, conversation_id=conv_id, think_mode=req.think_mode,
+            )
+
+        # ── Multi-step query ──────────────────────────────────────────────────
+        if q_type == "multi_step":
+            sub_questions = classification.get("sub_questions", [])
+            if len(sub_questions) < 2:
+                q_type = "data_query"  # decomposition failed — fall through to single query
+            else:
+                steps.append({"label": f"Breaking into {len(sub_questions)} sub-queries", "status": "done"})
+                step_results = []
+                for i, sub_q in enumerate(sub_questions, 1):
+                    steps.append({"label": f"Running query {i}: {sub_q[:60]}", "status": "running"})
+                    try:
+                        sub_sql = query_to_sql(
+                            sub_q, schemas, llm, fkeys, api_key=api_key,
+                            user_email=user["email"], history_months=history["months"],
+                            tenant_id=nl_tenant_id if is_integration else None,
+                            row_limit=row_limit, conversation_history=conv_history,
+                            extra_schema_hints=extra_hints, shop_timezone=nl_shop_timezone,
+                        )
+                        if nl_tenant_id:
+                            try:
+                                sub_sql = _enforce_tenant_isolation(sub_sql, nl_tenant_id)
+                            except ValueError:
+                                steps[-1]["status"] = "skipped"
+                                continue
+                            if nl_tenant_id not in sub_sql:
+                                steps[-1]["status"] = "skipped"
+                                continue
+                            sub_sql = _enforce_date_filter(sub_sql, history["months"])
+                        # SEC-04: block mutations in sub-queries too
+                        try:
+                            _guard_sql(sub_sql)
+                        except HTTPException:
+                            steps[-1]["status"] = "skipped"
+                            continue
+                        sub_cursor = conn.cursor()
+                        _set_query_timeout(sub_cursor)
+                        sub_cursor.execute(sub_sql)
+                        sub_cols = [d[0] for d in sub_cursor.description]
+                        sub_rows = sub_cursor.fetchall()
+                        sub_data = [
+                            {k: _safe(v) for k, v in dict(zip(sub_cols, row)).items()}
+                            for row in sub_rows
+                        ]
+                        if len(sub_data) > row_limit:
+                            sub_data = sub_data[:row_limit]
+                        step_results.append({
+                            "question": sub_q,
+                            "columns": sub_cols,
+                            "data": sub_data,
+                            "row_count": len(sub_data),
+                        })
+                        steps[-1]["status"] = "done"
+                    except Exception as _sub_err:
+                        log.warning("Multi-step sub-query failed", sub_q=sub_q[:60], error=str(_sub_err))
+                        steps[-1]["status"] = "failed"
+
+                if not step_results:
+                    return _base_query_response(
+                        success=False, type="error", steps=steps, conversation_id=conv_id,
+                        message="I couldn't retrieve data for your question. Please try rephrasing it.",
+                    )
+
+                steps.append({"label": "Combining results", "status": "running"})
+                analysis = synthesize_multi_step_answer(
+                    req.question, step_results, llm, api_key, user["email"]
+                )
+                steps[-1]["status"] = "done"
+
+                _charge_op(user["email"], "nl_query_rows", sum(r["row_count"] for r in step_results))
+
+                if conv_id:
+                    try:
+                        _conv.save_message(conv_id, "user", req.question)
+                        _conv.save_message(
+                            conv_id, "assistant",
+                            analysis or f"Found results across {len(step_results)} queries.",
+                            row_count=sum(r["row_count"] for r in step_results),
+                        )
+                    except Exception as _ce:
+                        log.warning("Failed to save multi-step conversation", conv_id=conv_id, error=str(_ce))
+
+                primary = step_results[0]
+                return _base_query_response(
+                    success=True, type="multi_step", message=analysis,
+                    steps=steps,
+                    columns=primary["columns"], data=primary["data"], row_count=primary["row_count"],
+                    analysis=analysis, think_mode=req.think_mode,
+                    conversation_id=conv_id, data_as_of=nl_last_sync_at,
+                    multi_results=step_results,
+                )
+
+        # ── Single data query ─────────────────────────────────────────────────
+        steps.append({"label": "Generating SQL query", "status": "running"})
+        sql = query_to_sql(
+            req.question, schemas, llm, fkeys, api_key=api_key,
+            user_email=user["email"], history_months=history["months"],
+            tenant_id=nl_tenant_id if is_integration else None,
+            row_limit=row_limit, conversation_history=conv_history,
+            extra_schema_hints=extra_hints, shop_timezone=nl_shop_timezone,
+        )
+        steps[-1]["status"] = "done"
+
         # SEC-15: enforce tenant isolation for integration users.
-        # nl_tenant_id is set in the else-branch above; None for own-DB users.
         if nl_tenant_id:
             try:
                 sql = _enforce_tenant_isolation(sql, nl_tenant_id)
-            except ValueError as e:
-                raise HTTPException(status_code=403, detail=str(e))
-            # Fail-closed: if tenant_id literal is STILL absent after injection
-            # (e.g. highly unusual SQL structure the regex couldn't handle),
-            # refuse to execute rather than leak cross-tenant data.
+            except ValueError as _te:
+                log.warning("Tenant isolation enforcement failed", user=user["email"], error=str(_te))
+                return _base_query_response(
+                    success=False, type="error", steps=steps, conversation_id=conv_id,
+                    message="I couldn't safely scope your query to your account. Please try rephrasing your question.",
+                )
+            # Fail-closed: refuse to execute if tenant_id was not successfully injected.
             if nl_tenant_id not in sql:
                 log.error("Tenant isolation enforcement failed — refusing to execute",
                           user=user["email"], tenant_id=nl_tenant_id, sql=sql[:300])
-                return {
-                    "columns": [], "data": [], "row_count": 0,
-                    "analysis": "I wasn't able to answer that safely. Could you try rephrasing your question?",
-                    "think_mode": req.think_mode, "conversation_id": conv_id,
-                    "data_as_of": nl_last_sync_at,
-                }
-            # Enforce data-history window for integration users.
-            # The LLM hint is advisory; this is mandatory. Prevents follow-up
-            # questions from pulling all-time data beyond the plan's allowed window.
+                return _base_query_response(
+                    success=False, type="error", steps=steps, conversation_id=conv_id,
+                    message="Could not generate a safely scoped query. Please rephrase your question.",
+                )
+            # Mandatory date-window enforcement (plan limit, not advisory).
             sql = _enforce_date_filter(sql, history["months"])
-        _guard_sql(sql)  # SEC-04: reject any mutating statement the LLM may have generated
+
+        # SEC-04: block LLM-generated mutations before execution.
+        try:
+            _guard_sql(sql)
+        except HTTPException:
+            log.warning("Mutation guard blocked query", user=user["email"], sql=sql[:200])
+            return _base_query_response(
+                success=False, type="error", steps=steps, conversation_id=conv_id,
+                message=(
+                    "I can only run read-only queries on your data. "
+                    "If you meant to ask about your data, try rephrasing — "
+                    "for example: 'Show me all orders' instead of 'Delete all orders'."
+                ),
+            )
+
+        steps.append({"label": "Running your query", "status": "running"})
         cursor = conn.cursor()
         _set_query_timeout(cursor)
         cursor.execute(sql)
@@ -1643,22 +1854,23 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
         data = [{k: _safe(v) for k, v in dict(zip(columns, row)).items()} for row in rows]
         if len(data) > row_limit:
             data = data[:row_limit]
-        log.info("NL query complete", user=user["email"], rows=len(data),
-                 conv_id=conv_id or "stateless")
+        steps[-1]["status"] = "done"
+        log.info("NL query complete", user=user["email"], rows=len(data), conv_id=conv_id or "stateless")
         _charge_op(user["email"], "nl_query_rows", len(data))
 
+        # ── Think mode ────────────────────────────────────────────────────────
         analysis = None
         if req.think_mode and data:
+            steps.append({"label": "Analyzing results", "status": "running"})
             try:
-                analysis = _run_think_analysis(
-                    req.question, columns, data, llm, api_key, user["email"]
-                )
+                analysis = _run_think_analysis(req.question, columns, data, llm, api_key, user["email"])
                 log.info("Think mode analysis complete", user=user["email"])
+                steps[-1]["status"] = "done"
             except Exception as _te:
                 log.warning("Think mode analysis failed", user=user["email"], error=str(_te))
-                analysis = "Analysis unavailable — the AI could not process the results."
+                steps[-1]["status"] = "failed"
 
-        # Build a human-readable answer summary for conversation storage.
+        # ── Build conversation summary & persist ──────────────────────────────
         answer_summary = f"Found {len(data)} result{'s' if len(data) != 1 else ''}."
         if columns and data:
             num_col = next(
@@ -1670,8 +1882,6 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                     answer_summary += f" {num_col.replace('_', ' ')} = {total:,.2f}"
                 except Exception:
                     pass
-
-        # Persist exchange to conversation memory (best-effort, never blocks response).
         if conv_id:
             try:
                 stat_col = next(
@@ -1682,33 +1892,28 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                     conv_id, "assistant", answer_summary,
                     sql_query=sql, row_count=len(data),
                     columns=columns, data=data, stat_col=stat_col,
+                    analysis=analysis,
                 )
                 convo = _conv.get_conversation(conv_id, user["email"])
                 msg_count = convo["message_count"] if convo else 0
                 if msg_count == 2:
                     _conv.trigger_title_generation(
-                        conv_id, req.question, answer_summary,
-                        llm, api_key, user["email"],
+                        conv_id, req.question, answer_summary, llm, api_key, user["email"],
                     )
                 from conversations import _SUMMARY_THRESHOLD
                 if msg_count >= _SUMMARY_THRESHOLD and msg_count % 5 == 0:
                     _conv.trigger_summarisation(conv_id, llm, api_key, user["email"])
             except Exception as _ce:
-                log.warning("Failed to save conversation exchange",
-                            conv_id=conv_id, error=str(_ce))
+                log.warning("Failed to save conversation exchange", conv_id=conv_id, error=str(_ce))
 
-        # For SalesPlay queries: if the user asked about a recent time window
-        # (today, this week, etc.) and our data is more than 1 hour stale,
-        # surface a transparent staleness note. We never block — we always show
-        # the answer, but we let the user know the data cut-off time.
+        # ── SalesPlay staleness note ──────────────────────────────────────────
         if nl_last_sync_at and data is not None:
             _TIME_KEYWORDS = (
                 "today", "yesterday", "this week", "this month", "last 24",
                 "last hour", "right now", "current", "latest", "recent",
                 "tonight", "this morning", "this afternoon",
             )
-            _question_lower = req.question.lower()
-            if any(kw in _question_lower for kw in _TIME_KEYWORDS):
+            if any(kw in req.question.lower() for kw in _TIME_KEYWORDS):
                 try:
                     from datetime import datetime as _dt, timezone as _tz
                     _synced = _dt.fromisoformat(nl_last_sync_at.replace("Z", "+00:00"))
@@ -1727,31 +1932,38 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                 except Exception as _age_err:
                     log.debug("Staleness note skipped", error=str(_age_err))
 
-        response = {
-            "columns": columns, "data": data, "row_count": len(data),
-            "analysis": analysis, "think_mode": req.think_mode,
-            "conversation_id": conv_id,
-            "data_as_of": nl_last_sync_at,  # ISO string or None; frontend shows "Data as of X ago"
-        }
+        response = _base_query_response(
+            success=True, type="data",
+            steps=steps,
+            columns=columns, data=data, row_count=len(data),
+            analysis=analysis, think_mode=req.think_mode,
+            conversation_id=conv_id, data_as_of=nl_last_sync_at,
+        )
         # Only own-DB users get the generated SQL back (used by QueryPage's
-        # "Show SQL" debugging view). Integration users (SalesPlay/Loyverse)
-        # query shared internal tables — the SQL would expose internal table
-        # names, column names, and tenant_id values, so never return it.
+        # "Show SQL" debugging view). Integration users query shared internal
+        # tables — returning SQL would expose internal names and tenant_id values.
         if s.get("db_configs"):
             response["sql"] = sql
         return response
-    except HTTPException:
-        raise
+
+    except LLMTransientError as e:
+        log.warning("NL query failed — all LLM keys exhausted", error=str(e))
+        return _base_query_response(
+            success=False, type="error", steps=steps, conversation_id=conv_id,
+            message="Our AI service is currently busy. Please try again in a moment.",
+        )
     except Exception as e:
         log.error("NL query failed", user=user["email"], error=str(e), exc_info=True)
-        return {
-            "columns": [], "data": [], "row_count": 0,
-            "analysis": "I wasn't able to answer that. Could you try rephrasing your question?",
-            "think_mode": req.think_mode, "conversation_id": conv_id,
-            "data_as_of": nl_last_sync_at,
-        }
+        return _base_query_response(
+            success=False, type="error", steps=steps, conversation_id=conv_id,
+            message="Something went wrong while processing your question. Please try rephrasing it or try again shortly.",
+        )
     finally:
-        conn.close()  # always returned to pool (or closed for own-DB users)
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════

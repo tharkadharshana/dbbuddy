@@ -51,18 +51,12 @@ const _fmtTok = (raw) => {
 
 export function UsageMeter({ sub }) {
   if (!sub || sub.status === 'no_subscription') return null
-
   const used  = sub.tokens_used  || 0
   const total = sub.tokens_total_available || sub.tokens_limit || 1
   const pct   = Math.min(100, Math.round((used / total) * 100))
   const color = pct >= 100 ? 'var(--red)' : pct >= 80 ? 'var(--amber)' : 'var(--blue)'
-
   return (
-    <div style={{
-      display:'flex', flexDirection:'column', gap:4,
-      padding:'7px 12px', borderRadius:'var(--r-md)',
-      border:'1px solid var(--border)', background:'var(--bg2)', minWidth:160,
-    }}>
+    <div style={{ display:'flex', flexDirection:'column', gap:4, padding:'7px 12px', borderRadius:'var(--r-md)', border:'1px solid var(--border)', background:'var(--bg2)', minWidth:160 }}>
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:6 }}>
         <span style={{ fontSize:12, fontWeight:600, color:'var(--text2)' }}>⚡ Tokens</span>
         <span style={{ fontSize:10, color, fontFamily:'var(--mono)' }}>{pct}%</span>
@@ -70,9 +64,7 @@ export function UsageMeter({ sub }) {
       <div style={{ height:3, borderRadius:99, background:'var(--bg3)', overflow:'hidden' }}>
         <div style={{ height:'100%', width:`${pct}%`, borderRadius:99, background:color, transition:'width .3s' }} />
       </div>
-      <div style={{ fontSize:9, color:'var(--text3)', fontFamily:'var(--mono)' }}>
-        {_fmtTok(used)} / {_fmtTok(total)}
-      </div>
+      <div style={{ fontSize:9, color:'var(--text3)', fontFamily:'var(--mono)' }}>{_fmtTok(used)} / {_fmtTok(total)}</div>
     </div>
   )
 }
@@ -203,49 +195,36 @@ export function PieChartSimple({ data, nameKey, valueKey, height=220 }) {
 
 const SUPPORT_EMAIL = 'support@datamind.ai'
 
-export function AIQuotaWall({ sub }) {
-  const isNoSub    = !sub || sub.status === 'no_subscription'
-  const isExpired  = sub?.status === 'expired' || sub?.status === 'cancelled'
-  const isExhausted = sub?.tokens_pct >= 100
-
-  if (!isNoSub && !isExpired && !isExhausted) return null
-
-  let title, body
-  if (isNoSub) {
-    title = 'No active plan'
-    body  = "We're in beta — email us and we'll get you set up with access."
-  } else if (isExpired) {
-    title = 'Your trial has ended'
-    body  = "We're in beta — email us if you'd like continued access to AI features."
-  } else {
-    const resetDate = sub?.period_end
-      ? new Date(sub.period_end).toLocaleDateString('en-US', { month: 'long', day: 'numeric' })
-      : 'next month'
-    title = 'AI credits exhausted'
-    body  = `You've used all ${sub.ai_total_available} AI credits for this billing period. Your quota resets on ${resetDate}. We're in beta — email us if you need more before then.`
-  }
-
-  return (
-    <div style={{
-      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-      flex: 1, padding: 40, textAlign: 'center',
-    }}>
-      <div style={{ fontSize: 48, marginBottom: 16 }}>🔒</div>
-      <div style={{ fontSize: 18, fontWeight: 700, color: 'var(--text)', marginBottom: 10 }}>{title}</div>
-      <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.7, maxWidth: 400, marginBottom: 24 }}>{body}</div>
-      <a
-        href={`mailto:${SUPPORT_EMAIL}`}
-        style={{
-          padding: '10px 24px', borderRadius: 8, border: 'none',
-          background: 'var(--blue)', color: '#fff', fontWeight: 600, fontSize: 14,
-          textDecoration: 'none', display: 'inline-block',
-        }}
-      >
-        Contact Us
-      </a>
-    </div>
-  )
-}
+// BILLING HIDDEN — AIQuotaWall commented out
+// export function AIQuotaWall({ sub }) {
+//   const isNoSub     = !sub || sub.status === 'no_subscription'
+//   const isExpired   = sub?.status === 'expired' || sub?.status === 'cancelled'
+//   const isExhausted = sub?.tokens_pct >= 100
+//   if (!isNoSub && !isExpired && !isExhausted) return null
+//   let title, body
+//   if (isNoSub) {
+//     title = 'No active plan'
+//     body  = "We're in beta — email us and we'll get you set up with access."
+//   } else if (isExpired) {
+//     title = 'Your trial has ended'
+//     body  = "We're in beta — email us if you'd like continued access to AI features."
+//   } else {
+//     const resetDate = sub?.period_end
+//       ? new Date(sub.period_end).toLocaleDateString('en-US', { month: 'long', day: 'numeric' })
+//       : 'next month'
+//     title = 'AI credits exhausted'
+//     body  = `You've used all ${sub.ai_total_available} AI credits for this billing period. Your quota resets on ${resetDate}.`
+//   }
+//   return (
+//     <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', flex:1, padding:40, textAlign:'center' }}>
+//       <div style={{ fontSize:48, marginBottom:16 }}>🔒</div>
+//       <div style={{ fontSize:18, fontWeight:700, color:'var(--text)', marginBottom:10 }}>{title}</div>
+//       <div style={{ fontSize:13, color:'var(--text2)', lineHeight:1.7, maxWidth:400, marginBottom:24 }}>{body}</div>
+//       <a href={`mailto:${SUPPORT_EMAIL}`} style={{ padding:'10px 24px', borderRadius:8, border:'none', background:'var(--blue)', color:'#fff', fontWeight:600, fontSize:14, textDecoration:'none', display:'inline-block' }}>Contact Us</a>
+//     </div>
+//   )
+// }
+export function AIQuotaWall() { return null }
 
 // ── Data Table ────────────────────────────────────────────────────────────────
 
