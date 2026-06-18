@@ -162,6 +162,20 @@ def _set_query_timeout(cursor) -> None:
     except Exception as e:
         log.warning("Failed to set SQL timeout", var=_sql_timeout_var, error=str(e))
 
+
+# SQL keywords that can never be a table alias. The LLM often omits aliases,
+# so the FROM/JOIN regex captures the next keyword (e.g. WHERE, JOIN, ON) as the
+# alias, which then produces invalid SQL like WHERE.tenant_id = '...'. Both the
+# tenant-isolation and date-filter enforcers guard against this by falling back
+# to the table name when the captured alias is one of these.
+_SQL_KEYWORDS = frozenset({
+    'WHERE', 'GROUP', 'ORDER', 'LIMIT', 'HAVING', 'ON', 'SET',
+    'INNER', 'LEFT', 'RIGHT', 'CROSS', 'FULL', 'JOIN', 'UNION',
+    'SELECT', 'FROM', 'AND', 'OR', 'NOT', 'IN', 'IS', 'NULL',
+    'AS', 'BY', 'ASC', 'DESC', 'WITH', 'USING',
+})
+
+
 def _enforce_tenant_isolation(sql: str, tenant_id: str) -> str:
     """
     SEC-15: Server-side tenant isolation enforcement for shared sp_*/ly_* tables.
@@ -196,15 +210,6 @@ def _enforce_tenant_isolation(sql: str, tenant_id: str) -> str:
                 f"your account. Cross-tenant queries are not allowed."
             )
 
-    # SQL keywords that can never be a table alias — if the regex captures one of
-    # these it means the table has no alias and the keyword belongs to the next clause.
-    _ALIAS_KEYWORDS = frozenset({
-        'WHERE', 'GROUP', 'ORDER', 'HAVING', 'LIMIT', 'ON', 'SET',
-        'INNER', 'LEFT', 'RIGHT', 'CROSS', 'FULL', 'JOIN', 'UNION',
-        'AND', 'OR', 'NOT', 'SELECT', 'FROM', 'AS', 'BY', 'WITH',
-        'IN', 'IS', 'NULL', 'ASC', 'DESC', 'USING',
-    })
-
     # Find all sp_*/ly_* table references: (FROM|JOIN) table_name [AS] alias
     # Captures: group1=clause, group2=table, group3=alias (may be None)
     table_re = re.compile(
@@ -222,7 +227,7 @@ def _enforce_tenant_isolation(sql: str, tenant_id: str) -> str:
         table_raw = m.group(2).strip('`')
         captured_alias = (m.group(3) or "").strip('`')
         # If the captured alias is a SQL keyword, the table has no alias — use table name.
-        alias_raw = table_raw if (not captured_alias or captured_alias.upper() in _ALIAS_KEYWORDS) else captured_alias
+        alias_raw = table_raw if (not captured_alias or captured_alias.upper() in _SQL_KEYWORDS) else captured_alias
         refs.append((alias_raw, clause_type, m.end()))
 
     if not refs:
@@ -348,14 +353,8 @@ def _enforce_date_filter(sql: str, history_months: int) -> str:
     if not m:
         return sql  # no shared table found — nothing to inject
 
-    _SQL_RESERVED = frozenset({
-        'WHERE', 'GROUP', 'ORDER', 'LIMIT', 'HAVING', 'ON', 'SET',
-        'INNER', 'LEFT', 'RIGHT', 'CROSS', 'FULL', 'JOIN', 'UNION',
-        'SELECT', 'FROM', 'AND', 'OR', 'NOT', 'IN', 'IS', 'NULL',
-        'AS', 'BY', 'ASC', 'DESC', 'WITH', 'USING',
-    })
     alias_candidate = m.group(2)
-    if alias_candidate and alias_candidate.strip('`').upper() in _SQL_RESERVED:
+    if alias_candidate and alias_candidate.strip('`').upper() in _SQL_KEYWORDS:
         alias_candidate = None
     alias = (alias_candidate or m.group(1)).strip('`')
     date_cond = (
