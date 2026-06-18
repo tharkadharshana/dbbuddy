@@ -1,17 +1,20 @@
 """
 providers/salesplay/sync.py
 ===========================
-Fetches data from SalesPlay REST API and upserts into the unified
-integration_records table via providers/upsert.py.
+Fetches data from SalesPlay REST API and upserts into the shared sp_* tables
+and the integration_records table via providers/upsert.py.
 
-VERIFIED FROM OFFICIAL API DOCS (spdeveloper.nvision.lk) + POSTMAN COLLECTION:
-
-  Base URL : https://spdeveloperapi.nvision.lk/v1.0
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CONNECTION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Base URL : https://spdeveloperapi.nvision.lk/v1.0  (QA: spqaapi.nvision.lk)
   Auth     : Header key = "Token", value = "Bearer <token>"  (NOT Authorization)
-  Filters  : JSON body on GET requests
+  Filters  : JSON body on GET requests (not query params)
   Date fmt : "YYYY-MM-DD HH:MM:SS" (24-hour)
 
-ENDPOINT FILTER KEYS (exact from API docs + Postman):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ENDPOINT FILTER KEYS (exact from live API)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   GET /shops          → shop_ids, updated_at_min, updated_at_max, limit, cursor
   GET /category       → category_ids, created_at_min, created_at_max, limit, cursor
   GET /sub_category   → sub_category_ids, created_at_min, created_at_max, limit, cursor
@@ -23,16 +26,133 @@ ENDPOINT FILTER KEYS (exact from API docs + Postman):
   GET /customers      → customer_ids, email, created_at_min, created_at_max, limit, cursor
   GET /products       → product_ids, created_at_min, created_at_max, limit, cursor
   GET /receipts       → receipt_numbers, shop_id, created_at_min, created_at_max, limit, cursor
+                        NOTE: created_at_min + created_at_max are REQUIRED — 401 without them
 
-ACTUAL RESPONSE FIELD NAMES (from live API sample responses in docs):
-  /shops         → id, shop_name, address, phone_number, city, email, is_enable, updated_date
-  /category      → id, category_name, created_at, updated_date
-  /payment_types → id, payment_type_name, shops[], created_date, updated_date
-  /receipts      → receipt_number (IS the PK — no separate id),
-                   receipt_type, receipt_date_time, total_money,
-                   customer_id, total_discount (decimal), total_discounts (array — ignore),
-                   employee_id, shop_id, note, total_tax, total_charge,
-                   line_products[], payments[], receipt_delete_status
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+API → DB FIELD MAPPING  (verified against live API responses, 2026-06-18)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+── /shops → sp_shops ────────────────────────────────────────────────────────
+  API field         DB field       Notes
+  id                id
+  shop_name         shop_name
+  address           address
+  phone_number      phone
+  email             email
+  is_enable         status         Stored as "1"/"0" string
+  updated_date      updated_at
+  city              (not stored)   Available in API but omitted
+  longitude/lat     (not stored)   Available in API but omitted
+  terminal_list     (not stored)   Available in API but omitted
+  (no API field)    currency       Always NULL — API doesn't return at shop level
+  (no API field)    country        Always NULL — API doesn't return at shop level
+  (no API field)    timezone       Always NULL — API doesn't return at shop level
+
+── /category → sp_categories ────────────────────────────────────────────────
+  API field              DB field       Notes
+  id                     id
+  category_name          category_name
+  created_at             created_at
+  updated_date           updated_at
+  item_classification_code (not stored) Available in API but omitted
+  (no API field)         color          Always NULL
+  (no API field)         shop_id        Always NULL
+
+── /payment_types → sp_payment_types ────────────────────────────────────────
+  API field           DB field        Notes
+  id                  id
+  payment_type_name   payment_name
+  payment_type_code   payment_type    Was missing before fix; now stored correctly
+  created_date        created_at
+  updated_date        updated_at
+  shops[]             (not stored)    Available in API but omitted
+  (no API field)      is_active       Always 1 (DB default) — all returned types are active
+  (no API field)      shop_id         Always NULL
+
+── /customers → sp_customers ────────────────────────────────────────────────
+  API field           DB field         Notes
+  id                  id
+  name                customer_name    API returns full name in "name" (no first/last split);
+                                       sync falls back: first_name+last_name → name → "Unknown"
+  email               email
+  phone_number        phone_number     Also tries c.get("phone") as fallback
+  customer_code       customer_code
+  description         note
+  total_visits        total_visits     API returns as string — cast to int
+  total_spent         total_spent      API returns as string — cast to float via _dec()
+  total_points        points_balance   API key is "total_points" (not "points_balance");
+                                       sync tries points_balance first, falls back to total_points
+  created_at          created_at
+  updated_at          updated_at       Also tries updated_date as fallback
+  (computed)          last_purchase_date  Set post-sync via refresh_customer_last_purchase()
+                                         from MAX(sp_receipts.created_at) per customer
+  address/city/etc    (not stored)     Available in API but omitted
+
+── /products → sp_products ──────────────────────────────────────────────────
+  API field                      DB field       Notes
+  id                             id
+  product_name / name            product_name
+  description                    description
+  category_id                    category_id    Often absent for no-variant products;
+                                                category_name filled via sp_categories lookup
+                                                or direct p.get("category") fallback
+  product_code (top-level)       sku            Tried on first variant, then top-level p
+  barcode (on variant)           barcode
+  cost / default_cost (variant   cost           Fallback chain: variant.default_cost →
+    or top-level)                               variant.cost → p.cost
+  shops[0].price / variant       price          Fallback chain: variant.shops[0].price →
+    shops[0].price / variant                    p.shops[0].price → variant.price → 0
+    price                                       IMPORTANT: use _dec(..., None) not _dec(...)
+                                                so None sentinel propagates through if-checks.
+                                                _dec(None) without a default returns 0.0,
+                                                which breaks the fallback chain silently.
+  created_at / created_date      created_at
+  updated_at / updated_date      updated_at
+  category / sp_categories       category_name  Prefer sp_categories JOIN lookup by category_id;
+    lookup                                      fall back to inline p.get("category") string
+                                                if no category_id (no-variant products)
+
+── /receipts → sp_receipts ──────────────────────────────────────────────────
+  API field               DB field           Notes
+  receipt_number          id + receipt_number  IS the PK — API has no separate "id" field
+  receipt_type            receipt_type        Defaults to "SALE" if absent
+  receipt_date_time       created_at          Also used for updated_at (no separate updated field)
+  total_money             total_money
+  total_discount          total_discount      Use decimal field — ignore total_discounts[] array
+  total_tax               total_tax
+  note                    note
+  receipt_delete_status   status              false → "COMPLETED", true → "VOID"
+  shop_id                 shop_id
+  shop_id → lookup        shop_name           Resolved from shop_map (synced before receipts)
+  customer_id             customer_id
+  customer_id → lookup    customer_name       Resolved from cust_map (synced before receipts)
+  payments[0].payment_type_id   payment_type_id
+  payment_type_id → lookup      payment_type_name  Resolved from pay_map
+  payments[0].money_amount      payment_amount     Falls back to total_money if absent
+  (not stored)            refund_for          Available in API — relevant for refunds
+  (not stored)            employee_id         Available in API but omitted
+  (not stored)            order_type          Available in API but omitted
+  (hardcoded 0)           points_earned       API doesn't return at receipt level
+  (hardcoded 0)           points_deducted     API doesn't return at receipt level
+
+── /receipts[].line_products → sp_receipt_line_items ────────────────────────
+  API field             DB field           Notes
+  product_line_no       id                 No "id" field on line items; product_line_no is PK
+  product_id            product_id
+  product_name / name   product_name
+  product_code / sku    sku
+  quantity              quantity
+  price                 price              Selling price at time of sale (always correct even
+                                           if sp_products.price was stale/zero)
+  gross_total_money     gross_total_money  Pre-discount line total; falls back to price×qty
+  total_discount        total_discount     Tries discount_amount, product_discount, total_discount
+  total_money           total_money        Post-discount line total; falls back to gross_total_money
+  cost                  cost               Tries product_cost, then cost
+  category_name         category_name      Uses inline API value if present and not "No category";
+                                           falls back to sp_products lookup by product_id
+  cost_total            (not stored)       Total cost for line (cost × qty) — omitted
+  variant_id            variant_id         API doesn't return at line level; always NULL
+  (receipt field)       created_at         Denormalized from receipt.receipt_date_time
 """
 
 import requests
@@ -183,14 +303,18 @@ class SalesPlayAPIClient:
 
     def validate(self) -> dict:
         data = self._get("/merchant", {})
+        # API wraps the merchant object in a list: {"merchant": [{...}]}
+        merchant = (data.get("merchant") or [{}])[0]
+        currency_raw = merchant.get("currency") or {}
+        currency = currency_raw.get("code", "") if isinstance(currency_raw, dict) else str(currency_raw)
         return {
             "business_name": (
-                data.get("merchant_name") or data.get("name") or
-                data.get("business_name") or "SalesPlay Account"
+                merchant.get("merchant_name") or merchant.get("name") or
+                merchant.get("business_name") or "SalesPlay Account"
             ),
-            "shop_count":  data.get("shop_count", 0),
-            "currency":    data.get("currency", ""),
-            "merchant_id": data.get("id", ""),
+            "shop_count":  merchant.get("shop_count", 0),
+            "currency":    currency,
+            "merchant_id": merchant.get("id", ""),
         }
 
 
@@ -384,6 +508,7 @@ def sync_payment_types(client: SalesPlayAPIClient, conn, prefix: str, user_email
         record = {
             "id":           ptid,
             "payment_name": _str(pt.get("payment_type_name"), 255),
+            "payment_type": _str(pt.get("payment_type_code"), 50),
             "created_at":   _dt(pt.get("created_date")),
             "updated_at":   _dt(pt.get("updated_date")),
         }
@@ -429,7 +554,7 @@ def sync_customers(client: SalesPlayAPIClient, conn, prefix: str, user_email: st
             "note":          _str(c.get("description") or c.get("note")),
             "total_visits":  int(c.get("total_visits") or 0),
             "total_spent":   _dec(c.get("total_money_spent") or c.get("total_spent"), 0),
-            "points_balance": _dec(c.get("points_balance"), 0),
+            "points_balance": _dec(c.get("points_balance") or c.get("total_points"), 0),
             "created_at":    _dt(c.get("created_at")),
             "updated_at":    _dt(c.get("updated_at") or c.get("updated_date")),
         }
@@ -464,7 +589,12 @@ def sync_products(client: SalesPlayAPIClient, conn, prefix: str, user_email: str
         first         = next((v for v in variants if not v.get("deleted_at")),
                              variants[0] if variants else {})
         variant_shops = first.get("shops") or []
-        price         = _dec(variant_shops[0].get("price") if variant_shops else None)
+        # Price fallback: variant shop → product-level shops → variant price → 0
+        # Use None sentinel (not 0.0) so _dec(None, None) propagates correctly.
+        price = _dec(variant_shops[0].get("price") if variant_shops else None, None)
+        if price is None:
+            top_shops = p.get("shops") or []
+            price = _dec(top_shops[0].get("price") if top_shops else None, None)
         if price is None:
             price = _dec(first.get("price"), 0)
 
@@ -473,14 +603,14 @@ def sync_products(client: SalesPlayAPIClient, conn, prefix: str, user_email: str
             "product_name": _str(p.get("product_name") or p.get("name"), 500),
             "description":  _str(p.get("description")),
             "category_id":  _str(p.get("category_id"), 64),
-            "sku":          _str(first.get("product_code") or first.get("sku"), 100),
+            "sku":          _str(first.get("product_code") or first.get("sku") or p.get("product_code"), 100),
             "barcode":      _str(first.get("barcode"), 100),
-            "cost":         _dec(first.get("default_cost") or first.get("cost"), 0),
+            "cost":         _dec(first.get("default_cost") or first.get("cost") or p.get("cost"), 0),
             "price":        price or 0.0,
-            "created_at":   _dt(p.get("created_at")),
+            "created_at":   _dt(p.get("created_at") or p.get("created_date")),
             "updated_at":   _dt(p.get("updated_at") or p.get("updated_date")),
         }
-        # Enrich with category_name from already-synced sp_categories
+        # Enrich with category_name: prefer sp_categories lookup, fall back to inline name from API
         cat_id = record.get("category_id")
         if cat_id:
             _cur = conn.cursor()
@@ -491,6 +621,9 @@ def sync_products(client: SalesPlayAPIClient, conn, prefix: str, user_email: str
             cat_row = _cur.fetchone()
             _cur.close()
             record["category_name"] = cat_row[0] if cat_row else None
+        else:
+            cat_name = p.get("category")
+            record["category_name"] = _str(cat_name, 255) if cat_name and cat_name != "No category" else None
 
         if upsert_record(conn, prefix, user_email, "salesplay", "product", record,
                          id_field="id", ext_created_field="created_at",
@@ -604,32 +737,37 @@ def sync_receipts(client: SalesPlayAPIClient, conn, prefix: str, user_email: str
                 item.get("id") or item.get("product_line_no") or f"{r_id}_{idx}", 128
             )
             prod_id    = _str(item.get("product_id"), 64)
-            unit_price = _dec(item.get("price") or item.get("product_unit_price"), 0)
-            qty        = _dec(item.get("quantity") or item.get("product_qty") or
-                              item.get("qty"), 1)
-            line_total = _dec(item.get("total") or item.get("product_price") or
-                              item.get("total_money"), (unit_price or 0) * (qty or 1))
+            unit_price        = _dec(item.get("price") or item.get("product_unit_price"), 0)
+            qty               = _dec(item.get("quantity") or item.get("product_qty") or
+                                     item.get("qty"), 1)
+            gross_total_money = _dec(item.get("gross_total_money"),
+                                     (unit_price or 0) * (qty or 1))
+            line_total        = _dec(item.get("total") or item.get("total_money"),
+                                     gross_total_money)
             line_disc  = _dec(item.get("discount_amount") or item.get("product_discount") or
                               item.get("total_discount"), 0)
 
             li_record = {
-                "id":               item_id,
-                "receipt_id":       r_id,
-                "product_id":       prod_id,
-                "variant_id":       _str(item.get("variant_id"), 64),
-                "product_name":     _str(item.get("product_name") or item.get("name"), 500),
-                "sku":              _str(item.get("product_code") or item.get("sku"), 100),
-                "quantity":         qty,
-                "price":            unit_price,
-                "gross_total_money": line_total,
-                "total_discount":   line_disc,
-                "total_money":      line_total,
+                "id":                item_id,
+                "receipt_id":        r_id,
+                "product_id":        prod_id,
+                "variant_id":        _str(item.get("variant_id"), 64),
+                "product_name":      _str(item.get("product_name") or item.get("name"), 500),
+                "sku":               _str(item.get("product_code") or item.get("sku"), 100),
+                "quantity":          qty,
+                "price":             unit_price,
+                "gross_total_money": gross_total_money,
+                "total_discount":    line_disc,
+                "total_money":       line_total,
                 "cost":             _dec(item.get("product_cost") or item.get("cost"), 0),
                 "created_at":       receipt_dt,  # denormalized from receipt for date filtering
             }
 
-            # Enrich line_item with category_name so analytics needs no JOIN to products
-            if prod_id:
+            # category_name: use value from API line item directly; fall back to sp_products lookup
+            api_cat = _str(item.get("category_name"), 255)
+            if api_cat and api_cat != "No category":
+                li_record["category_name"] = api_cat
+            elif prod_id:
                 _cur = conn.cursor()
                 _cur.execute(
                     "SELECT category_name FROM sp_products WHERE tenant_id=%s AND id=%s",
@@ -638,6 +776,8 @@ def sync_receipts(client: SalesPlayAPIClient, conn, prefix: str, user_email: str
                 prod_row = _cur.fetchone()
                 _cur.close()
                 li_record["category_name"] = prod_row[0] if prod_row else None
+            else:
+                li_record["category_name"] = None
 
             # Line items don't consume budget separately — counted via receipt budget above
             upsert_record(conn, prefix, user_email, "salesplay", "receipt_line_item",

@@ -1498,20 +1498,23 @@ def _run_think_analysis(question: str, columns: list, data: list,
         f"{header}\n{rows_text}\n\n"
         "Answer the user's question directly using this data. "
         "Be specific with numbers and values from the results. "
-        "If the question asks for advice or recommendations, give 2-3 concrete, "
-        "actionable suggestions based on what the data shows. "
-        "Keep your response under 150 words. "
+        "For simple factual questions (price, count, name, date), answer in one sentence. "
+        "Only add extra context if the data itself reveals something genuinely surprising or actionable. "
+        "Never pad with generic advice, suggestions, or tips the user did not ask for. "
+        "Keep your response under 80 words. "
         "Write in plain sentences only — no markdown, no asterisks, no bullet symbols."
     )
     return call_llm(
         prompt,
         system=(
-            "You are a concise business analyst. Answer based only on the provided data. "
+            "You are a concise data assistant. Answer based only on the provided data. "
+            "Match response length to question complexity — simple questions get one sentence. "
+            "Never volunteer advice or recommendations unless explicitly asked. "
             "Use plain text only — never use markdown, asterisks, bold markers (**), "
             "underscores, or any special formatting symbols."
         ),
         llm=llm,
-        max_tokens=400,
+        max_tokens=200,
         api_key=api_key,
         user_email=user_email,
         operation="think",
@@ -1668,6 +1671,8 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
         _classifier_context = "Always respond in the same language the user used to write their question. Never switch to English unless the question itself was in English."
         if nl_country:
             _classifier_context += f" The user's country is '{nl_country}' — treat any reference to 'my country' as {nl_country}, do not ask for clarification."
+        if nl_currency:
+            _classifier_context += f" The user's currency is '{nl_currency}' — use this when answering any question about their currency."
         if nl_user_tz and nl_user_tz != "UTC":
             _classifier_context += f" The user's timezone is '{nl_user_tz}'."
         classification = classify_question(
@@ -1713,6 +1718,23 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                 f"Hello! I'm {_APP_NAME}, your AI data assistant. "
                 "Ask me anything about your data — for example: "
                 "'Show me sales from last month' or 'Who are my top customers?'"
+            )
+            if conv_id:
+                try:
+                    _conv.save_message(conv_id, "user", req.question)
+                    _conv.save_message(conv_id, "assistant", response_text)
+                except Exception:
+                    pass
+            return _base_query_response(
+                success=True, type="conversational", message=response_text,
+                steps=steps, conversation_id=conv_id, think_mode=req.think_mode,
+            )
+
+        # ── Unsupported query (predictions, external data, etc.) ─────────────
+        if q_type == "unsupported_query":
+            response_text = classification.get(
+                "response",
+                "I can't answer that from your data, but I can show you historical trends instead."
             )
             if conv_id:
                 try:

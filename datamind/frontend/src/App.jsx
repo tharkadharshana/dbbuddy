@@ -27,6 +27,7 @@ export default function App() {
   const [theme, setTheme]       = useState(() => localStorage.getItem('dm_theme') || 'dark')
   const [totalRows, setTotalRows] = useState(0)
   const [sub, setSub]             = useState(null)
+  const [hasDB, setHasDB]         = useState(false)
   const [conversations, setConversations]   = useState([])
   const [activeConvId, setActiveConvId]     = useState(null)
   const [ssoPending, setSsoPending] = useState(() => new URLSearchParams(window.location.search).has('sso'))
@@ -102,6 +103,7 @@ export default function App() {
         fetchProviderStats().catch(() => ({total_rows:0})),
       ])
       const hasDB       = s.db_configs?.length > 0
+      setHasDB(hasDB)
       const hasKey      = !!s.has_llm_key
       const hasProvider = providers.connections?.length > 0
 
@@ -193,7 +195,7 @@ export default function App() {
     chat:        <ChatPage llm={llm} setLlm={setLlm} connection={connection} sub={sub} onNavigate={setPage}
                            onQueryComplete={loadSub} activeConvId={activeConvId}
                            onConvCreated={handleConvCreated} onConversationChange={loadConversations} />,
-    discover:    <DiscoverPage llm={llm} setLlm={setLlm} sub={sub} onNavigate={setPage} onQueryComplete={loadSub} />,
+    discover:    <DiscoverPage llm={llm} setLlm={setLlm} sub={sub} hasDB={hasDB} onNavigate={setPage} onQueryComplete={loadSub} />,
     forecast:    <ForecastPage sub={sub} onNavigate={setPage} onQueryComplete={loadSub} />,
     anomaly:     <AnomalyPage sub={sub} onNavigate={setPage} onQueryComplete={loadSub} />,
     reports:     <ReportsPage llm={llm} setLlm={setLlm} sub={sub} onNavigate={setPage} onQueryComplete={loadSub} />,

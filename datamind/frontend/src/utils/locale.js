@@ -16,7 +16,7 @@ export function formatCurrency(value, locale) {
   const sym = (l?.currency || '$').trim()
   const neg = Number(value) < 0
   const abs = formatNumber(Math.abs(Number(value)), l)
-  return neg ? `-${sym}${abs}` : `${sym}${abs}`
+  return neg ? `-${sym} ${abs}` : `${sym} ${abs}`
 }
 
 export function formatNumber(value, locale, decimals) {

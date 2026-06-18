@@ -311,7 +311,7 @@ export default function ChatPage({
           const total = data.data.reduce((s, r) => s + (r[numCol] || 0), 0)
           summary += ` · Total ${numCol.replace(/_/g, ' ')}: ${formatNumber(total)}`
         }
-        if (rowCount === 0) summary = 'No matching records found for your query.'
+        if (rowCount === 0) summary = "I couldn't find anything matching that. Try rephrasing or broadening your question."
       }
 
       setMessages(m => m.map(msg =>

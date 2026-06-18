@@ -498,16 +498,47 @@ def classify_question(
     system = (
         "You are a data assistant classifier. Respond ONLY with valid JSON — no markdown, no explanation.\n"
         "Classify the question into exactly one type:\n"
+
         '{"type":"data_query"} — question about data that exists in the database\n'
+
         '{"type":"multi_step","sub_questions":["q1","q2"]} — clearly contains 2+ separate data queries; '
         "only use this when two or more genuinely distinct SQL queries are needed\n"
-        '{"type":"conversational","response":"..."} — greeting, small talk, thank-you, out-of-scope questions, '
-        "or any request to modify/delete/create data (INSERT/UPDATE/DELETE/DROP/TRUNCATE/ALTER). "
+
+        '{"type":"unsupported_query","response":"..."} — ONLY use this when the question requires data that '
+        "genuinely cannot come from the database: future predictions (next month/next year), "
+        "external market data, competitor data, weather, or city-wide/industry trends. "
+        "NEVER use this for questions with time filters like 'this month', 'this week', 'today', "
+        "'last 30 days', 'so far this year' — those are valid data_query questions that filter "
+        "existing records by date. "
+        "Respond helpfully by explaining what CAN be shown instead "
+        "(e.g. 'I can't predict next month, but I can show you historical top sellers by month — would that help?').\n"
+
+        '{"type":"conversational","response":"..."} — greeting, small talk, thank-you, or a request to '
+        "modify/delete/create data (INSERT/UPDATE/DELETE/DROP/TRUNCATE/ALTER). "
         f"For harmful/destructive requests respond with a polite refusal as {app_name}. "
-        f"For all others respond as {app_name}, a friendly AI data assistant.\n"
+        "Also use this type when: "
+        "(1) the user asks what data, tables, or information is available ('what data do you have', 'what can you show me', "
+        "'what tables are there') — respond with a friendly list of the available tables from the table list provided; "
+        "(2) the user asks about their own account details (country, currency, timezone) — answer directly from the "
+        "context provided in these instructions, do NOT deflect or say 'I'm a data assistant'; "
+        f"for all other conversational cases respond as {app_name}, a friendly AI data assistant.\n"
+
         '{"type":"clarification_needed","clarification":"..."} — the question is about data but too vague to answer; '
-        "ask ONE specific clarifying question. Only use this when the intent is clearly a data query but key details are missing.\n"
-        "IMPORTANT: Use conversation history (if provided) to understand follow-up questions and pronouns like 'they', 'those', 'it'. "
+        "ask ONE specific clarifying question. "
+        "IMPORTANT RULE: if the conversation history shows the last assistant message was already a clarification "
+        "question and the user has now given ANY response (even a single word like 'sales', 'any', a category name, "
+        "or a number), do NOT return clarification_needed again — instead reconstruct the full original intent from "
+        "history combined with the user's answer, and return data_query.\n"
+
+        "CRITICAL FOLLOW-UP RULE: if the conversation history shows the assistant's last message offered an "
+        "alternative or asked if the user would like to see something (e.g. 'I can show you X — would that help?', "
+        "'shall I show historical data instead?') and the user responds with acceptance (e.g. 'yes', 'do it', "
+        "'sure', 'go ahead', 'show me', 'yeah', 'yep', 'ok'), treat this as a data_query — reconstruct the full "
+        "data request from the conversation history and return data_query. Never return unsupported_query for "
+        "a user acceptance of an alternative the assistant itself offered.\n"
+
+        "IMPORTANT: Use conversation history (if provided) to understand follow-up questions and pronouns like "
+        "'they', 'those', 'it'. "
         + (language_hint if language_hint else "Always respond in the same language the user used to write their question.")
     )
     history_block = f"\nConversation so far:\n{conversation_history}\n" if conversation_history else ""
@@ -518,7 +549,7 @@ def classify_question(
         if raw.startswith("```"):
             raw = re.sub(r"^```[a-z]*\n?", "", raw).rstrip("`").strip()
         result = json.loads(raw)
-        if result.get("type") not in ("data_query", "multi_step", "conversational", "clarification_needed"):
+        if result.get("type") not in ("data_query", "multi_step", "conversational", "clarification_needed", "unsupported_query"):
             return {"type": "data_query"}
         return result
     except Exception as _e:
@@ -616,7 +647,16 @@ def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "openai",
         "Given a database schema (with foreign key relationships) and a plain English question, "
         "write a valid MySQL SELECT query that may JOIN multiple tables as needed. "
         "Return ONLY the raw SQL — no markdown, no backticks, no explanation. "
-        "Never use DROP, DELETE, INSERT, UPDATE, or any mutating statement."
+        "Never use DROP, DELETE, INSERT, UPDATE, or any mutating statement. "
+        "Always assign a short alias to every table in the FROM and JOIN clauses "
+        "(e.g. FROM sp_receipts r JOIN sp_receipt_line_items li ...) and prefix "
+        "every column reference with its alias — never use bare column names when "
+        "multiple tables are involved, as this causes ambiguous column errors. "
+        "IMPORTANT — ambiguous financial terms: when the question uses a vague word like "
+        "'price', 'cost', 'value', or 'amount' and the relevant table has multiple "
+        "financial columns (e.g. price, cost, selling_price, unit_price, retail_price), "
+        "SELECT all of them rather than guessing which one the user means. "
+        "This lets the user see the full picture instead of a potentially misleading single value."
         + history_hint + tenant_hint
         + (f" {extra_schema_hints.strip()}" if extra_schema_hints else "")
         + limit_hint
