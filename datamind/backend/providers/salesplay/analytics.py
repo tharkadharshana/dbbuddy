@@ -86,7 +86,7 @@ TEMPLATES = {
             SELECT
                 product_name                            AS product,
                 COALESCE(NULLIF(category_name, ''), 'Uncategorized') AS category,
-                SUM(quantity)                           AS units_sold,
+                ROUND(SUM(quantity))                    AS units_sold,
                 ROUND(SUM(total_money), 2)              AS revenue,
                 ROUND(AVG(price), 2)                    AS avg_price
             FROM sp_receipt_line_items
@@ -170,7 +170,7 @@ TEMPLATES = {
             SELECT
                 COALESCE(NULLIF(category_name, ''), 'Uncategorized') AS category,
                 COUNT(DISTINCT product_name)             AS products_count,
-                SUM(quantity)                            AS units_sold,
+                ROUND(SUM(quantity))                     AS units_sold,
                 ROUND(SUM(total_money), 2)               AS revenue,
                 ROUND(AVG(price), 2)                     AS avg_price
             FROM sp_receipt_line_items

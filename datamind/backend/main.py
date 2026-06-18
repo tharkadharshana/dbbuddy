@@ -162,6 +162,20 @@ def _set_query_timeout(cursor) -> None:
     except Exception as e:
         log.warning("Failed to set SQL timeout", var=_sql_timeout_var, error=str(e))
 
+
+# SQL keywords that can never be a table alias. The LLM often omits aliases,
+# so the FROM/JOIN regex captures the next keyword (e.g. WHERE, JOIN, ON) as the
+# alias, which then produces invalid SQL like WHERE.tenant_id = '...'. Both the
+# tenant-isolation and date-filter enforcers guard against this by falling back
+# to the table name when the captured alias is one of these.
+_SQL_KEYWORDS = frozenset({
+    'WHERE', 'GROUP', 'ORDER', 'LIMIT', 'HAVING', 'ON', 'SET',
+    'INNER', 'LEFT', 'RIGHT', 'CROSS', 'FULL', 'JOIN', 'UNION',
+    'SELECT', 'FROM', 'AND', 'OR', 'NOT', 'IN', 'IS', 'NULL',
+    'AS', 'BY', 'ASC', 'DESC', 'WITH', 'USING',
+})
+
+
 def _enforce_tenant_isolation(sql: str, tenant_id: str) -> str:
     """
     SEC-15: Server-side tenant isolation enforcement for shared sp_*/ly_* tables.
@@ -196,14 +210,6 @@ def _enforce_tenant_isolation(sql: str, tenant_id: str) -> str:
                 f"your account. Cross-tenant queries are not allowed."
             )
 
-    # SQL keywords that can never be a table alias — if the regex captures one of
-    # these it means the table has no alias and the keyword belongs to the next clause.
-    _ALIAS_KEYWORDS = frozenset({
-        'WHERE', 'GROUP', 'ORDER', 'HAVING', 'LIMIT', 'ON', 'SET',
-        'INNER', 'LEFT', 'RIGHT', 'CROSS', 'FULL', 'JOIN', 'UNION',
-        'AND', 'OR', 'NOT', 'SELECT', 'FROM', 'AS', 'BY', 'WITH',
-    })
-
     # Find all sp_*/ly_* table references: (FROM|JOIN) table_name [AS] alias
     # Captures: group1=clause, group2=table, group3=alias (may be None)
     table_re = re.compile(
@@ -221,7 +227,7 @@ def _enforce_tenant_isolation(sql: str, tenant_id: str) -> str:
         table_raw = m.group(2).strip('`')
         captured_alias = (m.group(3) or "").strip('`')
         # If the captured alias is a SQL keyword, the table has no alias — use table name.
-        alias_raw = table_raw if (not captured_alias or captured_alias.upper() in _ALIAS_KEYWORDS) else captured_alias
+        alias_raw = table_raw if (not captured_alias or captured_alias.upper() in _SQL_KEYWORDS) else captured_alias
         refs.append((alias_raw, clause_type, m.end()))
 
     if not refs:
@@ -310,16 +316,28 @@ def _enforce_date_filter(sql: str, history_months: int) -> str:
     this function is mandatory server-side enforcement.
 
     Strategy:
-      - If the SQL already contains a created_at comparison (the LLM handled it),
-        return unchanged.
-      - Otherwise find the primary sp_*/ly_* FROM table alias and inject
-        AND alias.created_at >= DATE_SUB(CURDATE(), INTERVAL N MONTH)
-        into the WHERE clause (or create one if absent).
+      - Only applies when the query touches a transactional table (sp_receipts or
+        sp_receipt_line_items / ly_receipts or ly_receipt_line_items). Reference
+        tables (products, categories, shops, customers, payment_types) are catalogue
+        data that must never be date-filtered — their created_at reflects when the
+        record was created in the POS, not a transaction date, and for products it
+        is often NULL entirely.
+      - If the SQL already contains a created_at comparison, trust the LLM.
+      - Otherwise inject AND alias.created_at >= DATE_SUB(CURDATE(), INTERVAL N MONTH)
+        into the WHERE clause of the primary transactional table.
 
     Only applied to integration users (sp_*/ly_* tables) where the date column
     is always created_at. Not applied to own-DB users — unknown schema.
     """
     if not history_months:
+        return sql
+
+    # Only enforce on transactional tables — never on reference/catalogue tables.
+    _TRANSACTIONAL = re.compile(
+        r'\b(sp_receipts|sp_receipt_line_items|ly_receipts|ly_receipt_line_items)\b',
+        re.IGNORECASE,
+    )
+    if not _TRANSACTIONAL.search(sql):
         return sql
 
     # If LLM already applied a date filter on created_at, trust it.
@@ -335,7 +353,10 @@ def _enforce_date_filter(sql: str, history_months: int) -> str:
     if not m:
         return sql  # no shared table found — nothing to inject
 
-    alias = (m.group(2) or m.group(1)).strip('`')
+    alias_candidate = m.group(2)
+    if alias_candidate and alias_candidate.strip('`').upper() in _SQL_KEYWORDS:
+        alias_candidate = None
+    alias = (alias_candidate or m.group(1)).strip('`')
     date_cond = (
         f"{alias}.created_at >= DATE_SUB(CURDATE(), INTERVAL {history_months} MONTH)"
     )
@@ -1519,7 +1540,12 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
     nl_tenant_id = None
     nl_shop_timezone = "UTC"
     nl_last_sync_at = None
-    nl_currency = (s.get("locale") or {}).get("currency") or "$"
+    _locale         = s.get("locale") or {}
+    nl_currency     = _locale.get("currency") or "$"
+    nl_country      = _locale.get("country") or ""
+    nl_country_code = _locale.get("country_code") or ""
+    nl_ui_language  = _locale.get("ui_language") or "en_US"
+    nl_user_tz      = _locale.get("timezone") or "UTC"
     loyverse_hints: list = []
 
     # ── DB connection + table scope setup ────────────────────────────────────
@@ -1632,15 +1658,31 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
         classification = classify_question(
             req.question, table_names_str, llm, api_key, user["email"],
             app_name=_APP_NAME, conversation_history=conv_history,
+            language_hint="Always respond in the same language the user used to write their question. Never switch to English unless the question itself was in English.",
         )
         q_type = classification.get("type", "data_query")
 
         row_limit = history["row_limit"]
-        currency_hint = (
-            f"The user's currency is '{nl_currency}'. "
-            f"When writing any narrative that includes monetary amounts, use '{nl_currency}' as the currency symbol — never assume USD or '$'."
-        )
-        extra_hints = " ".join(loyverse_hints + [currency_hint]) if loyverse_hints else currency_hint
+        _profile_parts = [
+            f"The user's currency is '{nl_currency}'. When writing any narrative that includes monetary amounts, use '{nl_currency}' as the currency symbol — never assume USD or '$'.",
+            "IMPORTANT: Always respond in the same language the user used to write their question. If the question is in Sinhala, reply in Sinhala. If in French, reply in French. Never switch to English unless the question itself was in English.",
+        ]
+        if nl_country:
+            _profile_parts.append(
+                f"The user's country is '{nl_country}' (code: {nl_country_code}). "
+                f"Use this when answering questions about local holidays, regulations, or regional context."
+            )
+        if nl_user_tz and nl_user_tz != "UTC":
+            _profile_parts.append(
+                f"The user's local timezone is '{nl_user_tz}'. Use this when answering timezone-related questions."
+            )
+        if nl_ui_language and nl_ui_language != "en_US":
+            _profile_parts.append(
+                f"The user's preferred language is '{nl_ui_language}'. "
+                f"If appropriate, respond in that language or ask if they'd like responses in their preferred language."
+            )
+        profile_hint = " ".join(_profile_parts)
+        extra_hints = " ".join(loyverse_hints + [profile_hint]) if loyverse_hints else profile_hint
         if nl_tenant_id:
             # SalesPlay: tell LLM to always include sku in product queries so the
             # frontend can use it as a short label in charts instead of long product names
@@ -1931,7 +1973,7 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
             message="Our AI service is currently busy. Please try again in a moment.",
         )
     except Exception as e:
-        log.error("NL query failed", error=str(e))
+        log.error("NL query failed", user=user["email"], error=str(e), exc_info=True)
         return _base_query_response(
             success=False, type="error", steps=steps, conversation_id=conv_id,
             message="Something went wrong while processing your question. Please try rephrasing it or try again shortly.",

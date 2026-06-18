@@ -38,6 +38,54 @@ EXCLUDE_NAMES = {"__pycache__", ".env", "data", "logs", "dist", "scratch"}
 # Files copied from the frontend build output that shouldn't ship to prod.
 FRONTEND_EXCLUDE_FILES = {"iframe_test.html"}
 
+# ── Patch notes ───────────────────────────────────────────────────────────────
+# Update this block whenever a new patch is built.
+PATCH_NOTES = """
+PATCH NOTES
+===========
+Branch : feature/report-display-fixes
+Date   : 2026-06-18
+
+CHANGES IN THIS PATCH
+─────────────────────
+
+1. fix(history): Chat history now shows full rich content
+   PROBLEM : Opening a past conversation showed only plain text ("Found 1
+             result. total revenue = 4,865,207.29") — no charts, tables,
+             or AI analysis.
+   FIX     : ChatPage.jsx now reconstructs `data` and `analysis` from the
+             stored `data_snapshot` field when loading history, matching
+             what EmbedHistoryDrawer already did correctly.
+   FILES   : datamind/frontend/src/pages/ChatPage.jsx
+
+2. feat(llm): LLM now knows user's country, timezone, and mirrors input language
+   PROBLEM : Asking "what is my country?" or "sales around local holidays"
+             required the user to repeat their country. The LLM always
+             replied in English even when the question was in another language.
+   FIX     : Country, country_code, and timezone are extracted from
+             settings.locale and injected into every LLM call as context
+             hints. Both the SQL narrative and the classifier (conversational
+             replies, clarification asks) now instruct the LLM to respond in
+             the same language as the question — English in → English out,
+             Sinhala in → Sinhala out.
+   FILES   : datamind/backend/main.py, datamind/backend/llm.py
+   DB/ENV  : No changes — reads existing settings.locale fields.
+
+3. fix(reports): Rate-limit now shows friendly countdown instead of empty report
+   PROBLEM : Clicking Generate Report too quickly caused the backend to return
+             ok=false with empty data (HTTP 200). The frontend rendered this
+             as a blank report with no message.
+   FIX     : ReportsPage detects ok=false, starts a 20-second cooldown timer,
+             disables the Generate button, and shows an orange warning:
+             "Too many requests — let the system cool down. Try again in Xs."
+             The countdown ticks in real time; clicking during cooldown is
+             a no-op (countdown just shows remaining seconds).
+   FILES   : datamind/frontend/src/pages/ReportsPage.jsx
+
+DB CHANGES  : None
+.ENV CHANGES: None
+"""
+
 
 def ignore_excluded(_dir, names):
     return [n for n in names if n in EXCLUDE_NAMES or n.endswith(".pyc")]
@@ -76,6 +124,11 @@ def copy_backend(dest):
             shutil.copytree(src, dest / name, ignore=ignore_excluded)
 
 
+def write_patch_notes(dest_dir: Path):
+    print("==> Writing PATCH_NOTES.txt...")
+    (dest_dir / "PATCH_NOTES.txt").write_text(PATCH_NOTES.strip(), encoding="utf-8")
+
+
 def main():
     patch_name = sys.argv[1] if len(sys.argv) > 1 else f"datamind-deploy-{date.today().isoformat()}"
     patch_dir = ARCHIVES_DIR / patch_name
@@ -86,6 +139,7 @@ def main():
     dist_dir = build_frontend()
     copy_frontend(dist_dir, patch_dir / "frontend")
     copy_backend(patch_dir / "backend")
+    write_patch_notes(patch_dir)
 
     print("==> Zipping...")
     zip_base = ARCHIVES_DIR / patch_name

@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { runNLQuery, createConversation, getConversationMessages, getErrorMessage } from '../utils/api'
-import { Spinner, UsageMeter, AIQuotaWall } from '../components/UI'
+import { Spinner, UsageMeter } from '../components/UI'
 import { formatCurrency, formatNumber } from '../utils/locale'
 
 const TT = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)', borderRadius:8, fontSize:12, color:'#f0f1fa' }
@@ -234,11 +234,21 @@ export default function ChatPage({
     }
     getConversationMessages(activeConvId)
       .then(res => {
-        const loaded = (res.messages || []).map((m, i) => ({
-          id:      m.id || i,
-          role:    m.role === 'user' ? 'user' : 'ai',
-          content: m.content,
-        }))
+        const loaded = (res.messages || []).map((m, i) => {
+          const snap = m.data_snapshot || null
+          return {
+            id:       m.id || i,
+            role:     m.role === 'user' ? 'user' : 'ai',
+            content:  m.content,
+            data: snap ? {
+              type:      'data',
+              columns:   snap.columns || [],
+              data:      snap.rows || [],
+              row_count: m.row_count || 0,
+            } : null,
+            analysis: snap?.analysis || null,
+          }
+        })
         setMessages(loaded)
       })
       .catch(() => setMessages([]))

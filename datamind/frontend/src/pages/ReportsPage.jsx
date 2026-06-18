@@ -1,6 +1,6 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { Card, Btn, UsageMeter, Spinner, ErrorBox, Badge, COLORS, AIQuotaWall } from '../components/UI'
+import { Card, Btn, UsageMeter, Spinner, ErrorBox, Badge, COLORS } from '../components/UI'
 import { generateReport, getErrorMessage } from '../utils/api'
 import { formatCurrency, formatNumber } from '../utils/locale'
 
@@ -214,6 +214,20 @@ export default function ReportsPage({ llm, setLlm, sub, onNavigate, onQueryCompl
   const [error, setError]         = useState(null)
   const [reports, setReports]     = useState([])
   const [activeReport, setActiveReport] = useState(null)
+  const [rateLimitUntil, setRateLimitUntil] = useState(null)
+  const [rlSecsLeft, setRlSecsLeft]         = useState(0)
+
+  useEffect(() => {
+    if (!rateLimitUntil) return
+    const tick = () => {
+      const secs = Math.ceil((rateLimitUntil - Date.now()) / 1000)
+      if (secs <= 0) { setRateLimitUntil(null); setRlSecsLeft(0) }
+      else setRlSecsLeft(secs)
+    }
+    tick()
+    const id = setInterval(tick, 500)
+    return () => clearInterval(id)
+  }, [rateLimitUntil])
 
   function applyPreset(p) {
     setTitle(p.label)
@@ -226,14 +240,23 @@ export default function ReportsPage({ llm, setLlm, sub, onNavigate, onQueryCompl
 
   async function handleGenerate() {
     if (!title.trim() || !selected.length) return
+    if (rateLimitUntil && Date.now() < rateLimitUntil) return
     setLoading(true); setError(null)
     try {
       const data = await generateReport(title, selected, llm, format)
+      if (data.ok === false) {
+        setRateLimitUntil(Date.now() + 20_000)
+        return
+      }
       const report = { ...data, id: Date.now(), ts: new Date().toLocaleString() }
       setReports(r => [report, ...r])
       setActiveReport(report)
-    } catch(e) { setError(getErrorMessage(e)) }
-    finally { setLoading(false); onQueryComplete?.() }
+      onQueryComplete?.()
+    } catch(e) {
+      setError(getErrorMessage(e))
+      onQueryComplete?.()
+    }
+    finally { setLoading(false) }
   }
 
   const categories = [...new Set(ALL_SECTIONS.map(s => s.category))]
@@ -303,8 +326,18 @@ export default function ReportsPage({ llm, setLlm, sub, onNavigate, onQueryCompl
         {/* Generate button */}
         <div style={{ padding:14, borderTop:'1px solid var(--border)' }}>
           {error && <div style={{ marginBottom:10 }}><ErrorBox message={error} /></div>}
-          <Btn onClick={handleGenerate} disabled={loading||!title.trim()||!selected.length} style={{ width:'100%', justifyContent:'center' }}>
-            {loading ? <><Spinner size={13} color="#fff" /> Generating Report…</> : `Generate Report (${selected.length} sections) ↗`}
+          {rateLimitUntil && (
+            <div style={{ marginBottom:10, padding:'10px 12px', borderRadius:'var(--r-md)', background:'rgba(251,146,60,0.1)', border:'1px solid rgba(251,146,60,0.25)', fontSize:12, color:'var(--text2)', lineHeight:1.5 }}>
+              Too many requests — let the system cool down.{' '}
+              <span style={{ fontWeight:600, color:'#f97316' }}>Try again in {rlSecsLeft}s</span>
+            </div>
+          )}
+          <Btn onClick={handleGenerate} disabled={loading || !title.trim() || !selected.length || !!rateLimitUntil} style={{ width:'100%', justifyContent:'center' }}>
+            {loading
+              ? <><Spinner size={13} color="#fff" /> Generating Report…</>
+              : rateLimitUntil
+              ? `Cooling down… ${rlSecsLeft}s`
+              : `Generate Report (${selected.length} sections) ↗`}
           </Btn>
         </div>
       </div>

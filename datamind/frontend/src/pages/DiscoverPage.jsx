@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { fetchDiscover, runAnalytics, fetchCacheProgress, rebuildCache,
          fetchConnectedProviders, fetchIntegrationTemplates, runIntegrationAnalytics, getErrorMessage } from '../utils/api'
 import { Card, Badge, Spinner, Spinner2, ErrorBox, KPICard, ChartCard, DataTable,
-         BarChartSimple, LineChartSimple, PieChartSimple, UsageMeter, COLORS, Btn, AIQuotaWall } from '../components/UI'
+         BarChartSimple, LineChartSimple, PieChartSimple, UsageMeter, COLORS, Btn } from '../components/UI'
 import { ComposedChart, Bar, Line, Area, XAxis, YAxis, CartesianGrid, Tooltip,
          ResponsiveContainer } from 'recharts'
 import { formatCurrency, formatNumber, isCurrencyColumn } from '../utils/locale'
