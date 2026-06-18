@@ -433,7 +433,7 @@ def sync_customers(client: SalesPlayAPIClient, conn, prefix: str, user_email: st
             "note":          _str(c.get("description") or c.get("note")),
             "total_visits":  int(c.get("total_visits") or 0),
             "total_spent":   _dec(c.get("total_money_spent") or c.get("total_spent"), 0),
-            "points_balance": _dec(c.get("points_balance"), 0),
+            "points_balance": _dec(c.get("points_balance") or c.get("total_points"), 0),
             "created_at":    _dt(c.get("created_at")),
             "updated_at":    _dt(c.get("updated_at") or c.get("updated_date")),
         }
