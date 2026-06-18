@@ -1540,7 +1540,12 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
     nl_tenant_id = None
     nl_shop_timezone = "UTC"
     nl_last_sync_at = None
-    nl_currency = (s.get("locale") or {}).get("currency") or "$"
+    _locale         = s.get("locale") or {}
+    nl_currency     = _locale.get("currency") or "$"
+    nl_country      = _locale.get("country") or ""
+    nl_country_code = _locale.get("country_code") or ""
+    nl_ui_language  = _locale.get("ui_language") or "en_US"
+    nl_user_tz      = _locale.get("timezone") or "UTC"
     loyverse_hints: list = []
 
     # ── DB connection + table scope setup ────────────────────────────────────
@@ -1653,15 +1658,31 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
         classification = classify_question(
             req.question, table_names_str, llm, api_key, user["email"],
             app_name=_APP_NAME, conversation_history=conv_history,
+            language_hint="Always respond in the same language the user used to write their question. Never switch to English unless the question itself was in English.",
         )
         q_type = classification.get("type", "data_query")
 
         row_limit = history["row_limit"]
-        currency_hint = (
-            f"The user's currency is '{nl_currency}'. "
-            f"When writing any narrative that includes monetary amounts, use '{nl_currency}' as the currency symbol — never assume USD or '$'."
-        )
-        extra_hints = " ".join(loyverse_hints + [currency_hint]) if loyverse_hints else currency_hint
+        _profile_parts = [
+            f"The user's currency is '{nl_currency}'. When writing any narrative that includes monetary amounts, use '{nl_currency}' as the currency symbol — never assume USD or '$'.",
+            "IMPORTANT: Always respond in the same language the user used to write their question. If the question is in Sinhala, reply in Sinhala. If in French, reply in French. Never switch to English unless the question itself was in English.",
+        ]
+        if nl_country:
+            _profile_parts.append(
+                f"The user's country is '{nl_country}' (code: {nl_country_code}). "
+                f"Use this when answering questions about local holidays, regulations, or regional context."
+            )
+        if nl_user_tz and nl_user_tz != "UTC":
+            _profile_parts.append(
+                f"The user's local timezone is '{nl_user_tz}'. Use this when answering timezone-related questions."
+            )
+        if nl_ui_language and nl_ui_language != "en_US":
+            _profile_parts.append(
+                f"The user's preferred language is '{nl_ui_language}'. "
+                f"If appropriate, respond in that language or ask if they'd like responses in their preferred language."
+            )
+        profile_hint = " ".join(_profile_parts)
+        extra_hints = " ".join(loyverse_hints + [profile_hint]) if loyverse_hints else profile_hint
         if nl_tenant_id:
             # SalesPlay: tell LLM to always include sku in product queries so the
             # frontend can use it as a short label in charts instead of long product names

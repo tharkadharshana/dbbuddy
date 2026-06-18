@@ -488,6 +488,7 @@ def classify_question(
     llm: str, api_key: str, user_email: str,
     app_name: str = "DataMind",
     conversation_history: str = "",
+    language_hint: str = "",
 ) -> dict:
     """
     Classify the user question to determine handling strategy.
@@ -506,7 +507,8 @@ def classify_question(
         f"For all others respond as {app_name}, a friendly AI data assistant.\n"
         '{"type":"clarification_needed","clarification":"..."} — the question is about data but too vague to answer; '
         "ask ONE specific clarifying question. Only use this when the intent is clearly a data query but key details are missing.\n"
-        "IMPORTANT: Use conversation history (if provided) to understand follow-up questions and pronouns like 'they', 'those', 'it'."
+        "IMPORTANT: Use conversation history (if provided) to understand follow-up questions and pronouns like 'they', 'those', 'it'. "
+        + (language_hint if language_hint else "Always respond in the same language the user used to write their question.")
     )
     history_block = f"\nConversation so far:\n{conversation_history}\n" if conversation_history else ""
     prompt = f"Available tables: {table_names}{history_block}\nQuestion: {question}"
