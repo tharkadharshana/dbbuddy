@@ -530,6 +530,13 @@ def classify_question(
         "or a number), do NOT return clarification_needed again — instead reconstruct the full original intent from "
         "history combined with the user's answer, and return data_query.\n"
 
+        "CRITICAL FOLLOW-UP RULE: if the conversation history shows the assistant's last message offered an "
+        "alternative or asked if the user would like to see something (e.g. 'I can show you X — would that help?', "
+        "'shall I show historical data instead?') and the user responds with acceptance (e.g. 'yes', 'do it', "
+        "'sure', 'go ahead', 'show me', 'yeah', 'yep', 'ok'), treat this as a data_query — reconstruct the full "
+        "data request from the conversation history and return data_query. Never return unsupported_query for "
+        "a user acceptance of an alternative the assistant itself offered.\n"
+
         "IMPORTANT: Use conversation history (if provided) to understand follow-up questions and pronouns like "
         "'they', 'those', 'it'. "
         + (language_hint if language_hint else "Always respond in the same language the user used to write their question.")
