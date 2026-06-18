@@ -60,7 +60,8 @@ function TokenUsage({ sub, isSalesplay }) {
   const pct   = Math.min(100, Math.round((used / total) * 100))
 
   if (isSalesplay) {
-    const color = pct >= 100 ? '#EF4444' : pct >= 80 ? '#F59E0B' : '#3B82F6'
+    if (pct < 90) return null
+    const color = pct >= 100 ? '#EF4444' : '#F59E0B'
     return (
       <div title={`${used.toLocaleString()} / ${total.toLocaleString()} tokens used`} style={{ marginTop: 12 }}>
         <div style={{ position:'relative', height:6, borderRadius:99, background:'#E2E8F0' }}>
