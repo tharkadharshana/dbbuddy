@@ -615,26 +615,28 @@ def sync_receipts(client: SalesPlayAPIClient, conn, prefix: str, user_email: str
                 item.get("id") or item.get("product_line_no") or f"{r_id}_{idx}", 128
             )
             prod_id    = _str(item.get("product_id"), 64)
-            unit_price = _dec(item.get("price") or item.get("product_unit_price"), 0)
-            qty        = _dec(item.get("quantity") or item.get("product_qty") or
-                              item.get("qty"), 1)
-            line_total = _dec(item.get("total") or item.get("product_price") or
-                              item.get("total_money"), (unit_price or 0) * (qty or 1))
+            unit_price        = _dec(item.get("price") or item.get("product_unit_price"), 0)
+            qty               = _dec(item.get("quantity") or item.get("product_qty") or
+                                     item.get("qty"), 1)
+            gross_total_money = _dec(item.get("gross_total_money"),
+                                     (unit_price or 0) * (qty or 1))
+            line_total        = _dec(item.get("total") or item.get("total_money"),
+                                     gross_total_money)
             line_disc  = _dec(item.get("discount_amount") or item.get("product_discount") or
                               item.get("total_discount"), 0)
 
             li_record = {
-                "id":               item_id,
-                "receipt_id":       r_id,
-                "product_id":       prod_id,
-                "variant_id":       _str(item.get("variant_id"), 64),
-                "product_name":     _str(item.get("product_name") or item.get("name"), 500),
-                "sku":              _str(item.get("product_code") or item.get("sku"), 100),
-                "quantity":         qty,
-                "price":            unit_price,
-                "gross_total_money": line_total,
-                "total_discount":   line_disc,
-                "total_money":      line_total,
+                "id":                item_id,
+                "receipt_id":        r_id,
+                "product_id":        prod_id,
+                "variant_id":        _str(item.get("variant_id"), 64),
+                "product_name":      _str(item.get("product_name") or item.get("name"), 500),
+                "sku":               _str(item.get("product_code") or item.get("sku"), 100),
+                "quantity":          qty,
+                "price":             unit_price,
+                "gross_total_money": gross_total_money,
+                "total_discount":    line_disc,
+                "total_money":       line_total,
                 "cost":             _dec(item.get("product_cost") or item.get("cost"), 0),
                 "created_at":       receipt_dt,  # denormalized from receipt for date filtering
             }
