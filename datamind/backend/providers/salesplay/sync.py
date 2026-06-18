@@ -488,7 +488,7 @@ def sync_products(client: SalesPlayAPIClient, conn, prefix: str, user_email: str
             "created_at":   _dt(p.get("created_at") or p.get("created_date")),
             "updated_at":   _dt(p.get("updated_at") or p.get("updated_date")),
         }
-        # Enrich with category_name from already-synced sp_categories
+        # Enrich with category_name: prefer sp_categories lookup, fall back to inline name from API
         cat_id = record.get("category_id")
         if cat_id:
             _cur = conn.cursor()
@@ -499,6 +499,9 @@ def sync_products(client: SalesPlayAPIClient, conn, prefix: str, user_email: str
             cat_row = _cur.fetchone()
             _cur.close()
             record["category_name"] = cat_row[0] if cat_row else None
+        else:
+            cat_name = p.get("category")
+            record["category_name"] = _str(cat_name, 255) if cat_name and cat_name != "No category" else None
 
         if upsert_record(conn, prefix, user_email, "salesplay", "product", record,
                          id_field="id", ext_created_field="created_at",
