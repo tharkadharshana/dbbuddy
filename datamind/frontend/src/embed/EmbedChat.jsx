@@ -260,7 +260,7 @@ function Message({ msg, theme }) {
               </>
             )}
             {msg.data?.type === 'data' && msg.data?.row_count === 0 && (
-              <div style={{ fontSize:11, color:'var(--text3)', marginTop:6 }}>No results found.</div>
+              <div style={{ fontSize:11, color:'var(--text3)', marginTop:6 }}>No data matched your search.</div>
             )}
           </>
         )}
@@ -399,7 +399,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
           const total = data.data.reduce((s, r) => s + (r[numCol] || 0), 0)
           summary += ` · ${numCol.replace(/_/g, ' ')}: ${total.toLocaleString(undefined, { maximumFractionDigits:2 })}`
         }
-        if (rowCount === 0) summary = 'No matching records found for your query.'
+        if (rowCount === 0) summary = "I couldn't find anything matching that. Try rephrasing or broadening your question."
       }
 
       setMessages(m => m.map(msg =>
