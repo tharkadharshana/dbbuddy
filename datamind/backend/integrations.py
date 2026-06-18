@@ -876,6 +876,24 @@ def disconnect_integration(user_email: str, provider_id: str,
             "DELETE FROM integration_sync_state WHERE tenant_id=%s AND provider_id=%s",
             (prefix, provider_id)
         )
+        # Delete from all shared sp_* tables — these are keyed by tenant_id
+        # and were missed before, leaving orphaned data after disconnect.
+        for table in (
+            "sp_receipt_line_items",
+            "sp_receipts",
+            "sp_products",
+            "sp_customers",
+            "sp_payment_types",
+            "sp_categories",
+            "sp_shops",
+        ):
+            try:
+                cursor.execute(f"DELETE FROM {table} WHERE tenant_id=%s", (prefix,))
+                log.info("Deleted shared table data", table=table, prefix=prefix,
+                         rows=cursor.rowcount)
+            except Exception as exc:
+                log.warning("Could not delete from shared table", table=table,
+                            prefix=prefix, error=str(exc))
         log.info("Deleted integration data", prefix=prefix, provider=provider_id)
 
     cursor.execute(
@@ -898,6 +916,27 @@ def delete_user_data(user_email: str):
     cursor.execute(
         "DELETE FROM integration_sync_state WHERE user_email = %s", (user_email,)
     )
+    # Delete from all shared sp_* tables via the user's tenant prefixes
+    cursor.execute(
+        "SELECT DISTINCT table_prefix FROM user_integrations WHERE user_email=%s",
+        (user_email,)
+    )
+    prefixes = [r[0] for r in cursor.fetchall()]
+    for prefix in prefixes:
+        for table in (
+            "sp_receipt_line_items",
+            "sp_receipts",
+            "sp_products",
+            "sp_customers",
+            "sp_payment_types",
+            "sp_categories",
+            "sp_shops",
+        ):
+            try:
+                cursor.execute(f"DELETE FROM {table} WHERE tenant_id=%s", (prefix,))
+            except Exception as exc:
+                log.warning("Could not delete shared table on user delete",
+                            table=table, prefix=prefix, error=str(exc))
     # Delete metadata rows
     cursor.execute(
         "DELETE sl FROM sync_logs sl "
