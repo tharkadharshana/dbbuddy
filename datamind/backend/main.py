@@ -1498,20 +1498,23 @@ def _run_think_analysis(question: str, columns: list, data: list,
         f"{header}\n{rows_text}\n\n"
         "Answer the user's question directly using this data. "
         "Be specific with numbers and values from the results. "
-        "If the question asks for advice or recommendations, give 2-3 concrete, "
-        "actionable suggestions based on what the data shows. "
-        "Keep your response under 150 words. "
+        "For simple factual questions (price, count, name, date), answer in one sentence. "
+        "Only add extra context if the data itself reveals something genuinely surprising or actionable. "
+        "Never pad with generic advice, suggestions, or tips the user did not ask for. "
+        "Keep your response under 80 words. "
         "Write in plain sentences only — no markdown, no asterisks, no bullet symbols."
     )
     return call_llm(
         prompt,
         system=(
-            "You are a concise business analyst. Answer based only on the provided data. "
+            "You are a concise data assistant. Answer based only on the provided data. "
+            "Match response length to question complexity — simple questions get one sentence. "
+            "Never volunteer advice or recommendations unless explicitly asked. "
             "Use plain text only — never use markdown, asterisks, bold markers (**), "
             "underscores, or any special formatting symbols."
         ),
         llm=llm,
-        max_tokens=400,
+        max_tokens=200,
         api_key=api_key,
         user_email=user_email,
         operation="think",
