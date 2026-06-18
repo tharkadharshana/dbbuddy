@@ -504,9 +504,13 @@ def classify_question(
         '{"type":"multi_step","sub_questions":["q1","q2"]} — clearly contains 2+ separate data queries; '
         "only use this when two or more genuinely distinct SQL queries are needed\n"
 
-        '{"type":"unsupported_query","response":"..."} — the question requires data that does NOT exist in the '
-        "database: future predictions, next-month forecasts, external market data, competitor data, weather, or "
-        "city-wide/industry trends. Respond helpfully by explaining what CAN be shown instead "
+        '{"type":"unsupported_query","response":"..."} — ONLY use this when the question requires data that '
+        "genuinely cannot come from the database: future predictions (next month/next year), "
+        "external market data, competitor data, weather, or city-wide/industry trends. "
+        "NEVER use this for questions with time filters like 'this month', 'this week', 'today', "
+        "'last 30 days', 'so far this year' — those are valid data_query questions that filter "
+        "existing records by date. "
+        "Respond helpfully by explaining what CAN be shown instead "
         "(e.g. 'I can't predict next month, but I can show you historical top sellers by month — would that help?').\n"
 
         '{"type":"conversational","response":"..."} — greeting, small talk, thank-you, or a request to '
