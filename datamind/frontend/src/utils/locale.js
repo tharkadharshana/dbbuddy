@@ -1,4 +1,4 @@
-const _CURRENCY_COLS = /revenue|money|amount|price|value|spent|ticket|avg_transaction/i
+const _CURRENCY_COLS = /revenue|money|amount|price|value|spent|ticket|avg_transaction|sales|ltv|profit|order|aov|monetary/i
 
 export function getUserLocale() {
   try {

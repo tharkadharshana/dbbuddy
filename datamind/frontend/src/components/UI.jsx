@@ -237,7 +237,7 @@ export function DataTable({ columns, data, maxHeight=320 }) {
     if (v === null || v === undefined) return <span style={{color:'var(--text3)'}}>—</span>
     if (isNum(v)) {
       if (col.includes('pct') || col.includes('rate') || col.includes('growth')) return `${v > 0 ? '+' : ''}${v}%`
-      if (col.includes('revenue') || col.includes('sales') || col.includes('ltv') || col.includes('spent') || col.includes('value') || col.includes('profit') || col.includes('ticket') || col.includes('order') || col.includes('aov') || col.includes('monetary'))
+      if (isCurrencyColumn(col))
         return formatCurrency(v)
       return formatNumber(v, null, 0)
     }
