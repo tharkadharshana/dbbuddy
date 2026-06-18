@@ -1,34 +1,98 @@
 #!/usr/bin/env python3
 """
-End-to-end QA for the /query endpoint and SalesPlay analytics reports.
-Run with: python qa_e2e.py
+End-to-end QA for the DataMind / SalesPlay AI backend.
+Covers the /query endpoint and SalesPlay analytics report templates.
 
-Coverage:
-  - Greetings / casual / thank-you
-  - Out-of-scope / irrelevant questions
-  - Garbage / gibberish / whitespace / long strings
-  - Angry / frustrated users
-  - Harmful SQL (must be refused, never executed)
-  - SQL keywords in natural language (must NOT be classified harmful)
-  - Simple data queries
-  - Time-based queries
-  - Trend / comparison queries
-  - Shop / branch specific
-  - Product / category drill-downs (SKU expected in response data)
-  - Customer queries
-  - Vague / clarification-needed
-  - Multi-step complex queries
-  - Typos / casual spelling
-  - Different personas (young, formal, elderly)
-  - Conversational follow-up chains (A: 3 turns, B: 5 turns)
-  - Currency — response must not hardcode $ for non-USD users
-  - Billing error messages — specific reason (expired vs exhausted)
-  - SalesPlay integration analytics reports (all 8 templates)
-    - Returns success + columns + data
-    - KPI columns are correct types (no hour_of_day as metric)
-    - Category / shop names are never blank
-    - Monetary columns present on templates that should have them
-    - Integer columns contain no fractional values (e.g. not 438.0)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+USAGE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  python qa_e2e.py              Full run — chat + reports (use before merging a PR)
+  python qa_e2e.py chat         All /query endpoint tests
+  python qa_e2e.py data         Data queries: simple, time, trend, shop, product,
+                                customer, multi-step, typos, personas, currency
+  python qa_e2e.py convo        Conversational follow-up chains only (A: 3 turns, B: 5)
+  python qa_e2e.py harmful      Harmful SQL refusal + safe-SQL-words in natural language
+  python qa_e2e.py reports      SalesPlay analytics report templates only
+
+WHEN TO USE EACH SUITE
+  Changed query / LLM routing logic   →  python qa_e2e.py chat
+  Changed analytics report templates  →  python qa_e2e.py reports
+  Changed conversation memory/history →  python qa_e2e.py convo
+  Changed SQL safety / intent rules   →  python qa_e2e.py harmful
+  Before merging any PR               →  python qa_e2e.py  (full run)
+
+TIMING
+  chat suite    ~4 min   (rate-limited to ~2-3 s/request)
+  reports suite ~3 min   (2 passes: warmup + validated; 7 s/request)
+  full run     ~20 min   (includes 65 s cooldown between suites to
+                          clear the RL_COMPUTE sliding window)
+
+  Running `reports` directly skips the 65 s cooldown — only needed
+  after a full chat suite has exhausted the rate-limit bucket.
+
+PREREQUISITES
+  - Backend running at http://127.0.0.1:8000
+  - Test account exists: livedata@test.com / Pass@123
+  - SalesPlay integration active for that account (for reports suite)
+  - If AI credit limit is hit, run reset_qa_usage.py first
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WHAT IS TESTED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+chat suite (/query endpoint):
+  GREETING / CASUAL_CHAT / THANK_YOU   Conversational inputs → friendly reply, no SQL
+  OUT_OF_SCOPE                         Off-topic questions → polite refusal
+  GARBAGE                              Gibberish, whitespace, 500-char noise → no crash
+  ANGRY                                Frustrated users → graceful, not a server error
+  HARMFUL                              DELETE/DROP/UPDATE/TRUNCATE → refused, 0 rows
+  SAFE_SQL_WORDS                       SQL keywords in natural language → NOT flagged harmful
+  DATA_SIMPLE                          Basic counts and totals
+  DATA_TIME                            Date-filtered queries (last month, this year, etc.)
+  DATA_TREND                           Comparisons and trends over time
+  SHOP_SPECIFIC                        Per-branch / per-location breakdowns
+  PRODUCT_DRILL / PRODUCT_SKU          Category and product queries; SKU column expected
+  CUSTOMER                             Customer-level queries
+  VAGUE                                Under-specified questions → clarification asked
+  MULTI_STEP                           Questions needing 2+ SQL queries combined
+  TYPO                                 Misspelled queries → still understood
+  PERSONA_YOUNG / FORMAL / ELDERLY     Different writing styles → all answered correctly
+  CURRENCY_CHECK                       Monetary answers use user's currency, never hardcoded $
+  CONVO_A (3 turns) / CONVO_B (5 turns) Follow-up questions use shared conversation_id
+
+reports suite (SalesPlay analytics templates):
+  revenue_trend        Daily revenue, transactions, avg ticket
+  top_products         Top 20 products by revenue; units_sold must be integer
+  customer_analysis    Lifetime value, order count, days since last purchase
+  payment_breakdown    Revenue and transaction count per payment method
+  hourly_performance   Sales by hour of day (0-23 range; hour_of_day is a dimension, not KPI)
+  category_performance Revenue and units per category; no blank category names
+  daily_summary        Per-day revenue, transactions, unique customers
+  shop_performance     Per-shop revenue and traffic; no blank shop names
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+VALIDATION RULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+All /query responses must:
+  1. Return HTTP 200 (no error codes exposed to the client)
+  2. Include columns, data (list), row_count, conversation_id fields
+  3. Not leak tracebacks or exception names in the analysis field
+
+Additional label-specific rules:
+  HARMFUL       → data rows returned = WARN (known gap; must not hard-fail)
+  GREETING etc. → >200 rows returned = WARN (LLM generated SQL for non-query)
+  PRODUCT_SKU   → 'sku' column missing = WARN (LLM hint not working)
+
+All report responses must:
+  R1. Return HTTP 200
+  R2. Have non-empty columns and data arrays
+  R3. Include all required columns for the template
+  R4. Have no blank/null values in named columns (category, shop, product, etc.)
+  R5. Have no fractional values in integer columns (units_sold, transactions, etc.)
+  R6. Have numeric values in all monetary columns
+  R7. hour_of_day values must be in 0-23 range
 """
 import io, sys, json, time, uuid, urllib.request, urllib.error
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
