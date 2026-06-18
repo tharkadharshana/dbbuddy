@@ -1,17 +1,20 @@
 """
 providers/salesplay/sync.py
 ===========================
-Fetches data from SalesPlay REST API and upserts into the unified
-integration_records table via providers/upsert.py.
+Fetches data from SalesPlay REST API and upserts into the shared sp_* tables
+and the integration_records table via providers/upsert.py.
 
-VERIFIED FROM OFFICIAL API DOCS (spdeveloper.nvision.lk) + POSTMAN COLLECTION:
-
-  Base URL : https://spdeveloperapi.nvision.lk/v1.0
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CONNECTION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Base URL : https://spdeveloperapi.nvision.lk/v1.0  (QA: spqaapi.nvision.lk)
   Auth     : Header key = "Token", value = "Bearer <token>"  (NOT Authorization)
-  Filters  : JSON body on GET requests
+  Filters  : JSON body on GET requests (not query params)
   Date fmt : "YYYY-MM-DD HH:MM:SS" (24-hour)
 
-ENDPOINT FILTER KEYS (exact from API docs + Postman):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ENDPOINT FILTER KEYS (exact from live API)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   GET /shops          → shop_ids, updated_at_min, updated_at_max, limit, cursor
   GET /category       → category_ids, created_at_min, created_at_max, limit, cursor
   GET /sub_category   → sub_category_ids, created_at_min, created_at_max, limit, cursor
@@ -23,16 +26,133 @@ ENDPOINT FILTER KEYS (exact from API docs + Postman):
   GET /customers      → customer_ids, email, created_at_min, created_at_max, limit, cursor
   GET /products       → product_ids, created_at_min, created_at_max, limit, cursor
   GET /receipts       → receipt_numbers, shop_id, created_at_min, created_at_max, limit, cursor
+                        NOTE: created_at_min + created_at_max are REQUIRED — 401 without them
 
-ACTUAL RESPONSE FIELD NAMES (from live API sample responses in docs):
-  /shops         → id, shop_name, address, phone_number, city, email, is_enable, updated_date
-  /category      → id, category_name, created_at, updated_date
-  /payment_types → id, payment_type_name, shops[], created_date, updated_date
-  /receipts      → receipt_number (IS the PK — no separate id),
-                   receipt_type, receipt_date_time, total_money,
-                   customer_id, total_discount (decimal), total_discounts (array — ignore),
-                   employee_id, shop_id, note, total_tax, total_charge,
-                   line_products[], payments[], receipt_delete_status
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+API → DB FIELD MAPPING  (verified against live API responses, 2026-06-18)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+── /shops → sp_shops ────────────────────────────────────────────────────────
+  API field         DB field       Notes
+  id                id
+  shop_name         shop_name
+  address           address
+  phone_number      phone
+  email             email
+  is_enable         status         Stored as "1"/"0" string
+  updated_date      updated_at
+  city              (not stored)   Available in API but omitted
+  longitude/lat     (not stored)   Available in API but omitted
+  terminal_list     (not stored)   Available in API but omitted
+  (no API field)    currency       Always NULL — API doesn't return at shop level
+  (no API field)    country        Always NULL — API doesn't return at shop level
+  (no API field)    timezone       Always NULL — API doesn't return at shop level
+
+── /category → sp_categories ────────────────────────────────────────────────
+  API field              DB field       Notes
+  id                     id
+  category_name          category_name
+  created_at             created_at
+  updated_date           updated_at
+  item_classification_code (not stored) Available in API but omitted
+  (no API field)         color          Always NULL
+  (no API field)         shop_id        Always NULL
+
+── /payment_types → sp_payment_types ────────────────────────────────────────
+  API field           DB field        Notes
+  id                  id
+  payment_type_name   payment_name
+  payment_type_code   payment_type    Was missing before fix; now stored correctly
+  created_date        created_at
+  updated_date        updated_at
+  shops[]             (not stored)    Available in API but omitted
+  (no API field)      is_active       Always 1 (DB default) — all returned types are active
+  (no API field)      shop_id         Always NULL
+
+── /customers → sp_customers ────────────────────────────────────────────────
+  API field           DB field         Notes
+  id                  id
+  name                customer_name    API returns full name in "name" (no first/last split);
+                                       sync falls back: first_name+last_name → name → "Unknown"
+  email               email
+  phone_number        phone_number     Also tries c.get("phone") as fallback
+  customer_code       customer_code
+  description         note
+  total_visits        total_visits     API returns as string — cast to int
+  total_spent         total_spent      API returns as string — cast to float via _dec()
+  total_points        points_balance   API key is "total_points" (not "points_balance");
+                                       sync tries points_balance first, falls back to total_points
+  created_at          created_at
+  updated_at          updated_at       Also tries updated_date as fallback
+  (computed)          last_purchase_date  Set post-sync via refresh_customer_last_purchase()
+                                         from MAX(sp_receipts.created_at) per customer
+  address/city/etc    (not stored)     Available in API but omitted
+
+── /products → sp_products ──────────────────────────────────────────────────
+  API field                      DB field       Notes
+  id                             id
+  product_name / name            product_name
+  description                    description
+  category_id                    category_id    Often absent for no-variant products;
+                                                category_name filled via sp_categories lookup
+                                                or direct p.get("category") fallback
+  product_code (top-level)       sku            Tried on first variant, then top-level p
+  barcode (on variant)           barcode
+  cost / default_cost (variant   cost           Fallback chain: variant.default_cost →
+    or top-level)                               variant.cost → p.cost
+  shops[0].price / variant       price          Fallback chain: variant.shops[0].price →
+    shops[0].price / variant                    p.shops[0].price → variant.price → 0
+    price                                       IMPORTANT: use _dec(..., None) not _dec(...)
+                                                so None sentinel propagates through if-checks.
+                                                _dec(None) without a default returns 0.0,
+                                                which breaks the fallback chain silently.
+  created_at / created_date      created_at
+  updated_at / updated_date      updated_at
+  category / sp_categories       category_name  Prefer sp_categories JOIN lookup by category_id;
+    lookup                                      fall back to inline p.get("category") string
+                                                if no category_id (no-variant products)
+
+── /receipts → sp_receipts ──────────────────────────────────────────────────
+  API field               DB field           Notes
+  receipt_number          id + receipt_number  IS the PK — API has no separate "id" field
+  receipt_type            receipt_type        Defaults to "SALE" if absent
+  receipt_date_time       created_at          Also used for updated_at (no separate updated field)
+  total_money             total_money
+  total_discount          total_discount      Use decimal field — ignore total_discounts[] array
+  total_tax               total_tax
+  note                    note
+  receipt_delete_status   status              false → "COMPLETED", true → "VOID"
+  shop_id                 shop_id
+  shop_id → lookup        shop_name           Resolved from shop_map (synced before receipts)
+  customer_id             customer_id
+  customer_id → lookup    customer_name       Resolved from cust_map (synced before receipts)
+  payments[0].payment_type_id   payment_type_id
+  payment_type_id → lookup      payment_type_name  Resolved from pay_map
+  payments[0].money_amount      payment_amount     Falls back to total_money if absent
+  (not stored)            refund_for          Available in API — relevant for refunds
+  (not stored)            employee_id         Available in API but omitted
+  (not stored)            order_type          Available in API but omitted
+  (hardcoded 0)           points_earned       API doesn't return at receipt level
+  (hardcoded 0)           points_deducted     API doesn't return at receipt level
+
+── /receipts[].line_products → sp_receipt_line_items ────────────────────────
+  API field             DB field           Notes
+  product_line_no       id                 No "id" field on line items; product_line_no is PK
+  product_id            product_id
+  product_name / name   product_name
+  product_code / sku    sku
+  quantity              quantity
+  price                 price              Selling price at time of sale (always correct even
+                                           if sp_products.price was stale/zero)
+  gross_total_money     gross_total_money  Pre-discount line total; falls back to price×qty
+  total_discount        total_discount     Tries discount_amount, product_discount, total_discount
+  total_money           total_money        Post-discount line total; falls back to gross_total_money
+  cost                  cost               Tries product_cost, then cost
+  category_name         category_name      Uses inline API value if present and not "No category";
+                                           falls back to sp_products lookup by product_id
+  cost_total            (not stored)       Total cost for line (cost × qty) — omitted
+  variant_id            variant_id         API doesn't return at line level; always NULL
+  (receipt field)       created_at         Denormalized from receipt.receipt_date_time
 """
 
 import requests
