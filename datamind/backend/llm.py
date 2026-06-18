@@ -633,7 +633,8 @@ def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "openai",
 
 def generate_report_summary(title: str, kpis: Dict, section_data: Dict,
                             llm: str, format: str = "full",
-                            api_key: str = "", user_email: str = None) -> str:
+                            api_key: str = "", user_email: str = None,
+                            currency: str = "$", country: str = "") -> str:
     kpi_text = "\n".join(f"  {k}: {v}" for k, v in kpis.items())
     sections_text = ""
     for sid, data in section_data.items():
@@ -652,10 +653,13 @@ def generate_report_summary(title: str, kpis: Dict, section_data: Dict,
     else:
         length_instruction = "Write a detailed professional report with 5-7 paragraphs: overview, findings per section, risks, opportunities, strategic recommendations."
 
+    _profile = f"Use '{currency}' as the currency symbol — never assume USD or '$'."
+    if country:
+        _profile += f" The business operates in {country}."
     system = (
         "You are a senior business analyst writing a professional analytics report. "
         "Use concrete numbers from the data. Be direct and actionable. "
-        "Do not invent data — only reference what is provided."
+        f"Do not invent data — only reference what is provided. {_profile}"
     )
     prompt = (
         f"Report Title: {title}\n\n"
