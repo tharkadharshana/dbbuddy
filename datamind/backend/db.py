@@ -140,11 +140,54 @@ def get_sample_data(conn, tables: List[str], rows: int = 3) -> Dict[str, Any]:
     return samples
 
 
+# Semantic descriptions for known shared tables.
+# These are injected into the schema text so the LLM understands the PURPOSE
+# of each table, not just its columns. This prevents it from picking the wrong
+# table when multiple tables share similar column names (e.g. price/cost exist
+# in both sp_products and sp_receipt_line_items with very different meanings).
+_TABLE_DESCRIPTIONS: Dict[str, str] = {
+    "sp_products": (
+        "Product catalog — one row per product. "
+        "Use this for: current retail price, cost price, product details, SKU lookups. "
+        "price = current selling price per unit; cost = purchase/wholesale cost per unit."
+    ),
+    "sp_receipt_line_items": (
+        "Individual line items within sales transactions — one row per product per receipt. "
+        "Use this for: sales volume, revenue, what was sold, sales history, quantity sold. "
+        "price = unit price at time of sale; total_money = line revenue after discounts."
+    ),
+    "sp_receipts": (
+        "Sales receipts — one row per completed or voided transaction. "
+        "Use this for: total revenue, transaction count, payment analysis, order history."
+    ),
+    "sp_customers": (
+        "Customer profiles with lifetime aggregates — one row per customer. "
+        "Use this for: customer lookup, total spend, visit count, loyalty points, recency."
+    ),
+    "sp_shops": (
+        "Store/branch locations — one row per shop. "
+        "Use this for: branch filtering, shop details."
+    ),
+    "sp_categories": (
+        "Product categories — one row per category. "
+        "Use this for: category-level filtering or lookups."
+    ),
+    "sp_payment_types": (
+        "Payment methods (cash, card, etc) — one row per payment type. "
+        "Use this for: payment method analysis or lookups."
+    ),
+}
+
+
 def schema_to_text(schemas: Dict[str, Any], fkeys: List[Dict] = None) -> str:
     lines = []
     for table, columns in schemas.items():
         col_defs = ", ".join(f"`{c['name']}` {c['type']}" for c in columns)
-        lines.append(f"Table `{table}`: ({col_defs})")
+        desc = _TABLE_DESCRIPTIONS.get(table)
+        if desc:
+            lines.append(f"Table `{table}` [{desc}]: ({col_defs})")
+        else:
+            lines.append(f"Table `{table}`: ({col_defs})")
     if fkeys:
         lines.append("\nRelationships:")
         for fk in fkeys:
