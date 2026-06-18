@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { runNLQuery, createConversation, getConversationMessages, getErrorMessage } from '../utils/api'
-import { Spinner, UsageMeter, AIQuotaWall } from '../components/UI'
+import { Spinner, UsageMeter } from '../components/UI'
 import { formatCurrency, formatNumber } from '../utils/locale'
 
 const TT = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)', borderRadius:8, fontSize:12, color:'#f0f1fa' }

@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { Card, Btn, UsageMeter, Spinner, ErrorBox, Badge, COLORS, AIQuotaWall } from '../components/UI'
+import { Card, Btn, UsageMeter, Spinner, ErrorBox, Badge, COLORS } from '../components/UI'
 import { generateReport, getErrorMessage } from '../utils/api'
 import { formatCurrency, formatNumber } from '../utils/locale'
 
