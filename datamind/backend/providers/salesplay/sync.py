@@ -483,7 +483,7 @@ def sync_products(client: SalesPlayAPIClient, conn, prefix: str, user_email: str
             "category_id":  _str(p.get("category_id"), 64),
             "sku":          _str(first.get("product_code") or first.get("sku"), 100),
             "barcode":      _str(first.get("barcode"), 100),
-            "cost":         _dec(first.get("default_cost") or first.get("cost"), 0),
+            "cost":         _dec(first.get("default_cost") or first.get("cost") or p.get("cost"), 0),
             "price":        price or 0.0,
             "created_at":   _dt(p.get("created_at")),
             "updated_at":   _dt(p.get("updated_at") or p.get("updated_date")),
