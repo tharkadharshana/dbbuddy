@@ -469,11 +469,12 @@ def sync_products(client: SalesPlayAPIClient, conn, prefix: str, user_email: str
         first         = next((v for v in variants if not v.get("deleted_at")),
                              variants[0] if variants else {})
         variant_shops = first.get("shops") or []
-        # Price: variant shop → top-level shops (no-variant products) → variant price → 0
-        price = _dec(variant_shops[0].get("price") if variant_shops else None)
+        # Price fallback: variant shop → product-level shops → variant price → 0
+        # Use None sentinel (not 0.0) so _dec(None, None) propagates correctly.
+        price = _dec(variant_shops[0].get("price") if variant_shops else None, None)
         if price is None:
             top_shops = p.get("shops") or []
-            price = _dec(top_shops[0].get("price") if top_shops else None)
+            price = _dec(top_shops[0].get("price") if top_shops else None, None)
         if price is None:
             price = _dec(first.get("price"), 0)
 
