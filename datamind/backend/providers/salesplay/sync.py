@@ -183,14 +183,18 @@ class SalesPlayAPIClient:
 
     def validate(self) -> dict:
         data = self._get("/merchant", {})
+        # API wraps the merchant object in a list: {"merchant": [{...}]}
+        merchant = (data.get("merchant") or [{}])[0]
+        currency_raw = merchant.get("currency") or {}
+        currency = currency_raw.get("code", "") if isinstance(currency_raw, dict) else str(currency_raw)
         return {
             "business_name": (
-                data.get("merchant_name") or data.get("name") or
-                data.get("business_name") or "SalesPlay Account"
+                merchant.get("merchant_name") or merchant.get("name") or
+                merchant.get("business_name") or "SalesPlay Account"
             ),
-            "shop_count":  data.get("shop_count", 0),
-            "currency":    data.get("currency", ""),
-            "merchant_id": data.get("id", ""),
+            "shop_count":  merchant.get("shop_count", 0),
+            "currency":    currency,
+            "merchant_id": merchant.get("id", ""),
         }
 
 
