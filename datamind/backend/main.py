@@ -104,13 +104,23 @@ from limiter import limiter as _limiter, RL_AUTH, RL_AUTH_LOGIN, RL_COMPUTE, RL_
 
 app.state.limiter = _limiter
 
+def _parse_rl_window(rl_str: str) -> int:
+    """Parse a slowapi limit string (e.g. '10/minute') into window seconds."""
+    try:
+        _, period = rl_str.split("/")
+        return {"second": 1, "minute": 60, "hour": 3600, "day": 86400}.get(period.strip().lower(), 60)
+    except Exception:
+        return 60
+
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    retry_after = _parse_rl_window(RL_COMPUTE)
     return JSONResponse(
         status_code=200,
         content={
             "ok": False, "success": False, "type": "error",
-            "message": "You're sending requests too quickly. Please wait a moment and try again.",
+            "message": f"Too many requests — please wait {retry_after} seconds and try again.",
+            "retry_after_seconds": retry_after,
             "columns": [], "data": [], "row_count": 0,
             "analysis": None, "think_mode": False,
             "conversation_id": None, "data_as_of": None, "steps": [],

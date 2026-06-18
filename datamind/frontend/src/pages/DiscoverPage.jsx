@@ -319,7 +319,7 @@ export default function DiscoverPage({ llm, setLlm, sub, onNavigate, onQueryComp
         ? await runIntegrationAnalytics(item.provider, item.id)
         : await runAnalytics(item.id, llm, {})
       if (data.ok === false || data.success === false) {
-        setRateLimitUntil(Date.now() + 20_000)
+        setRateLimitUntil(Date.now() + (data.retry_after_seconds || 60) * 1000)
       } else {
         setResult(data)
       }

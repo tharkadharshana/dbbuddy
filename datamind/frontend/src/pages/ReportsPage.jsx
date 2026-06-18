@@ -249,7 +249,7 @@ export default function ReportsPage({ llm, setLlm, sub, onNavigate, onQueryCompl
     try {
       const data = await generateReport(title, selected, llm, format)
       if (data.ok === false) {
-        setRateLimitUntil(Date.now() + 20_000)
+        setRateLimitUntil(Date.now() + (data.retry_after_seconds || 60) * 1000)
         return
       }
       const report = { ...data, id: Date.now(), ts: new Date().toLocaleString() }
