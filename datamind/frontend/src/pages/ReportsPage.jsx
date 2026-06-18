@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { Card, Btn, UsageMeter, Spinner, ErrorBox, Badge, COLORS } from '../components/UI'
 import { generateReport, getErrorMessage } from '../utils/api'
-import { formatCurrency, formatNumber } from '../utils/locale'
+import { formatCurrency, formatNumber, isCurrencyColumn } from '../utils/locale'
 
 const TT = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)', borderRadius:8, fontSize:12, color:'#f0f1fa' }
 
@@ -192,7 +192,11 @@ function RenderedReport({ report }) {
               {data.data?.slice(0,3).map((row,i) => (
                 <div key={i} style={{ display:'flex', gap:8, fontSize:11, color:'var(--text3)', marginTop:4, flexWrap:'wrap' }}>
                   {data.columns.slice(0,3).map(c => (
-                    <span key={c}><span style={{ color:'var(--text3)' }}>{c}: </span><span style={{ color: typeof row[c]==='number' ? 'var(--blue)' : 'var(--text2)', fontFamily: typeof row[c]==='number' ? 'var(--mono)' : 'inherit' }}>{row[c]}</span></span>
+                    <span key={c}><span style={{ color:'var(--text3)' }}>{c}: </span><span style={{ color: typeof row[c]==='number' ? 'var(--blue)' : 'var(--text2)', fontFamily: typeof row[c]==='number' ? 'var(--mono)' : 'inherit' }}>
+                      {typeof row[c] === 'number'
+                        ? isCurrencyColumn(c) ? formatCurrency(row[c]) : formatNumber(row[c])
+                        : row[c]}
+                    </span></span>
                   ))}
                 </div>
               ))}
@@ -245,7 +249,7 @@ export default function ReportsPage({ llm, setLlm, sub, onNavigate, onQueryCompl
     try {
       const data = await generateReport(title, selected, llm, format)
       if (data.ok === false) {
-        setRateLimitUntil(Date.now() + 20_000)
+        setRateLimitUntil(Date.now() + (data.retry_after_seconds || 60) * 1000)
         return
       }
       const report = { ...data, id: Date.now(), ts: new Date().toLocaleString() }

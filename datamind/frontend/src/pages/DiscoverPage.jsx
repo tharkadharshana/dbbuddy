@@ -249,6 +249,20 @@ export default function DiscoverPage({ llm, setLlm, sub, onNavigate, onQueryComp
   const [result, setResult]         = useState(null)
   const [runError, setRunError]     = useState(null)
   const [filter, setFilter]         = useState('All')
+  const [rateLimitUntil, setRateLimitUntil] = useState(null)
+  const [rlSecsLeft, setRlSecsLeft]         = useState(0)
+
+  useEffect(() => {
+    if (!rateLimitUntil) return
+    const tick = () => {
+      const secs = Math.ceil((rateLimitUntil - Date.now()) / 1000)
+      if (secs <= 0) { setRateLimitUntil(null); setRlSecsLeft(0) }
+      else setRlSecsLeft(secs)
+    }
+    tick()
+    const id = setInterval(tick, 500)
+    return () => clearInterval(id)
+  }, [rateLimitUntil])
 
   const load = async () => {
     setLoading(true); setError(null)
@@ -298,12 +312,17 @@ export default function DiscoverPage({ llm, setLlm, sub, onNavigate, onQueryComp
   useEffect(() => { load() }, [])
 
   async function handleRun(item) {
+    if (rateLimitUntil && Date.now() < rateLimitUntil) return
     setSelected(item); setRunning(true); setResult(null); setRunError(null)
     try {
       const data = item.provider
         ? await runIntegrationAnalytics(item.provider, item.id)
         : await runAnalytics(item.id, llm, {})
-      setResult(data)
+      if (data.ok === false || data.success === false) {
+        setRateLimitUntil(Date.now() + (data.retry_after_seconds || 60) * 1000)
+      } else {
+        setResult(data)
+      }
     } catch(e) { setRunError(getErrorMessage(e)) }
     finally { setRunning(false); onQueryComplete?.() }
   }
@@ -394,14 +413,21 @@ export default function DiscoverPage({ llm, setLlm, sub, onNavigate, onQueryComp
                 <div style={{ fontSize:17, fontWeight:700, marginBottom:2 }}>{selected.title}</div>
                 <div style={{ fontSize:12, color:'var(--text3)' }}>{selected.description}</div>
               </div>
-              <button onClick={() => handleRun(selected)} disabled={running} style={{
+              <button onClick={() => handleRun(selected)} disabled={running || !!rateLimitUntil} style={{
                 padding:'8px 16px', borderRadius:'var(--r-md)', fontSize:13, fontWeight:500,
-                background:'var(--blue)', color:'#fff', opacity:running?0.6:1,
-                cursor:running?'not-allowed':'pointer', display:'flex', alignItems:'center', gap:7, border:'none'
+                background:'var(--blue)', color:'#fff', opacity:(running || rateLimitUntil) ? 0.6 : 1,
+                cursor:(running || rateLimitUntil) ?'not-allowed':'pointer', display:'flex', alignItems:'center', gap:7, border:'none'
               }}>
-                {running ? <><Spinner size={13} color="#fff"/>Running…</> : '↻ Re-run'}
+                {running ? <><Spinner size={13} color="#fff"/>Running…</> : rateLimitUntil ? `Cooling down… ${rlSecsLeft}s` : '↻ Re-run'}
               </button>
             </div>
+
+            {rateLimitUntil && (
+              <div style={{ padding:'10px 12px', borderRadius:'var(--r-md)', background:'rgba(251,146,60,0.1)', border:'1px solid rgba(251,146,60,0.25)', fontSize:12, color:'var(--text2)', lineHeight:1.5 }}>
+                Too many requests — let the system cool down.{' '}
+                <span style={{ fontWeight:600, color:'#f97316' }}>Try again in {rlSecsLeft}s</span>
+              </div>
+            )}
 
             {runError && <ErrorBox message={runError} />}
 

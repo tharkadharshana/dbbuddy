@@ -172,6 +172,63 @@ ON DUPLICATE KEY UPDATE
 
 ---
 
+---
+
+## Admin: Manually Adding Credits to a User
+
+Use this when a user runs out of credits and needs more for testing or as a manual top-up
+(bypasses the payment flow — no charge is made).
+
+### Add AI credit addon packs
+
+Each pack = 25 AI credits. Adjust the `units_remaining` value to the number of credits you want to add.
+
+```sql
+-- Add 100 AI credits (= 4 packs of 25) to a user
+INSERT INTO addon_purchases (user_email, addon_type, units_remaining)
+VALUES ('user@example.com', 'ai_credits', 100);
+```
+
+To verify the balance afterwards:
+
+```sql
+SELECT SUM(units_remaining) AS addon_balance
+FROM addon_purchases
+WHERE user_email = 'user@example.com'
+  AND addon_type = 'ai_credits'
+  AND units_remaining > 0;
+```
+
+### Reset usage for the current billing period
+
+Use this when a test account is exhausted and you want to restore the full plan allowance
+without adding addon packs.
+
+```sql
+UPDATE subscription_usage
+SET ai_credits_used = 0, tokens_used = 0, db_rows_used = 0
+WHERE user_email = 'user@example.com';
+```
+
+### Check a user's full billing state
+
+```sql
+SELECT
+    us.plan_id, us.status, us.period_start, us.period_end,
+    su.tokens_used, su.ai_credits_used,
+    (SELECT SUM(units_remaining) FROM addon_purchases ap
+     WHERE ap.user_email = us.user_email AND ap.addon_type = 'ai_credits' AND units_remaining > 0
+    ) AS addon_credits_remaining
+FROM user_subscriptions us
+JOIN subscription_usage su ON su.user_email = us.user_email
+WHERE us.user_email = 'user@example.com';
+```
+
+> **Note:** The preferred method for top-ups is `addon_purchases` (not resetting usage or changing the
+> plan), because it preserves the user's actual usage history and rolls over unused balance.
+
+---
+
 ## Related Files (Read-Only Reference)
 
 | File | Role |

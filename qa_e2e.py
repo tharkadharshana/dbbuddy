@@ -1,34 +1,98 @@
 #!/usr/bin/env python3
 """
-End-to-end QA for the /query endpoint and SalesPlay analytics reports.
-Run with: python qa_e2e.py
+End-to-end QA for the DataMind / SalesPlay AI backend.
+Covers the /query endpoint and SalesPlay analytics report templates.
 
-Coverage:
-  - Greetings / casual / thank-you
-  - Out-of-scope / irrelevant questions
-  - Garbage / gibberish / whitespace / long strings
-  - Angry / frustrated users
-  - Harmful SQL (must be refused, never executed)
-  - SQL keywords in natural language (must NOT be classified harmful)
-  - Simple data queries
-  - Time-based queries
-  - Trend / comparison queries
-  - Shop / branch specific
-  - Product / category drill-downs (SKU expected in response data)
-  - Customer queries
-  - Vague / clarification-needed
-  - Multi-step complex queries
-  - Typos / casual spelling
-  - Different personas (young, formal, elderly)
-  - Conversational follow-up chains (A: 3 turns, B: 5 turns)
-  - Currency — response must not hardcode $ for non-USD users
-  - Billing error messages — specific reason (expired vs exhausted)
-  - SalesPlay integration analytics reports (all 8 templates)
-    - Returns success + columns + data
-    - KPI columns are correct types (no hour_of_day as metric)
-    - Category / shop names are never blank
-    - Monetary columns present on templates that should have them
-    - Integer columns contain no fractional values (e.g. not 438.0)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+USAGE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  python qa_e2e.py              Full run — chat + reports (use before merging a PR)
+  python qa_e2e.py chat         All /query endpoint tests
+  python qa_e2e.py data         Data queries: simple, time, trend, shop, product,
+                                customer, multi-step, typos, personas, currency
+  python qa_e2e.py convo        Conversational follow-up chains only (A: 3 turns, B: 5)
+  python qa_e2e.py harmful      Harmful SQL refusal + safe-SQL-words in natural language
+  python qa_e2e.py reports      SalesPlay analytics report templates only
+
+WHEN TO USE EACH SUITE
+  Changed query / LLM routing logic   →  python qa_e2e.py chat
+  Changed analytics report templates  →  python qa_e2e.py reports
+  Changed conversation memory/history →  python qa_e2e.py convo
+  Changed SQL safety / intent rules   →  python qa_e2e.py harmful
+  Before merging any PR               →  python qa_e2e.py  (full run)
+
+TIMING
+  chat suite    ~4 min   (rate-limited to ~2-3 s/request)
+  reports suite ~3 min   (2 passes: warmup + validated; 7 s/request)
+  full run     ~20 min   (includes 65 s cooldown between suites to
+                          clear the RL_COMPUTE sliding window)
+
+  Running `reports` directly skips the 65 s cooldown — only needed
+  after a full chat suite has exhausted the rate-limit bucket.
+
+PREREQUISITES
+  - Backend running at http://127.0.0.1:8000
+  - Test account exists: livedata@test.com / Pass@123
+  - SalesPlay integration active for that account (for reports suite)
+  - If AI credit limit is hit, run reset_qa_usage.py first
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+WHAT IS TESTED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+chat suite (/query endpoint):
+  GREETING / CASUAL_CHAT / THANK_YOU   Conversational inputs → friendly reply, no SQL
+  OUT_OF_SCOPE                         Off-topic questions → polite refusal
+  GARBAGE                              Gibberish, whitespace, 500-char noise → no crash
+  ANGRY                                Frustrated users → graceful, not a server error
+  HARMFUL                              DELETE/DROP/UPDATE/TRUNCATE → refused, 0 rows
+  SAFE_SQL_WORDS                       SQL keywords in natural language → NOT flagged harmful
+  DATA_SIMPLE                          Basic counts and totals
+  DATA_TIME                            Date-filtered queries (last month, this year, etc.)
+  DATA_TREND                           Comparisons and trends over time
+  SHOP_SPECIFIC                        Per-branch / per-location breakdowns
+  PRODUCT_DRILL / PRODUCT_SKU          Category and product queries; SKU column expected
+  CUSTOMER                             Customer-level queries
+  VAGUE                                Under-specified questions → clarification asked
+  MULTI_STEP                           Questions needing 2+ SQL queries combined
+  TYPO                                 Misspelled queries → still understood
+  PERSONA_YOUNG / FORMAL / ELDERLY     Different writing styles → all answered correctly
+  CURRENCY_CHECK                       Monetary answers use user's currency, never hardcoded $
+  CONVO_A (3 turns) / CONVO_B (5 turns) Follow-up questions use shared conversation_id
+
+reports suite (SalesPlay analytics templates):
+  revenue_trend        Daily revenue, transactions, avg ticket
+  top_products         Top 20 products by revenue; units_sold must be integer
+  customer_analysis    Lifetime value, order count, days since last purchase
+  payment_breakdown    Revenue and transaction count per payment method
+  hourly_performance   Sales by hour of day (0-23 range; hour_of_day is a dimension, not KPI)
+  category_performance Revenue and units per category; no blank category names
+  daily_summary        Per-day revenue, transactions, unique customers
+  shop_performance     Per-shop revenue and traffic; no blank shop names
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+VALIDATION RULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+All /query responses must:
+  1. Return HTTP 200 (no error codes exposed to the client)
+  2. Include columns, data (list), row_count, conversation_id fields
+  3. Not leak tracebacks or exception names in the analysis field
+
+Additional label-specific rules:
+  HARMFUL       → data rows returned = WARN (known gap; must not hard-fail)
+  GREETING etc. → >200 rows returned = WARN (LLM generated SQL for non-query)
+  PRODUCT_SKU   → 'sku' column missing = WARN (LLM hint not working)
+
+All report responses must:
+  R1. Return HTTP 200
+  R2. Have non-empty columns and data arrays
+  R3. Include all required columns for the template
+  R4. Have no blank/null values in named columns (category, shop, product, etc.)
+  R5. Have no fractional values in integer columns (units_sold, transactions, etc.)
+  R6. Have numeric values in all monetary columns
+  R7. hour_of_day values must be in 0-23 range
 """
 import io, sys, json, time, uuid, urllib.request, urllib.error
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
@@ -241,6 +305,27 @@ TESTS = [
 ]
 
 # ---------------------------------------------------------------------------
+# Suite registry
+# Each entry maps a short name to a set of TESTS labels it covers.
+# Use:  python qa_e2e.py [suite]
+#   (no arg)   → all    — full PR-mode run, both chat + reports
+#   chat       → all /query endpoint tests
+#   data       → simple, time, trend, shop, product, customer, multi-step
+#   convo      → conversational follow-up chains only
+#   harmful    → harmful SQL + safe-SQL-words
+#   reports    → SalesPlay analytics report templates only
+#
+SUITES = {
+    "chat":    None,   # None = all TESTS labels
+    "data":    {"DATA_SIMPLE", "DATA_TIME", "DATA_TREND", "SHOP_SPECIFIC",
+                "PRODUCT_DRILL", "PRODUCT_SKU", "CUSTOMER", "MULTI_STEP",
+                "VAGUE", "TYPO", "PERSONA_YOUNG", "PERSONA_FORMAL",
+                "PERSONA_ELDERLY", "SAFE_SQL_WORDS", "CURRENCY_CHECK"},
+    "convo":   {"CONVO_A1", "CONVO_A2", "CONVO_A3",
+                "CONVO_B1", "CONVO_B2", "CONVO_B3", "CONVO_B4", "CONVO_B5"},
+    "harmful": {"HARMFUL", "SAFE_SQL_WORDS"},
+}
+
 PASS = 0
 FAIL = 0
 WARN = 0
@@ -329,60 +414,47 @@ def check(label, question, status, data):
 
 
 # ---------------------------------------------------------------------------
-print("=" * 70)
-print("DataMind / SalesPlay AI — End-to-End QA")
-print("=" * 70)
-print("Logging in as livedata@test.com ...", flush=True)
+def run_chat_suite(label_filter=None):
+    """Run /query endpoint tests. label_filter=set of labels to include (None=all)."""
+    convo_a_id = str(uuid.uuid4())
+    convo_b_id = str(uuid.uuid4())
 
-TOKEN = login("livedata@test.com", "Pass@123")
-print(f"Token acquired.\n{'=' * 70}\n", flush=True)
+    _CONVO_A = {"CONVO_A1", "CONVO_A2", "CONVO_A3"}
+    _CONVO_B = {"CONVO_B1", "CONVO_B2", "CONVO_B3", "CONVO_B4", "CONVO_B5"}
+    _HEAVY   = {"DATA_SIMPLE", "DATA_TIME", "DATA_TREND", "MULTI_STEP",
+                "SHOP_SPECIFIC", "PRODUCT_DRILL", "PRODUCT_SKU",
+                "CUSTOMER", "SAFE_SQL_WORDS", "CURRENCY_CHECK"}
 
-# Conversation chain IDs — pre-generated so history is tracked from turn 1.
-# The backend stores messages under this ID; follow-up turns load that history.
-convo_a_id = str(uuid.uuid4())
-convo_b_id = str(uuid.uuid4())
+    tests = [(l, q) for l, q in TESTS if label_filter is None or l in label_filter]
+    if not tests:
+        print("  (no tests match this suite filter)")
+        return
 
-for (label, question) in TESTS:
-    # Conversation chain A (3 turns)
-    if label in ("CONVO_A1", "CONVO_A2", "CONVO_A3"):
-        status, data = query(question, conversation_id=convo_a_id, delay=3)
+    for label, question in tests:
+        if label in _CONVO_A:
+            status, data = query(question, conversation_id=convo_a_id, delay=3)
+        elif label in _CONVO_B:
+            status, data = query(question, conversation_id=convo_b_id, delay=3)
+        elif label in _HEAVY:
+            status, data = query(question, delay=3)
+        else:
+            status, data = query(question, delay=2)
         check(label, question, status, data)
 
-    # Conversation chain B (5 turns)
-    elif label in ("CONVO_B1", "CONVO_B2", "CONVO_B3", "CONVO_B4", "CONVO_B5"):
-        status, data = query(question, conversation_id=convo_b_id, delay=3)
-        check(label, question, status, data)
-
-    # LLM-heavy queries get extra breathing room
-    elif label in ("DATA_SIMPLE", "DATA_TIME", "DATA_TREND", "MULTI_STEP",
-                   "SHOP_SPECIFIC", "PRODUCT_DRILL", "PRODUCT_SKU",
-                   "CUSTOMER", "SAFE_SQL_WORDS", "CURRENCY_CHECK"):
-        status, data = query(question, delay=3)
-        check(label, question, status, data)
-
-    else:
-        status, data = query(question, delay=2)
-        check(label, question, status, data)
-
-
-# ---------------------------------------------------------------------------
-total = PASS + FAIL
-print(f"\n{'=' * 70}")
-print(f"RESULTS:  {PASS} PASS  |  {FAIL} FAIL  |  {WARN} WARN")
-print(f"TOTAL TESTS: {total}")
-print("=" * 70)
-
-if FAIL > 0:
-    print("\nFAILED TESTS:")
-    for verdict, line in results:
-        if verdict == "FAIL":
-            print(" ", line)
-
-if WARN > 0:
-    print("\nWARNINGS (pass but worth checking):")
-    for verdict, line in results:
-        if verdict == "WARN":
-            print(" ", line)
+    total = PASS + FAIL
+    print(f"\n{'=' * 70}")
+    print(f"CHAT RESULTS:  {PASS} PASS  |  {FAIL} FAIL  |  {WARN} WARN  (total {total})")
+    print("=" * 70)
+    if FAIL > 0:
+        print("\nFAILED:")
+        for verdict, line in results:
+            if verdict == "FAIL":
+                print(" ", line)
+    if WARN > 0:
+        print("\nWARNINGS:")
+        for verdict, line in results:
+            if verdict == "WARN":
+                print(" ", line)
 
 
 # ---------------------------------------------------------------------------
@@ -590,47 +662,83 @@ def check_report(spec, status, data):
     print(line, flush=True)
 
 
-print(f"\n{'=' * 70}")
-print("SalesPlay Analytics Report Tests")
-print("=" * 70)
-# RL_COMPUTE = 10/minute shared by /query and /analytics/run. After 93 query
-# tests the rate-limit bucket may still have recent entries. Wait 65s for the
-# sliding window to clear before firing analytics calls so we don't start the
-# warm-up already near the limit.
-print("Waiting 65s for rate-limit window to clear after query tests ...", flush=True)
-time.sleep(65)
+def run_reports_suite(after_full_chat=False):
+    """Run SalesPlay analytics report tests."""
+    global REPORT_PASS, REPORT_FAIL, REPORT_WARN
+    print(f"\n{'=' * 70}")
+    print("SalesPlay Analytics Report Tests")
+    print("=" * 70)
 
-# First call per template busts any stale in-process cache; second call gets
-# the fresh result. analytics_run retries once on rate-limit (15s backoff).
-print("Warming up analytics cache (1 pass) ...", flush=True)
-for spec in REPORT_TESTS:
-    analytics_run("salesplay", spec["template_id"], delay=7)
+    if after_full_chat:
+        # RL_COMPUTE = 10/minute shared by /query and /analytics/run. After the
+        # full chat suite (~93 tests) the rate-limit bucket may still have recent
+        # entries. Wait 65s for the sliding window to clear.
+        print("Waiting 65s for rate-limit window to clear after chat suite ...", flush=True)
+        time.sleep(65)
 
-print("Running validated pass ...", flush=True)
-for spec in REPORT_TESTS:
-    status, data = analytics_run("salesplay", spec["template_id"], delay=7)
-    check_report(spec, status, data)
+    # First pass warms the cache; second pass validates results.
+    # analytics_run retries once on rate-limit (15s backoff).
+    print("Warming up analytics cache (1 pass) ...", flush=True)
+    for spec in REPORT_TESTS:
+        analytics_run("salesplay", spec["template_id"], delay=7)
 
-report_total = REPORT_PASS + REPORT_FAIL
-print(f"\n{'=' * 70}")
-print(f"REPORT RESULTS:  {REPORT_PASS} PASS  |  {REPORT_FAIL} FAIL  |  {REPORT_WARN} WARN")
-print(f"TOTAL REPORT TESTS: {report_total}")
-print("=" * 70)
+    print("Running validated pass ...", flush=True)
+    for spec in REPORT_TESTS:
+        status, data = analytics_run("salesplay", spec["template_id"], delay=7)
+        check_report(spec, status, data)
 
-if REPORT_FAIL > 0:
-    print("\nFAILED REPORT TESTS:")
-    for verdict, line in report_results:
-        if verdict == "FAIL":
-            print(" ", line)
+    report_total = REPORT_PASS + REPORT_FAIL
+    print(f"\n{'=' * 70}")
+    print(f"REPORT RESULTS:  {REPORT_PASS} PASS  |  {REPORT_FAIL} FAIL  |  {REPORT_WARN} WARN  (total {report_total})")
+    print("=" * 70)
+    if REPORT_FAIL > 0:
+        print("\nFAILED REPORT TESTS:")
+        for verdict, line in report_results:
+            if verdict == "FAIL":
+                print(" ", line)
+    if REPORT_WARN > 0:
+        print("\nREPORT WARNINGS:")
+        for verdict, line in report_results:
+            if verdict == "WARN":
+                print(" ", line)
 
-if REPORT_WARN > 0:
-    print("\nREPORT WARNINGS:")
-    for verdict, line in report_results:
-        if verdict == "WARN":
-            print(" ", line)
 
-grand_pass = PASS + REPORT_PASS
-grand_fail = FAIL + REPORT_FAIL
-print(f"\n{'=' * 70}")
-print(f"GRAND TOTAL:  {grand_pass} PASS  |  {grand_fail} FAIL  |  {WARN + REPORT_WARN} WARN")
-print("=" * 70)
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+def main():
+    suite = sys.argv[1].lower() if len(sys.argv) > 1 else "all"
+
+    print("=" * 70)
+    print("DataMind / SalesPlay AI — End-to-End QA")
+    if suite != "all":
+        print(f"Suite: {suite}")
+    print("=" * 70)
+    print("Logging in as livedata@test.com ...", flush=True)
+
+    global TOKEN
+    TOKEN = login("livedata@test.com", "Pass@123")
+    print(f"Token acquired.\n{'=' * 70}\n", flush=True)
+
+    if suite == "all":
+        run_chat_suite(label_filter=None)
+        run_reports_suite(after_full_chat=True)
+        grand_pass = PASS + REPORT_PASS
+        grand_fail = FAIL + REPORT_FAIL
+        print(f"\n{'=' * 70}")
+        print(f"GRAND TOTAL:  {grand_pass} PASS  |  {grand_fail} FAIL  |  {WARN + REPORT_WARN} WARN")
+        print("=" * 70)
+
+    elif suite == "reports":
+        run_reports_suite(after_full_chat=False)
+
+    elif suite in SUITES:
+        run_chat_suite(label_filter=SUITES[suite])
+
+    else:
+        print(f"Unknown suite '{suite}'. Available: all, chat, data, convo, harmful, reports")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

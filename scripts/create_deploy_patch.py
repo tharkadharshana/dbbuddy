@@ -43,44 +43,52 @@ FRONTEND_EXCLUDE_FILES = {"iframe_test.html"}
 PATCH_NOTES = """
 PATCH NOTES
 ===========
-Branch : feature/report-display-fixes
+Branch : feature/llm-profile-report-fixes
 Date   : 2026-06-18
 
 CHANGES IN THIS PATCH
 ─────────────────────
 
 1. fix(history): Chat history now shows full rich content
-   PROBLEM : Opening a past conversation showed only plain text ("Found 1
-             result. total revenue = 4,865,207.29") — no charts, tables,
-             or AI analysis.
-   FIX     : ChatPage.jsx now reconstructs `data` and `analysis` from the
-             stored `data_snapshot` field when loading history, matching
-             what EmbedHistoryDrawer already did correctly.
+   PROBLEM : Opening a past conversation showed only plain text — no charts,
+             tables, or AI analysis.
+   FIX     : ChatPage.jsx reconstructs `data` and `analysis` from the stored
+             `data_snapshot` field on history load.
    FILES   : datamind/frontend/src/pages/ChatPage.jsx
 
-2. feat(llm): LLM now knows user's country, timezone, and mirrors input language
-   PROBLEM : Asking "what is my country?" or "sales around local holidays"
-             required the user to repeat their country. The LLM always
-             replied in English even when the question was in another language.
-   FIX     : Country, country_code, and timezone are extracted from
-             settings.locale and injected into every LLM call as context
-             hints. Both the SQL narrative and the classifier (conversational
-             replies, clarification asks) now instruct the LLM to respond in
-             the same language as the question — English in → English out,
-             Sinhala in → Sinhala out.
+2. feat(llm): LLM knows user profile (country, timezone) and mirrors input language
+   PROBLEM : "in my country what is the best selling product" triggered a
+             clarification ask ("which country?") because the classifier had
+             no profile context. Report narrative also ignored currency/country.
+             LLM always replied in English regardless of question language.
+   FIX     : Country, timezone, and currency are extracted from settings.locale
+             and injected into every LLM call — the query classifier, the SQL
+             generator, AND the report narrative generator. The classifier now
+             treats "my country" as the user's profile country without asking.
+             Both classifier and SQL prompts instruct the LLM to respond in the
+             same language the user wrote in.
    FILES   : datamind/backend/main.py, datamind/backend/llm.py
    DB/ENV  : No changes — reads existing settings.locale fields.
 
 3. fix(reports): Rate-limit now shows friendly countdown instead of empty report
-   PROBLEM : Clicking Generate Report too quickly caused the backend to return
-             ok=false with empty data (HTTP 200). The frontend rendered this
-             as a blank report with no message.
+   PROBLEM : Clicking Generate Report too quickly showed a blank report with
+             no message (backend returns ok=false with HTTP 200).
    FIX     : ReportsPage detects ok=false, starts a 20-second cooldown timer,
-             disables the Generate button, and shows an orange warning:
-             "Too many requests — let the system cool down. Try again in Xs."
-             The countdown ticks in real time; clicking during cooldown is
-             a no-op (countdown just shows remaining seconds).
+             disables the Generate button, and shows an orange warning with
+             live countdown. Clicking during cooldown is a no-op.
    FILES   : datamind/frontend/src/pages/ReportsPage.jsx
+
+4. test(qa): QA suite split into targeted sub-suites
+   PROBLEM : Running the full QA (~20 min) was the only option, even for
+             small focused changes.
+   FIX     : qa_e2e.py now accepts a suite argument:
+             python qa_e2e.py chat     — /query tests only (~4 min)
+             python qa_e2e.py data     — data/product/customer queries
+             python qa_e2e.py convo    — conversation chain tests
+             python qa_e2e.py harmful  — harmful SQL refusal
+             python qa_e2e.py reports  — analytics report templates
+             python qa_e2e.py          — full run (PR mode)
+   FILES   : qa_e2e.py
 
 DB CHANGES  : None
 .ENV CHANGES: None

@@ -104,13 +104,23 @@ from limiter import limiter as _limiter, RL_AUTH, RL_AUTH_LOGIN, RL_COMPUTE, RL_
 
 app.state.limiter = _limiter
 
+def _parse_rl_window(rl_str: str) -> int:
+    """Parse a slowapi limit string (e.g. '10/minute') into window seconds."""
+    try:
+        _, period = rl_str.split("/")
+        return {"second": 1, "minute": 60, "hour": 3600, "day": 86400}.get(period.strip().lower(), 60)
+    except Exception:
+        return 60
+
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    retry_after = _parse_rl_window(RL_COMPUTE)
     return JSONResponse(
         status_code=200,
         content={
             "ok": False, "success": False, "type": "error",
-            "message": "You're sending requests too quickly. Please wait a moment and try again.",
+            "message": f"Too many requests — please wait {retry_after} seconds and try again.",
+            "retry_after_seconds": retry_after,
             "columns": [], "data": [], "row_count": 0,
             "analysis": None, "think_mode": False,
             "conversation_id": None, "data_as_of": None, "steps": [],
@@ -1655,10 +1665,15 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
         # ── Question classification ───────────────────────────────────────────
         steps.append({"label": "Analyzing your question", "status": "done"})
         table_names_str = ", ".join(list(schemas.keys())[:20])
+        _classifier_context = "Always respond in the same language the user used to write their question. Never switch to English unless the question itself was in English."
+        if nl_country:
+            _classifier_context += f" The user's country is '{nl_country}' — treat any reference to 'my country' as {nl_country}, do not ask for clarification."
+        if nl_user_tz and nl_user_tz != "UTC":
+            _classifier_context += f" The user's timezone is '{nl_user_tz}'."
         classification = classify_question(
             req.question, table_names_str, llm, api_key, user["email"],
             app_name=_APP_NAME, conversation_history=conv_history,
-            language_hint="Always respond in the same language the user used to write their question. Never switch to English unless the question itself was in English.",
+            language_hint=_classifier_context,
         )
         q_type = classification.get("type", "data_query")
 
@@ -2614,6 +2629,9 @@ def generate_report(request: Request, req: ReportRequest, user: dict = Depends(c
              title=req.title, sections=req.sections)
     api_key = _resolve_api_key(user, llm)
     s = user.get("settings", {})
+    _rpt_locale   = s.get("locale") or {}
+    nl_currency   = _rpt_locale.get("currency") or "$"
+    nl_country    = _rpt_locale.get("country") or ""
     try:
         # ── Provider-only path (SalesPlay / Loyverse / etc.) ─────────────────
         if not s.get("db_configs"):
@@ -2657,7 +2675,8 @@ def generate_report(request: Request, req: ReportRequest, user: dict = Depends(c
             narrative = generate_report_summary(
                 title=req.title, kpis=kpis, section_data=section_data,
                 llm=llm, format=req.format, api_key=api_key,
-                user_email=user["email"]
+                user_email=user["email"],
+                currency=nl_currency, country=nl_country,
             )
             log.info("Report generated (provider)", user=user["email"],
                      provider=provider_id, sections=len(section_data))
@@ -2699,7 +2718,8 @@ def generate_report(request: Request, req: ReportRequest, user: dict = Depends(c
         narrative = generate_report_summary(
             title=req.title, kpis=kpis, section_data=section_data,
             llm=llm, format=req.format, api_key=api_key,
-            user_email=user["email"]
+            user_email=user["email"],
+            currency=nl_currency, country=nl_country,
         )
         log.info("Report generated", user=user["email"], sections=len(section_data))
         return {"title": req.title, "kpis": kpis, "sections": section_data, "narrative": narrative}

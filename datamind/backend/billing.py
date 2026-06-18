@@ -820,9 +820,9 @@ def check_ai_limit(user_email: str) -> Tuple[bool, str]:
         status = sub.get("status")
         if status in ("expired", "cancelled", "no_subscription"):
             return False, "Your subscription has expired or is inactive."
-        tokens_limit = sub.get("tokens_limit", 0)
+        tokens_total = sub.get("tokens_total_available", sub.get("tokens_limit", 0))
         tokens_used  = sub.get("tokens_used",  0)
-        if tokens_limit > 0 and tokens_used >= tokens_limit:
+        if tokens_total > 0 and tokens_used >= tokens_total:
             return False, "You've used all your tokens for this billing period."
         return True, ""
     except Exception as e:
