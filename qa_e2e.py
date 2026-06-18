@@ -45,25 +45,36 @@ def login(email, password):
         return json.loads(r.read())["token"]
 
 
-def analytics_run(provider_id, template_id, delay=4):
+def analytics_run(provider_id, template_id, delay=2):
     """POST /v1/integrations/{provider_id}/analytics/run and return (status, body)."""
     time.sleep(delay)
-    body = json.dumps({"template_id": template_id}).encode()
-    req  = urllib.request.Request(
-        f"{BASE}/v1/integrations/{provider_id}/analytics/run", data=body,
-        headers={"Content-Type": "application/json",
-                 "Authorization": f"Bearer {TOKEN}"}
-    )
-    try:
+
+    def _do_request():
+        body = json.dumps({"template_id": template_id}).encode()
+        req = urllib.request.Request(
+            f"{BASE}/v1/integrations/{provider_id}/analytics/run", data=body,
+            headers={"Content-Type": "application/json",
+                     "Authorization": f"Bearer {TOKEN}"}
+        )
         with urllib.request.urlopen(req) as r:
             return r.status, json.loads(r.read())
+
+    try:
+        status, data = _do_request()
+        # Rate-limit returns HTTP 200 with ok=False — detect and retry once after backoff.
+        # RL_COMPUTE is 10/minute; 15s backoff is enough to free a slot.
+        if not data.get("ok", True) and "too quickly" in (data.get("message") or "").lower():
+            print(f"   [rate-limited] waiting 15s then retrying {template_id} ...", flush=True)
+            time.sleep(15)
+            return _do_request()
+        return status, data
     except urllib.error.HTTPError as e:
         return e.code, {"_raw": e.read().decode(errors="replace")}
     except Exception as ex:
         return 0, {"_error": str(ex)}
 
 
-def query(question, conversation_id=None, delay=6):
+def query(question, conversation_id=None, delay=2):
     """POST /v1/query and return (http_status, response_body_dict)."""
     time.sleep(delay)
     payload = {"question": question}
@@ -334,23 +345,23 @@ convo_b_id = str(uuid.uuid4())
 for (label, question) in TESTS:
     # Conversation chain A (3 turns)
     if label in ("CONVO_A1", "CONVO_A2", "CONVO_A3"):
-        status, data = query(question, conversation_id=convo_a_id, delay=9)
+        status, data = query(question, conversation_id=convo_a_id, delay=3)
         check(label, question, status, data)
 
     # Conversation chain B (5 turns)
     elif label in ("CONVO_B1", "CONVO_B2", "CONVO_B3", "CONVO_B4", "CONVO_B5"):
-        status, data = query(question, conversation_id=convo_b_id, delay=9)
+        status, data = query(question, conversation_id=convo_b_id, delay=3)
         check(label, question, status, data)
 
     # LLM-heavy queries get extra breathing room
     elif label in ("DATA_SIMPLE", "DATA_TIME", "DATA_TREND", "MULTI_STEP",
                    "SHOP_SPECIFIC", "PRODUCT_DRILL", "PRODUCT_SKU",
                    "CUSTOMER", "SAFE_SQL_WORDS", "CURRENCY_CHECK"):
-        status, data = query(question, delay=9)
+        status, data = query(question, delay=3)
         check(label, question, status, data)
 
     else:
-        status, data = query(question, delay=6)
+        status, data = query(question, delay=2)
         check(label, question, status, data)
 
 
@@ -582,9 +593,22 @@ def check_report(spec, status, data):
 print(f"\n{'=' * 70}")
 print("SalesPlay Analytics Report Tests")
 print("=" * 70)
+# RL_COMPUTE = 10/minute shared by /query and /analytics/run. After 93 query
+# tests the rate-limit bucket may still have recent entries. Wait 65s for the
+# sliding window to clear before firing analytics calls so we don't start the
+# warm-up already near the limit.
+print("Waiting 65s for rate-limit window to clear after query tests ...", flush=True)
+time.sleep(65)
 
+# First call per template busts any stale in-process cache; second call gets
+# the fresh result. analytics_run retries once on rate-limit (15s backoff).
+print("Warming up analytics cache (1 pass) ...", flush=True)
 for spec in REPORT_TESTS:
-    status, data = analytics_run("salesplay", spec["template_id"])
+    analytics_run("salesplay", spec["template_id"], delay=7)
+
+print("Running validated pass ...", flush=True)
+for spec in REPORT_TESTS:
+    status, data = analytics_run("salesplay", spec["template_id"], delay=7)
     check_report(spec, status, data)
 
 report_total = REPORT_PASS + REPORT_FAIL
