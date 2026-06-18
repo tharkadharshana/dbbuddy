@@ -388,6 +388,7 @@ def sync_payment_types(client: SalesPlayAPIClient, conn, prefix: str, user_email
         record = {
             "id":           ptid,
             "payment_name": _str(pt.get("payment_type_name"), 255),
+            "payment_type": _str(pt.get("payment_type_code"), 50),
             "created_at":   _dt(pt.get("created_date")),
             "updated_at":   _dt(pt.get("updated_date")),
         }
