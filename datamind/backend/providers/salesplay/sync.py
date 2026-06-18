@@ -642,8 +642,11 @@ def sync_receipts(client: SalesPlayAPIClient, conn, prefix: str, user_email: str
                 "created_at":       receipt_dt,  # denormalized from receipt for date filtering
             }
 
-            # Enrich line_item with category_name so analytics needs no JOIN to products
-            if prod_id:
+            # category_name: use value from API line item directly; fall back to sp_products lookup
+            api_cat = _str(item.get("category_name"), 255)
+            if api_cat and api_cat != "No category":
+                li_record["category_name"] = api_cat
+            elif prod_id:
                 _cur = conn.cursor()
                 _cur.execute(
                     "SELECT category_name FROM sp_products WHERE tenant_id=%s AND id=%s",
@@ -652,6 +655,8 @@ def sync_receipts(client: SalesPlayAPIClient, conn, prefix: str, user_email: str
                 prod_row = _cur.fetchone()
                 _cur.close()
                 li_record["category_name"] = prod_row[0] if prod_row else None
+            else:
+                li_record["category_name"] = None
 
             # Line items don't consume budget separately — counted via receipt budget above
             upsert_record(conn, prefix, user_email, "salesplay", "receipt_line_item",
