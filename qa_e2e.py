@@ -241,6 +241,27 @@ TESTS = [
 ]
 
 # ---------------------------------------------------------------------------
+# Suite registry
+# Each entry maps a short name to a set of TESTS labels it covers.
+# Use:  python qa_e2e.py [suite]
+#   (no arg)   → all    — full PR-mode run, both chat + reports
+#   chat       → all /query endpoint tests
+#   data       → simple, time, trend, shop, product, customer, multi-step
+#   convo      → conversational follow-up chains only
+#   harmful    → harmful SQL + safe-SQL-words
+#   reports    → SalesPlay analytics report templates only
+#
+SUITES = {
+    "chat":    None,   # None = all TESTS labels
+    "data":    {"DATA_SIMPLE", "DATA_TIME", "DATA_TREND", "SHOP_SPECIFIC",
+                "PRODUCT_DRILL", "PRODUCT_SKU", "CUSTOMER", "MULTI_STEP",
+                "VAGUE", "TYPO", "PERSONA_YOUNG", "PERSONA_FORMAL",
+                "PERSONA_ELDERLY", "SAFE_SQL_WORDS", "CURRENCY_CHECK"},
+    "convo":   {"CONVO_A1", "CONVO_A2", "CONVO_A3",
+                "CONVO_B1", "CONVO_B2", "CONVO_B3", "CONVO_B4", "CONVO_B5"},
+    "harmful": {"HARMFUL", "SAFE_SQL_WORDS"},
+}
+
 PASS = 0
 FAIL = 0
 WARN = 0
@@ -329,60 +350,47 @@ def check(label, question, status, data):
 
 
 # ---------------------------------------------------------------------------
-print("=" * 70)
-print("DataMind / SalesPlay AI — End-to-End QA")
-print("=" * 70)
-print("Logging in as livedata@test.com ...", flush=True)
+def run_chat_suite(label_filter=None):
+    """Run /query endpoint tests. label_filter=set of labels to include (None=all)."""
+    convo_a_id = str(uuid.uuid4())
+    convo_b_id = str(uuid.uuid4())
 
-TOKEN = login("livedata@test.com", "Pass@123")
-print(f"Token acquired.\n{'=' * 70}\n", flush=True)
+    _CONVO_A = {"CONVO_A1", "CONVO_A2", "CONVO_A3"}
+    _CONVO_B = {"CONVO_B1", "CONVO_B2", "CONVO_B3", "CONVO_B4", "CONVO_B5"}
+    _HEAVY   = {"DATA_SIMPLE", "DATA_TIME", "DATA_TREND", "MULTI_STEP",
+                "SHOP_SPECIFIC", "PRODUCT_DRILL", "PRODUCT_SKU",
+                "CUSTOMER", "SAFE_SQL_WORDS", "CURRENCY_CHECK"}
 
-# Conversation chain IDs — pre-generated so history is tracked from turn 1.
-# The backend stores messages under this ID; follow-up turns load that history.
-convo_a_id = str(uuid.uuid4())
-convo_b_id = str(uuid.uuid4())
+    tests = [(l, q) for l, q in TESTS if label_filter is None or l in label_filter]
+    if not tests:
+        print("  (no tests match this suite filter)")
+        return
 
-for (label, question) in TESTS:
-    # Conversation chain A (3 turns)
-    if label in ("CONVO_A1", "CONVO_A2", "CONVO_A3"):
-        status, data = query(question, conversation_id=convo_a_id, delay=3)
+    for label, question in tests:
+        if label in _CONVO_A:
+            status, data = query(question, conversation_id=convo_a_id, delay=3)
+        elif label in _CONVO_B:
+            status, data = query(question, conversation_id=convo_b_id, delay=3)
+        elif label in _HEAVY:
+            status, data = query(question, delay=3)
+        else:
+            status, data = query(question, delay=2)
         check(label, question, status, data)
 
-    # Conversation chain B (5 turns)
-    elif label in ("CONVO_B1", "CONVO_B2", "CONVO_B3", "CONVO_B4", "CONVO_B5"):
-        status, data = query(question, conversation_id=convo_b_id, delay=3)
-        check(label, question, status, data)
-
-    # LLM-heavy queries get extra breathing room
-    elif label in ("DATA_SIMPLE", "DATA_TIME", "DATA_TREND", "MULTI_STEP",
-                   "SHOP_SPECIFIC", "PRODUCT_DRILL", "PRODUCT_SKU",
-                   "CUSTOMER", "SAFE_SQL_WORDS", "CURRENCY_CHECK"):
-        status, data = query(question, delay=3)
-        check(label, question, status, data)
-
-    else:
-        status, data = query(question, delay=2)
-        check(label, question, status, data)
-
-
-# ---------------------------------------------------------------------------
-total = PASS + FAIL
-print(f"\n{'=' * 70}")
-print(f"RESULTS:  {PASS} PASS  |  {FAIL} FAIL  |  {WARN} WARN")
-print(f"TOTAL TESTS: {total}")
-print("=" * 70)
-
-if FAIL > 0:
-    print("\nFAILED TESTS:")
-    for verdict, line in results:
-        if verdict == "FAIL":
-            print(" ", line)
-
-if WARN > 0:
-    print("\nWARNINGS (pass but worth checking):")
-    for verdict, line in results:
-        if verdict == "WARN":
-            print(" ", line)
+    total = PASS + FAIL
+    print(f"\n{'=' * 70}")
+    print(f"CHAT RESULTS:  {PASS} PASS  |  {FAIL} FAIL  |  {WARN} WARN  (total {total})")
+    print("=" * 70)
+    if FAIL > 0:
+        print("\nFAILED:")
+        for verdict, line in results:
+            if verdict == "FAIL":
+                print(" ", line)
+    if WARN > 0:
+        print("\nWARNINGS:")
+        for verdict, line in results:
+            if verdict == "WARN":
+                print(" ", line)
 
 
 # ---------------------------------------------------------------------------
@@ -590,47 +598,83 @@ def check_report(spec, status, data):
     print(line, flush=True)
 
 
-print(f"\n{'=' * 70}")
-print("SalesPlay Analytics Report Tests")
-print("=" * 70)
-# RL_COMPUTE = 10/minute shared by /query and /analytics/run. After 93 query
-# tests the rate-limit bucket may still have recent entries. Wait 65s for the
-# sliding window to clear before firing analytics calls so we don't start the
-# warm-up already near the limit.
-print("Waiting 65s for rate-limit window to clear after query tests ...", flush=True)
-time.sleep(65)
+def run_reports_suite(after_full_chat=False):
+    """Run SalesPlay analytics report tests."""
+    global REPORT_PASS, REPORT_FAIL, REPORT_WARN
+    print(f"\n{'=' * 70}")
+    print("SalesPlay Analytics Report Tests")
+    print("=" * 70)
 
-# First call per template busts any stale in-process cache; second call gets
-# the fresh result. analytics_run retries once on rate-limit (15s backoff).
-print("Warming up analytics cache (1 pass) ...", flush=True)
-for spec in REPORT_TESTS:
-    analytics_run("salesplay", spec["template_id"], delay=7)
+    if after_full_chat:
+        # RL_COMPUTE = 10/minute shared by /query and /analytics/run. After the
+        # full chat suite (~93 tests) the rate-limit bucket may still have recent
+        # entries. Wait 65s for the sliding window to clear.
+        print("Waiting 65s for rate-limit window to clear after chat suite ...", flush=True)
+        time.sleep(65)
 
-print("Running validated pass ...", flush=True)
-for spec in REPORT_TESTS:
-    status, data = analytics_run("salesplay", spec["template_id"], delay=7)
-    check_report(spec, status, data)
+    # First pass warms the cache; second pass validates results.
+    # analytics_run retries once on rate-limit (15s backoff).
+    print("Warming up analytics cache (1 pass) ...", flush=True)
+    for spec in REPORT_TESTS:
+        analytics_run("salesplay", spec["template_id"], delay=7)
 
-report_total = REPORT_PASS + REPORT_FAIL
-print(f"\n{'=' * 70}")
-print(f"REPORT RESULTS:  {REPORT_PASS} PASS  |  {REPORT_FAIL} FAIL  |  {REPORT_WARN} WARN")
-print(f"TOTAL REPORT TESTS: {report_total}")
-print("=" * 70)
+    print("Running validated pass ...", flush=True)
+    for spec in REPORT_TESTS:
+        status, data = analytics_run("salesplay", spec["template_id"], delay=7)
+        check_report(spec, status, data)
 
-if REPORT_FAIL > 0:
-    print("\nFAILED REPORT TESTS:")
-    for verdict, line in report_results:
-        if verdict == "FAIL":
-            print(" ", line)
+    report_total = REPORT_PASS + REPORT_FAIL
+    print(f"\n{'=' * 70}")
+    print(f"REPORT RESULTS:  {REPORT_PASS} PASS  |  {REPORT_FAIL} FAIL  |  {REPORT_WARN} WARN  (total {report_total})")
+    print("=" * 70)
+    if REPORT_FAIL > 0:
+        print("\nFAILED REPORT TESTS:")
+        for verdict, line in report_results:
+            if verdict == "FAIL":
+                print(" ", line)
+    if REPORT_WARN > 0:
+        print("\nREPORT WARNINGS:")
+        for verdict, line in report_results:
+            if verdict == "WARN":
+                print(" ", line)
 
-if REPORT_WARN > 0:
-    print("\nREPORT WARNINGS:")
-    for verdict, line in report_results:
-        if verdict == "WARN":
-            print(" ", line)
 
-grand_pass = PASS + REPORT_PASS
-grand_fail = FAIL + REPORT_FAIL
-print(f"\n{'=' * 70}")
-print(f"GRAND TOTAL:  {grand_pass} PASS  |  {grand_fail} FAIL  |  {WARN + REPORT_WARN} WARN")
-print("=" * 70)
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+def main():
+    suite = sys.argv[1].lower() if len(sys.argv) > 1 else "all"
+
+    print("=" * 70)
+    print("DataMind / SalesPlay AI — End-to-End QA")
+    if suite != "all":
+        print(f"Suite: {suite}")
+    print("=" * 70)
+    print("Logging in as livedata@test.com ...", flush=True)
+
+    global TOKEN
+    TOKEN = login("livedata@test.com", "Pass@123")
+    print(f"Token acquired.\n{'=' * 70}\n", flush=True)
+
+    if suite == "all":
+        run_chat_suite(label_filter=None)
+        run_reports_suite(after_full_chat=True)
+        grand_pass = PASS + REPORT_PASS
+        grand_fail = FAIL + REPORT_FAIL
+        print(f"\n{'=' * 70}")
+        print(f"GRAND TOTAL:  {grand_pass} PASS  |  {grand_fail} FAIL  |  {WARN + REPORT_WARN} WARN")
+        print("=" * 70)
+
+    elif suite == "reports":
+        run_reports_suite(after_full_chat=False)
+
+    elif suite in SUITES:
+        run_chat_suite(label_filter=SUITES[suite])
+
+    else:
+        print(f"Unknown suite '{suite}'. Available: all, chat, data, convo, harmful, reports")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

@@ -34,3 +34,9 @@ docs/
 logs/
 archives/
 patches/
+# Local debug / one-off scripts
+check_history.py
+check_messages.py
+check_shop.py
+healthcheck.py
+reset_qa_usage.py
