@@ -234,11 +234,21 @@ export default function ChatPage({
     }
     getConversationMessages(activeConvId)
       .then(res => {
-        const loaded = (res.messages || []).map((m, i) => ({
-          id:      m.id || i,
-          role:    m.role === 'user' ? 'user' : 'ai',
-          content: m.content,
-        }))
+        const loaded = (res.messages || []).map((m, i) => {
+          const snap = m.data_snapshot || null
+          return {
+            id:       m.id || i,
+            role:     m.role === 'user' ? 'user' : 'ai',
+            content:  m.content,
+            data: snap ? {
+              type:      'data',
+              columns:   snap.columns || [],
+              data:      snap.rows || [],
+              row_count: m.row_count || 0,
+            } : null,
+            analysis: snap?.analysis || null,
+          }
+        })
         setMessages(loaded)
       })
       .catch(() => setMessages([]))
