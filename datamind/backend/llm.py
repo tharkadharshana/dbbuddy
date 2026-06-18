@@ -636,7 +636,12 @@ def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "openai",
         "Given a database schema (with foreign key relationships) and a plain English question, "
         "write a valid MySQL SELECT query that may JOIN multiple tables as needed. "
         "Return ONLY the raw SQL — no markdown, no backticks, no explanation. "
-        "Never use DROP, DELETE, INSERT, UPDATE, or any mutating statement."
+        "Never use DROP, DELETE, INSERT, UPDATE, or any mutating statement. "
+        "IMPORTANT — ambiguous financial terms: when the question uses a vague word like "
+        "'price', 'cost', 'value', or 'amount' and the relevant table has multiple "
+        "financial columns (e.g. price, cost, selling_price, unit_price, retail_price), "
+        "SELECT all of them rather than guessing which one the user means. "
+        "This lets the user see the full picture instead of a potentially misleading single value."
         + history_hint + tenant_hint
         + (f" {extra_schema_hints.strip()}" if extra_schema_hints else "")
         + limit_hint
