@@ -629,6 +629,10 @@ def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "openai",
             f"{_sp_rules}"
             f"\n\nNever include tenant_id or synced_at in SELECT output — "
             f"they are internal system columns that mean nothing to business users. "
+            f"Never SELECT any column named exactly 'id' or ending in '_id' "
+            f"(e.g. customer_id, shop_id, product_id, payment_type_id, receipt_id, variant_id) "
+            f"unless the user explicitly asks for an identifier or ID. "
+            f"These are internal database keys — users cannot do anything with them. "
             f"Only SELECT columns that have direct business meaning."
         )
     else:
