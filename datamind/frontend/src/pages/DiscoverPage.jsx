@@ -456,7 +456,23 @@ export default function DiscoverPage({ llm, setLlm, sub, hasDB, onNavigate, onQu
           <>
             <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
               <div>
-                <div style={{ fontSize:17, fontWeight:700, marginBottom:2 }}>{selected.title}</div>
+                <div style={{ fontSize:17, fontWeight:700, marginBottom:2, display:'flex', alignItems:'center', gap:6 }}>
+                  {selected.title}
+                  {selected.note && (
+                    <span style={{ position:'relative', display:'inline-flex' }} className="info-tip">
+                      <span style={{ fontSize:11, color:'var(--text3)', cursor:'default', userSelect:'none',
+                        width:15, height:15, borderRadius:'50%', border:'1px solid var(--text3)',
+                        display:'inline-flex', alignItems:'center', justifyContent:'center', lineHeight:1 }}>i</span>
+                      <span className="info-tip__bubble" style={{
+                        position:'absolute', left:0, top:'calc(100% + 6px)', zIndex:99,
+                        background:'var(--bg3)', border:'1px solid var(--border)', borderRadius:'var(--r-md)',
+                        padding:'10px 12px', fontSize:11, color:'var(--text2)', lineHeight:1.5,
+                        width:280, boxShadow:'0 4px 16px rgba(0,0,0,0.3)',
+                        pointerEvents:'none', opacity:0, transition:'opacity .15s'
+                      }}>{selected.note}</span>
+                    </span>
+                  )}
+                </div>
                 <div style={{ fontSize:12, color:'var(--text3)' }}>{selected.description}</div>
               </div>
               <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:5 }}>

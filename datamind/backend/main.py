@@ -3060,6 +3060,7 @@ def list_integration_templates(
                     "id": tid,
                     "title": t["title"],
                     "description": t.get("description", ""),
+                    "note": t.get("note"),
                     "type": t.get("type", "table"),
                     "icon": t.get("icon", "📊"),
                 }
