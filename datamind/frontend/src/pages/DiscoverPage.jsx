@@ -272,9 +272,19 @@ export default function DiscoverPage({ llm, setLlm, sub, hasDB, onNavigate, onQu
       const d = await fetchDiscover()
       if (d.building) { setBuilding(true); setCatalogue([]); return }
 
-      // /discover returned catalogue (own-DB cache or merged) — use it directly
+      // /discover returned catalogue — attach connection_id from live provider list
+      // so the Refresh button can trigger a sync (connection_id is not stored in the catalogue cache)
       if (!d.needs_build) {
-        setCatalogue(d.catalogue || [])
+        const catalogue = d.catalogue || []
+        const providers = await fetchConnectedProviders().catch(() => ({ connections: [] }))
+        const connMap = {}
+        for (const c of (providers.connections || [])) connMap[c.provider_id] = c
+        const merged = catalogue.map(item =>
+          item.provider && connMap[item.provider]
+            ? { ...item, connection_id: connMap[item.provider].connection_id, last_sync_at: connMap[item.provider].last_sync_at }
+            : item
+        )
+        setCatalogue(merged)
         setCacheInfo({ built_at: d.built_at, template_count: d.template_count })
         setBuilding(false); setNeedsBuild(false)
         return
