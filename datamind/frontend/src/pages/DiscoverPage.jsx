@@ -458,6 +458,7 @@ export default function DiscoverPage({ llm, setLlm, sub, hasDB, onNavigate, onQu
               <div>
                 <div style={{ fontSize:17, fontWeight:700, marginBottom:2, display:'flex', alignItems:'center', gap:6 }}>
                   {selected.title}
+                  {/* Icon only renders when the template defines a note field — set per-provider in analytics.py, not here */}
                   {(result?.note || selected?.note) && (
                     <span style={{ position:'relative', display:'inline-flex' }} className="info-tip">
                       <span style={{ fontSize:11, color:'var(--text3)', cursor:'default', userSelect:'none',
