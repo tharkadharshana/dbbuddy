@@ -43,52 +43,75 @@ FRONTEND_EXCLUDE_FILES = {"iframe_test.html"}
 PATCH_NOTES = """
 PATCH NOTES
 ===========
-Branch : feature/llm-profile-report-fixes
-Date   : 2026-06-18
+Branch : feature/api-diagnostics
+PR     : -
+Date   : 2026-06-19
 
 CHANGES IN THIS PATCH
 ─────────────────────
 
-1. fix(history): Chat history now shows full rich content
-   PROBLEM : Opening a past conversation showed only plain text — no charts,
-             tables, or AI analysis.
-   FIX     : ChatPage.jsx reconstructs `data` and `analysis` from the stored
-             `data_snapshot` field on history load.
-   FILES   : datamind/frontend/src/pages/ChatPage.jsx
+1. fix(analytics): correct product & category revenue to use net sales
+   PROBLEM : top_products and category_performance summed total_money from
+             sp_receipt_line_items, which includes added taxes — causing
+             DataMind totals to exceed SalesPlay's reported net sales.
+   FIX     : Queries now use gross_total_money - total_discount for net_sales
+             and expose gross_sales, discounts, net_sales as separate columns.
+   FILES   : datamind/backend/providers/salesplay/analytics.py
 
-2. feat(llm): LLM knows user profile (country, timezone) and mirrors input language
-   PROBLEM : "in my country what is the best selling product" triggered a
-             clarification ask ("which country?") because the classifier had
-             no profile context. Report narrative also ignored currency/country.
-             LLM always replied in English regardless of question language.
-   FIX     : Country, timezone, and currency are extracted from settings.locale
-             and injected into every LLM call — the query classifier, the SQL
-             generator, AND the report narrative generator. The classifier now
-             treats "my country" as the user's profile country without asking.
-             Both classifier and SQL prompts instruct the LLM to respond in the
-             same language the user wrote in.
-   FILES   : datamind/backend/main.py, datamind/backend/llm.py
-   DB/ENV  : No changes — reads existing settings.locale fields.
+2. feat(analytics): rename total_orders → total_receipts in Customer Purchase Analysis
+   PROBLEM : Column was labelled "total_orders" but receipts are the correct term.
+             Also removed days_since_last_purchase (unreliable metric).
+   FIX     : Column renamed to total_receipts; days_since_last_purchase removed.
+   FILES   : datamind/backend/providers/salesplay/analytics.py
 
-3. fix(reports): Rate-limit now shows friendly countdown instead of empty report
-   PROBLEM : Clicking Generate Report too quickly showed a blank report with
-             no message (backend returns ok=false with HTTP 200).
-   FIX     : ReportsPage detects ok=false, starts a 20-second cooldown timer,
-             disables the Generate button, and shows an orange warning with
-             live countdown. Clicking during cooldown is a no-op.
-   FILES   : datamind/frontend/src/pages/ReportsPage.jsx
+3. feat(analytics): remove Sales by Hour of Day report
+   PROBLEM : Hourly performance template was low-value and cluttered the hub.
+   FIX     : hourly_performance template and its UI render block removed.
+   FILES   : datamind/backend/providers/salesplay/analytics.py
+             datamind/backend/main.py
+             datamind/frontend/src/pages/DiscoverPage.jsx
 
-4. test(qa): QA suite split into targeted sub-suites
-   PROBLEM : Running the full QA (~20 min) was the only option, even for
-             small focused changes.
-   FIX     : qa_e2e.py now accepts a suite argument:
-             python qa_e2e.py chat     — /query tests only (~4 min)
-             python qa_e2e.py data     — data/product/customer queries
-             python qa_e2e.py convo    — conversation chain tests
-             python qa_e2e.py harmful  — harmful SQL refusal
-             python qa_e2e.py reports  — analytics report templates
-             python qa_e2e.py          — full run (PR mode)
-   FILES   : qa_e2e.py
+4. feat(reports-ui): hide currency symbol in Analytics Hub tables
+   PROBLEM : Single-currency tenants don't need the LKR/$ prefix on every
+             monetary value — it adds noise without information.
+   FIX     : formatCurrency() call commented out; formatNumber(v,null,2) used
+             instead. Chat interface untouched.
+   FILES   : datamind/frontend/src/components/UI.jsx
+
+5. fix(locale): enforce 2 decimal places on all monetary columns
+   PROBLEM : 'discounts' column showed no decimals (e.g. "0" not "0.00").
+             KPI cards in Analytics Hub and Reports showed 0dp or 1dp on
+             monetary values.
+   FIX     : Added 'discount' to isCurrencyColumn() regex; KPI decimal logic
+             updated in DiscoverPage and ReportsPage to use isCurrencyColumn.
+   FILES   : datamind/frontend/src/utils/locale.js
+             datamind/frontend/src/pages/DiscoverPage.jsx
+             datamind/frontend/src/pages/ReportsPage.jsx
+
+6. fix(discover-ui): Daily Revenue Trend ascending date order
+   PROBLEM : Chart reversed the SQL result so dates appeared descending.
+   FIX     : Removed .reverse() — SQL already returns ORDER BY date ASC.
+   FILES   : datamind/frontend/src/pages/DiscoverPage.jsx
+
+7. feat(discover): Refresh button syncs provider data before re-running report
+   PROBLEM : "Re-run" only re-queried cached data; users expected fresh numbers.
+   FIX     : Button renamed to "Refresh"; click now triggers a provider sync,
+             polls until complete, then re-runs the report query. 60-second
+             cooldown prevents abuse. Progress states shown in-UI.
+   FILES   : datamind/frontend/src/pages/DiscoverPage.jsx
+
+8. feat(analytics): add hoverable info icon for split-payment note
+   PROBLEM : DataMind Cash/Card breakdown can differ from SalesPlay by a fixed
+             amount for tenants using split-method receipts — sync stores only
+             payments[0] and attributes the full receipt total to it.
+   FIX     : payment_breakdown template defines a "note" field; a small ⓘ icon
+             appears next to the report title on hover showing the explanation.
+             Icon is data-driven — only renders when template defines "note";
+             no provider-specific code in the frontend.
+   FILES   : datamind/backend/providers/salesplay/analytics.py
+             datamind/backend/main.py
+             datamind/frontend/src/pages/DiscoverPage.jsx
+             datamind/frontend/src/index.css
 
 DB CHANGES  : None
 .ENV CHANGES: None
