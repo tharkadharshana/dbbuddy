@@ -420,14 +420,6 @@ def sync_categories(client: SalesPlayAPIClient, conn, prefix: str, user_email: s
                          ext_updated_field="updated_at", budget=budget):
             count += 1
         upsert_to_shared(conn, "sp_categories", prefix, record)
-        # Back-fill category_name into sp_products so JOIN queries don't need it
-        if record.get("category_name") and record.get("id"):
-            _cur = conn.cursor()
-            _cur.execute(
-                "UPDATE sp_products SET category_name=%s WHERE tenant_id=%s AND category_id=%s",
-                (record["category_name"], prefix, record["id"]),
-            )
-            _cur.close()
 
     log.info("Synced categories", prefix=prefix, count=count)
     return count
@@ -505,10 +497,15 @@ def sync_payment_types(client: SalesPlayAPIClient, conn, prefix: str, user_email
         ptid = _str(pt.get("id"), 64)
         if not ptid:
             continue
+        # A payment type is considered active if ANY shop has it enabled.
+        shops = pt.get("shops") or []
+        is_active = 1 if any(s.get("payment_type_status") == 1 for s in shops) else 0
+
         record = {
             "id":           ptid,
             "payment_name": _str(pt.get("payment_type_name"), 255),
             "payment_type": _str(pt.get("payment_type_code"), 50),
+            "is_active":    is_active,
             "created_at":   _dt(pt.get("created_date")),
             "updated_at":   _dt(pt.get("updated_date")),
         }
@@ -532,6 +529,7 @@ def sync_customers(client: SalesPlayAPIClient, conn, prefix: str, user_email: st
         "customer_ids":   "",
         "email":          "",
         "created_at_min": since.strftime(DT_FMT),
+        "updated_at_min": since.strftime(DT_FMT),
     }
     items = client._paginate("/customers", "customers", body)
 
@@ -553,8 +551,8 @@ def sync_customers(client: SalesPlayAPIClient, conn, prefix: str, user_email: st
             "customer_code": _str(c.get("customer_code"), 100),
             "note":          _str(c.get("description") or c.get("note")),
             "total_visits":  int(c.get("total_visits") or 0),
-            "total_spent":   _dec(c.get("total_money_spent") or c.get("total_spent"), 0),
-            "points_balance": _dec(c.get("points_balance") or c.get("total_points"), 0),
+            "total_spent":   _dec(c.get("total_spent"), 0),
+            "points_balance": _dec(c.get("total_points"), 0),
             "created_at":    _dt(c.get("created_at")),
             "updated_at":    _dt(c.get("updated_at") or c.get("updated_date")),
         }
@@ -604,7 +602,7 @@ def sync_products(client: SalesPlayAPIClient, conn, prefix: str, user_email: str
             "description":  _str(p.get("description")),
             "category_id":  _str(p.get("category_id"), 64),
             "sku":          _str(first.get("product_code") or first.get("sku") or p.get("product_code"), 100),
-            "barcode":      _str(first.get("barcode"), 100),
+            "barcode":      _str(first.get("product_barcode") or first.get("barcode"), 100),
             "cost":         _dec(first.get("default_cost") or first.get("cost") or p.get("cost"), 0),
             "price":        price or 0.0,
             "created_at":   _dt(p.get("created_at") or p.get("created_date")),

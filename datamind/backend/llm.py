@@ -91,6 +91,9 @@ _SENSITIVE_COL_RE = re.compile(
 # synced_at  — our internal write timestamp, meaningless to business users.
 # The LLM must not SELECT these; keeping them out of the schema it sees is the
 # cleanest way to enforce that without relying on prompt instructions alone.
+# NOTE: 'id' is intentionally kept in the schema — hiding it causes the LLM to
+# hallucinate a non-existent 'customer_id'/'product_id' column and crash the query.
+# ID columns are stripped from results in _run_sql instead (main.py).
 _SP_INTERNAL_COLS = frozenset({"tenant_id", "synced_at"})
 
 def _filter_sensitive_schema(schemas: Dict[str, Any]) -> Dict[str, Any]:
@@ -629,6 +632,10 @@ def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "openai",
             f"{_sp_rules}"
             f"\n\nNever include tenant_id or synced_at in SELECT output — "
             f"they are internal system columns that mean nothing to business users. "
+            f"Never SELECT any column named exactly 'id' or ending in '_id' "
+            f"(e.g. customer_id, shop_id, product_id, payment_type_id, receipt_id, variant_id) "
+            f"unless the user explicitly asks for an identifier or ID. "
+            f"These are internal database keys — users cannot do anything with them. "
             f"Only SELECT columns that have direct business meaning."
         )
     else:
