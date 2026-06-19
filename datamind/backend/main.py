@@ -1478,15 +1478,46 @@ def discover(request: Request, user: dict = Depends(current_user)):
 # NL QUERY
 # ══════════════════════════════════════════════════════════════════════════════
 
+_ID_COLUMN_RE = re.compile(r'^id$|_id$', re.IGNORECASE)
+
+# Column name fragments that indicate a monetary value deserving a currency symbol.
+_MONEY_FRAGMENTS = frozenset({
+    "money", "revenue", "spent", "price", "cost", "total", "amount",
+    "paid", "discount", "tax", "charge", "value", "sales", "profit",
+})
+
+
+def _is_money_column(col: str) -> bool:
+    lower = col.lower()
+    return any(frag in lower for frag in _MONEY_FRAGMENTS)
+
+
 def _run_think_analysis(question: str, columns: list, data: list,
-                        llm: str, api_key: str, user_email: str) -> str:
+                        llm: str, api_key: str, user_email: str,
+                        currency: str = "$") -> str:
     """Second LLM call for Think Mode: analyse SQL results and answer the question.
     call_llm() handles token charging via charge_ai_usage() automatically."""
-    # Format top 50 rows as compact CSV for the prompt
+    # Strip internal ID columns — they are opaque keys, meaningless to users.
+    visible_cols = [c for c in columns if not _ID_COLUMN_RE.search(c)]
+    if not visible_cols:
+        visible_cols = columns  # safety: if everything was IDs keep all
+
+    # Build column type hints so LLM knows which columns are monetary vs counts.
+    col_hints = []
+    for c in visible_cols:
+        if _is_money_column(c):
+            col_hints.append(f"{c}=MONEY")
+        else:
+            col_hints.append(f"{c}=VALUE")
+    col_type_hint = (
+        f"Column types (MONEY = use '{currency}' symbol; VALUE = plain number, NO currency symbol): "
+        + ", ".join(col_hints)
+    )
+
     sample = data[:50]
-    header = ", ".join(columns)
+    header = ", ".join(visible_cols)
     rows_text = "\n".join(
-        ", ".join(str(row.get(c, "")) for c in columns)
+        ", ".join(str(row.get(c, "")) for c in visible_cols)
         for row in sample
     )
     truncation_note = (
@@ -1494,6 +1525,7 @@ def _run_think_analysis(question: str, columns: list, data: list,
     )
     prompt = (
         f"The user asked: \"{question}\"\n\n"
+        f"{col_type_hint}\n\n"
         f"Here is the query result ({len(data)} rows total):{truncation_note}\n"
         f"{header}\n{rows_text}\n\n"
         "Answer the user's question directly using this data. "
@@ -1511,7 +1543,10 @@ def _run_think_analysis(question: str, columns: list, data: list,
             "Match response length to question complexity — simple questions get one sentence. "
             "Never volunteer advice or recommendations unless explicitly asked. "
             "Use plain text only — never use markdown, asterisks, bold markers (**), "
-            "underscores, or any special formatting symbols."
+            "underscores, or any special formatting symbols. "
+            "Never mention database ID values — they are internal system keys, not business data. "
+            "Only apply a currency symbol to columns explicitly marked MONEY in the column types. "
+            "All other numeric columns are plain counts or values — never prefix them with a currency symbol."
         ),
         llm=llm,
         max_tokens=200,
@@ -1920,7 +1955,7 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
         if req.think_mode and data:
             steps.append({"label": "Analyzing results", "status": "running"})
             try:
-                analysis = _run_think_analysis(req.question, columns, data, llm, api_key, user["email"])
+                analysis = _run_think_analysis(req.question, columns, data, llm, api_key, user["email"], currency=nl_currency)
                 log.info("Think mode analysis complete", user=user["email"])
                 steps[-1]["status"] = "done"
             except Exception as _te:
