@@ -318,7 +318,7 @@ export default function DiscoverPage({ llm, setLlm, sub, hasDB, onNavigate, onQu
 
   async function handleRefresh(item) {
     if (running || syncPhase || (rateLimitUntil && Date.now() < rateLimitUntil)) return
-    setSelected(item); setResult(null); setRunError(null)
+    setSelected(item); setResult(null); setRunError(null); setLastSyncAt(null)
 
     if (item.provider) {
       // Integration template — sync first (if we have connection_id), then query
