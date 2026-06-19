@@ -168,7 +168,7 @@ function RenderedReport({ report }) {
               <div style={{ fontSize:20, fontWeight:700, color:kpiColors[i] }}>
                 {/* Currency symbol hidden in Analytics Hub reports — single-currency tenants don't need it */}
                 {/* {k.includes('revenue')||k.includes('ticket') ? formatCurrency(kpis[k]) : formatNumber(kpis[k], null, 0)} */}
-                {formatNumber(kpis[k], null, k.includes('revenue')||k.includes('ticket') ? 2 : 0)}
+                {formatNumber(kpis[k], null, isCurrencyColumn(k) ? 2 : 0)}
               </div>
             </div>
           ))}

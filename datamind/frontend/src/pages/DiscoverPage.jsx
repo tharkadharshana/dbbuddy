@@ -213,7 +213,7 @@ function ResultPanel({ result, templateId }) {
             const isAvg = col.includes('avg')||col.includes('pct')||col.includes('rate')||col.includes('margin')
             const val = data.length===1 ? data[0][col] : (isAvg ? total/vals.length : total)
             const colors = ['var(--blue)','var(--green)','var(--purple)','var(--amber)']
-            const decimals = Number.isInteger(val) ? 0 : 1
+            const decimals = isCurrencyColumn(col) ? 2 : (Number.isInteger(val) ? 0 : 1)
             // Currency symbol hidden in Analytics Hub reports — single-currency tenants don't need it
             // const kpiVal = typeof val==='number'?(isCurrencyColumn(col)?formatCurrency(val):formatNumber(val,null,decimals)):val
             const kpiVal = typeof val==='number' ? formatNumber(val, null, decimals) : val
