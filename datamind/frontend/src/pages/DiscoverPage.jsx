@@ -320,27 +320,31 @@ export default function DiscoverPage({ llm, setLlm, sub, hasDB, onNavigate, onQu
     if (running || syncPhase || (rateLimitUntil && Date.now() < rateLimitUntil)) return
     setSelected(item); setResult(null); setRunError(null)
 
-    // Integration: sync first, then query
-    if (item.provider && item.connection_id) {
-      setRunning(true); setSyncPhase('syncing')
-      try {
-        await syncProvider(item.connection_id)
-      } catch { /* sync trigger failed — proceed to query anyway */ }
+    if (item.provider) {
+      // Integration template — sync first (if we have connection_id), then query
+      setRunning(true)
 
-      // Poll until sync finishes (max 3 min)
-      const deadline = Date.now() + 180_000
-      await new Promise(resolve => {
-        syncPollRef.current = setInterval(async () => {
-          try {
-            const s = await fetchProviderStatus(item.connection_id)
-            if (s.status !== 'syncing' || Date.now() > deadline) {
-              clearInterval(syncPollRef.current)
-              if (s.last_sync_at) setLastSyncAt(s.last_sync_at)
-              resolve()
-            }
-          } catch { clearInterval(syncPollRef.current); resolve() }
-        }, 2500)
-      })
+      if (item.connection_id) {
+        setSyncPhase('syncing')
+        try {
+          await syncProvider(item.connection_id)
+        } catch { /* sync trigger failed — proceed to query anyway */ }
+
+        // Poll until sync finishes (max 3 min)
+        const deadline = Date.now() + 180_000
+        await new Promise(resolve => {
+          syncPollRef.current = setInterval(async () => {
+            try {
+              const s = await fetchProviderStatus(item.connection_id)
+              if (s.status !== 'syncing' || Date.now() > deadline) {
+                clearInterval(syncPollRef.current)
+                if (s.last_sync_at) setLastSyncAt(s.last_sync_at)
+                resolve()
+              }
+            } catch { clearInterval(syncPollRef.current); resolve() }
+          }, 2500)
+        })
+      }
 
       setSyncPhase('querying')
       try {
@@ -349,7 +353,7 @@ export default function DiscoverPage({ llm, setLlm, sub, hasDB, onNavigate, onQu
           setRateLimitUntil(Date.now() + (data.retry_after_seconds || 60) * 1000)
         } else {
           setResult(data)
-          setRateLimitUntil(Date.now() + 60_000)
+          if (item.connection_id) setRateLimitUntil(Date.now() + 60_000)
         }
       } catch(e) { setRunError(getErrorMessage(e)) }
       finally { setRunning(false); setSyncPhase(null); onQueryComplete?.() }
