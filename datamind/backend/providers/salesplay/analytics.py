@@ -78,22 +78,24 @@ TEMPLATES = {
     },
 
     "top_products": {
-        "title": "Top 20 Products by Revenue",
-        "description": "Best-selling products in the last 30 days",
+        "title": "Top 20 Products by Net Sales",
+        "description": "Best-selling products in the last 30 days.",
         "category": "Products", "complexity": "simple", "icon": "🏆",
         "type": "table",
         "sql": """
             SELECT
-                product_name                            AS product,
+                product_name                                        AS product,
                 COALESCE(NULLIF(category_name, ''), 'Uncategorized') AS category,
-                ROUND(SUM(quantity))                    AS units_sold,
-                ROUND(SUM(total_money), 2)              AS revenue,
-                ROUND(AVG(price), 2)                    AS avg_price
+                ROUND(SUM(quantity))                                AS units_sold,
+                ROUND(SUM(gross_total_money), 2)                   AS gross_sales,
+                ROUND(SUM(total_discount), 2)                      AS discounts,
+                ROUND(SUM(gross_total_money - total_discount), 2)  AS net_sales,
+                ROUND(AVG(price), 2)                               AS avg_price
             FROM sp_receipt_line_items
             WHERE tenant_id = '{tenant_id}'
               AND created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
             GROUP BY product_name, category_name
-            ORDER BY revenue DESC
+            ORDER BY net_sales DESC
             LIMIT 20
         """
     },
@@ -163,21 +165,23 @@ TEMPLATES = {
 
     "category_performance": {
         "title": "Category Sales Performance",
-        "description": "Revenue breakdown by product category in the last 30 days",
+        "description": "Net sales by product category in the last 30 days.",
         "category": "Products", "complexity": "simple", "icon": "🏷️",
         "type": "table",
         "sql": """
             SELECT
                 COALESCE(NULLIF(category_name, ''), 'Uncategorized') AS category,
-                COUNT(DISTINCT product_name)             AS products_count,
-                ROUND(SUM(quantity))                     AS units_sold,
-                ROUND(SUM(total_money), 2)               AS revenue,
-                ROUND(AVG(price), 2)                     AS avg_price
+                COUNT(DISTINCT product_name)                          AS products_count,
+                ROUND(SUM(quantity))                                  AS units_sold,
+                ROUND(SUM(gross_total_money), 2)                     AS gross_sales,
+                ROUND(SUM(total_discount), 2)                        AS discounts,
+                ROUND(SUM(gross_total_money - total_discount), 2)    AS net_sales,
+                ROUND(AVG(price), 2)                                  AS avg_price
             FROM sp_receipt_line_items
             WHERE tenant_id = '{tenant_id}'
               AND created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
             GROUP BY COALESCE(NULLIF(category_name, ''), 'Uncategorized')
-            ORDER BY revenue DESC
+            ORDER BY net_sales DESC
         """
     },
 
