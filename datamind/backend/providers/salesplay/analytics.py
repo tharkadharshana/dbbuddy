@@ -124,7 +124,7 @@ TEMPLATES = {
 
     "payment_breakdown": {
         "title": "Payment Method Distribution",
-        "description": "Revenue breakdown by payment type in the last 30 days",
+        "description": "Revenue by payment type in the last 30 days. Each receipt is attributed to its primary (first) payment method and the full receipt total is counted there. For split-method receipts (e.g. partly Cash, partly Card) this means the per-method figures will differ from SalesPlay's payment report — but the overall total always matches SalesPlay exactly.",
         "category": "Payments", "complexity": "simple", "icon": "💳",
         "type": "chart",
         "sql": """
