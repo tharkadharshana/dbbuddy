@@ -219,7 +219,10 @@ function ResultPanel({ result, templateId }) {
             const val = data.length===1 ? data[0][col] : (isAvg ? total/vals.length : total)
             const colors = ['var(--blue)','var(--green)','var(--purple)','var(--amber)']
             const decimals = Number.isInteger(val) ? 0 : 1
-            return <KPICard key={col} label={col.replace(/_/g,' ')} value={typeof val==='number'?(isCurrencyColumn(col)?formatCurrency(val):formatNumber(val,null,decimals)):val} color={colors[i%4]} />
+            // Currency symbol hidden in Analytics Hub reports — single-currency tenants don't need it
+            // const kpiVal = typeof val==='number'?(isCurrencyColumn(col)?formatCurrency(val):formatNumber(val,null,decimals)):val
+            const kpiVal = typeof val==='number' ? formatNumber(val, null, decimals) : val
+            return <KPICard key={col} label={col.replace(/_/g,' ')} value={kpiVal} color={colors[i%4]} />
           })}
         </div>
       )}
