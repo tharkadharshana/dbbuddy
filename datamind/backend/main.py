@@ -691,15 +691,23 @@ def _validate_table_column(schemas: dict, table: str, column: str):
         raise HTTPException(status_code=400, detail=f"Column '{column}' not found in table '{table}'.")
 
 
+_ID_COL_RE = re.compile(r'^id$|_id$', re.IGNORECASE)
+
+
 def _run_sql(conn, sql: str, title: str) -> dict:
     cursor = conn.cursor()
     log.debug("Executing SQL", title=title, sql_preview=f"{sql[:60]}…" if len(sql) > 60 else sql)
     cursor.execute(sql)
     cols = [d[0] for d in cursor.description]
     rows = cursor.fetchall()
-    data = [{c: _safe(v) for c, v in zip(cols, row)} for row in rows]
+    # Strip raw DB surrogate ID columns — they are internal keys with no meaning
+    # to end users. Human-readable codes (customer_code, product_code) are used instead.
+    visible_cols = [c for c in cols if not _ID_COL_RE.search(c)]
+    if len(visible_cols) < len(cols):
+        log.debug("Stripped ID columns from result", stripped=[c for c in cols if _ID_COL_RE.search(c)])
+    data = [{c: _safe(v) for c, v in zip(cols, row) if not _ID_COL_RE.search(c)} for row in rows]
     log.debug("SQL result", title=title, rows=len(data))
-    return {"title": title, "columns": cols, "data": data, "row_count": len(data)}
+    return {"title": title, "columns": visible_cols, "data": data, "row_count": len(data)}
 
 
 # Maps analytics template IDs to FEATURE_COST operation types.
