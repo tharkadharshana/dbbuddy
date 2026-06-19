@@ -85,7 +85,7 @@ TEMPLATES = {
         "sql": """
             SELECT
                 product_name                                        AS product,
-                COALESCE(NULLIF(category_name, ''), 'Uncategorized') AS category,
+                COALESCE(NULLIF(category_name, ''), 'No Category') AS category,
                 ROUND(SUM(quantity))                                AS units_sold,
                 ROUND(SUM(gross_total_money), 2)                   AS gross_sales,
                 ROUND(SUM(total_discount), 2)                      AS discounts,
@@ -151,7 +151,7 @@ TEMPLATES = {
         "type": "table",
         "sql": """
             SELECT
-                COALESCE(NULLIF(category_name, ''), 'Uncategorized') AS category,
+                COALESCE(NULLIF(category_name, ''), 'No Category') AS category,
                 COUNT(DISTINCT product_name)                          AS products_count,
                 ROUND(SUM(quantity))                                  AS units_sold,
                 ROUND(SUM(gross_total_money), 2)                     AS gross_sales,
@@ -161,7 +161,7 @@ TEMPLATES = {
             FROM sp_receipt_line_items
             WHERE tenant_id = '{tenant_id}'
               AND created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
-            GROUP BY COALESCE(NULLIF(category_name, ''), 'Uncategorized')
+            GROUP BY COALESCE(NULLIF(category_name, ''), 'No Category')
             ORDER BY net_sales DESC
         """
     },

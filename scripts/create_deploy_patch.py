@@ -43,8 +43,8 @@ FRONTEND_EXCLUDE_FILES = {"iframe_test.html"}
 PATCH_NOTES = """
 PATCH NOTES
 ===========
-Branch : feature/api-diagnostics
-PR     : -
+Branch : fix/analytics-hub-ux
+PR     : #52
 Date   : 2026-06-19
 
 CHANGES IN THIS PATCH
@@ -93,14 +93,7 @@ CHANGES IN THIS PATCH
    FIX     : Removed .reverse() — SQL already returns ORDER BY date ASC.
    FILES   : datamind/frontend/src/pages/DiscoverPage.jsx
 
-7. feat(discover): Refresh button syncs provider data before re-running report
-   PROBLEM : "Re-run" only re-queried cached data; users expected fresh numbers.
-   FIX     : Button renamed to "Refresh"; click now triggers a provider sync,
-             polls until complete, then re-runs the report query. 60-second
-             cooldown prevents abuse. Progress states shown in-UI.
-   FILES   : datamind/frontend/src/pages/DiscoverPage.jsx
-
-8. feat(analytics): add hoverable info icon for split-payment note
+7. feat(analytics): add hoverable info icon for split-payment note
    PROBLEM : DataMind Cash/Card breakdown can differ from SalesPlay by a fixed
              amount for tenants using split-method receipts — sync stores only
              payments[0] and attributes the full receipt total to it.
@@ -112,6 +105,32 @@ CHANGES IN THIS PATCH
              datamind/backend/main.py
              datamind/frontend/src/pages/DiscoverPage.jsx
              datamind/frontend/src/index.css
+
+8. fix(table): right-align numeric column headers to match cell alignment
+   PROBLEM : Numeric column headers (e.g. UNITS SOLD) were left-aligned while
+             cell values were right-aligned, making values appear visually
+             shifted between columns.
+   FIX     : DataTable now detects numeric columns from first row and applies
+             text-align:right to both headers and cells.
+   FILES   : datamind/frontend/src/components/UI.jsx
+
+9. fix(analytics): rename 'Uncategorized' to 'No Category'
+   PROBLEM : Products with no category were labelled "Uncategorized" in all
+             reports — replaced with cleaner "No Category" label.
+   FIX     : Updated COALESCE fallback in SalesPlay and Loyverse queries.
+   FILES   : datamind/backend/providers/salesplay/analytics.py
+             datamind/backend/providers/loyverse/analytics.py
+
+10. fix(discover): Refresh button overhaul — sync + re-run combined with
+    visual progress feedback
+    PROBLEM : (a) connection_id missing on catalogue fast-path so sync never
+              fired. (b) Clicking a report card triggered a full sync.
+              (c) Sync had no visual feedback in the hub.
+    FIX     : Fast-path now merges live connection data onto catalogue items.
+              Card click runs query only; Refresh button syncs (with spinner
+              + blue progress banner) then loads the report. Rate-limit
+              countdown shown on button when backend throttles.
+    FILES   : datamind/frontend/src/pages/DiscoverPage.jsx
 
 DB CHANGES  : None
 .ENV CHANGES: None

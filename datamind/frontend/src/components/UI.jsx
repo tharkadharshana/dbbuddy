@@ -233,6 +233,7 @@ export function DataTable({ columns, data, maxHeight=320 }) {
   const isNum = v => typeof v === 'number'
   const isPos = (col, v) => isNum(v) && (col.includes('growth') || col.includes('pct')) && v > 0
   const isNeg = (col, v) => isNum(v) && (col.includes('growth') || col.includes('pct')) && v < 0
+  const numCols = new Set(columns.filter(c => isNum(data[0]?.[c])))
   const fmt = (col, v) => {
     if (v === null || v === undefined) return <span style={{color:'var(--text3)'}}>—</span>
     if (isNum(v)) {
@@ -249,7 +250,7 @@ export function DataTable({ columns, data, maxHeight=320 }) {
   return (
     <div style={{ overflowX:'auto', overflowY:'auto', maxHeight }}>
       <table className="data-table">
-        <thead><tr>{columns.map(c => <th key={c}>{c.replace(/_/g,' ')}</th>)}</tr></thead>
+        <thead><tr>{columns.map(c => <th key={c} style={numCols.has(c) ? {textAlign:'right'} : {}}>{c.replace(/_/g,' ')}</th>)}</tr></thead>
         <tbody>
           {data.map((row,i) => (
             <tr key={i}>

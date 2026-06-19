@@ -248,11 +248,10 @@ export default function DiscoverPage({ llm, setLlm, sub, hasDB, onNavigate, onQu
   const [result, setResult]         = useState(null)
   const [runError, setRunError]     = useState(null)
   const [filter, setFilter]         = useState('All')
+  const [syncPhase, setSyncPhase]           = useState(null)  // null | 'syncing'
+  const [lastSyncAt, setLastSyncAt]         = useState(null)
   const [rateLimitUntil, setRateLimitUntil] = useState(null)
   const [rlSecsLeft, setRlSecsLeft]         = useState(0)
-  const [syncPhase, setSyncPhase]           = useState(null)  // null | 'syncing' | 'querying'
-  const [lastSyncAt, setLastSyncAt]         = useState(null)
-  const syncPollRef                         = useRef(null)
 
   useEffect(() => {
     if (!rateLimitUntil) return
@@ -272,9 +271,19 @@ export default function DiscoverPage({ llm, setLlm, sub, hasDB, onNavigate, onQu
       const d = await fetchDiscover()
       if (d.building) { setBuilding(true); setCatalogue([]); return }
 
-      // /discover returned catalogue (own-DB cache or merged) — use it directly
+      // /discover returned catalogue — attach connection_id from live provider list
+      // so the Refresh button can trigger a sync (connection_id is not stored in the catalogue cache)
       if (!d.needs_build) {
-        setCatalogue(d.catalogue || [])
+        const catalogue = d.catalogue || []
+        const providers = await fetchConnectedProviders().catch(() => ({ connections: [] }))
+        const connMap = {}
+        for (const c of (providers.connections || [])) connMap[c.provider_id] = c
+        const merged = catalogue.map(item =>
+          item.provider && connMap[item.provider]
+            ? { ...item, connection_id: connMap[item.provider].connection_id, last_sync_at: connMap[item.provider].last_sync_at }
+            : item
+        )
+        setCatalogue(merged)
         setCacheInfo({ built_at: d.built_at, template_count: d.template_count })
         setBuilding(false); setNeedsBuild(false)
         return
@@ -314,38 +323,10 @@ export default function DiscoverPage({ llm, setLlm, sub, hasDB, onNavigate, onQu
   }
 
   useEffect(() => { load() }, [])
-  useEffect(() => () => { if (syncPollRef.current) clearInterval(syncPollRef.current) }, [])
 
-  async function handleRefresh(item) {
-    if (running || syncPhase || (rateLimitUntil && Date.now() < rateLimitUntil)) return
-    setSelected(item); setResult(null); setRunError(null); setLastSyncAt(null)
-
+  async function _runQuery(item) {
+    // Run the report query only — no sync. Used by card click and after sync completes.
     if (item.provider) {
-      // Integration template — sync first (if we have connection_id), then query
-      setRunning(true)
-
-      if (item.connection_id) {
-        setSyncPhase('syncing')
-        try {
-          await syncProvider(item.connection_id)
-        } catch { /* sync trigger failed — proceed to query anyway */ }
-
-        // Poll until sync finishes (max 3 min)
-        const deadline = Date.now() + 180_000
-        await new Promise(resolve => {
-          syncPollRef.current = setInterval(async () => {
-            try {
-              const s = await fetchProviderStatus(item.connection_id)
-              if (s.status !== 'syncing' || Date.now() > deadline) {
-                clearInterval(syncPollRef.current)
-                if (s.last_sync_at) setLastSyncAt(s.last_sync_at)
-                resolve()
-              }
-            } catch { clearInterval(syncPollRef.current); resolve() }
-          }, 2500)
-        })
-      }
-
       setSyncPhase('querying')
       try {
         const data = await runIntegrationAnalytics(item.provider, item.id)
@@ -353,7 +334,6 @@ export default function DiscoverPage({ llm, setLlm, sub, hasDB, onNavigate, onQu
           setRateLimitUntil(Date.now() + (data.retry_after_seconds || 60) * 1000)
         } else {
           setResult(data)
-          if (item.connection_id) setRateLimitUntil(Date.now() + 60_000)
         }
       } catch(e) { setRunError(getErrorMessage(e)) }
       finally { setRunning(false); setSyncPhase(null); onQueryComplete?.() }
@@ -371,6 +351,43 @@ export default function DiscoverPage({ llm, setLlm, sub, hasDB, onNavigate, onQu
       } catch(e) { setRunError(getErrorMessage(e)) }
       finally { setRunning(false); onQueryComplete?.() }
     }
+  }
+
+  // Card click — just run the query, no sync
+  function handleSelect(item) {
+    if (running || syncPhase || (rateLimitUntil && Date.now() < rateLimitUntil)) return
+    setSelected(item); setResult(null); setRunError(null); setLastSyncAt(null)
+    setRunning(true)
+    _runQuery(item)
+  }
+
+  // Refresh button — sync with visual progress, then re-run the report
+  async function handleRefresh(item) {
+    if (running || syncPhase || (rateLimitUntil && Date.now() < rateLimitUntil)) return
+    setSelected(item); setResult(null); setRunError(null); setLastSyncAt(null)
+    setRunning(true)
+
+    if (item.connection_id) {
+      setSyncPhase('syncing')
+      try { await syncProvider(item.connection_id) } catch { /* proceed anyway */ }
+
+      // Poll until sync finishes (max 5 min), same as Data Sources page
+      const deadline = Date.now() + 300_000
+      await new Promise(resolve => {
+        const poll = setInterval(async () => {
+          try {
+            const s = await fetchProviderStatus(item.connection_id)
+            if (s.status !== 'syncing' || Date.now() > deadline) {
+              clearInterval(poll)
+              if (s.last_sync_at) setLastSyncAt(s.last_sync_at)
+              resolve()
+            }
+          } catch { clearInterval(poll); resolve() }
+        }, 2500)
+      })
+    }
+
+    _runQuery(item)
   }
 
   async function handleRebuild() {
@@ -437,7 +454,7 @@ export default function DiscoverPage({ llm, setLlm, sub, hasDB, onNavigate, onQu
 
         <div style={{ flex:1, overflowY:'auto', padding:'0 10px 16px' }}>
           {visible.map(item => (
-            <AnalyticsCard key={item.id} item={item} isSelected={selected?.id===item.id} onRun={() => handleRefresh(item)} disabled={running || !!syncPhase} />
+            <AnalyticsCard key={item.id} item={item} isSelected={selected?.id===item.id} onRun={() => handleSelect(item)} disabled={running || !!syncPhase} />
           ))}
         </div>
       </div>
@@ -477,19 +494,24 @@ export default function DiscoverPage({ llm, setLlm, sub, hasDB, onNavigate, onQu
                 <div style={{ fontSize:12, color:'var(--text3)' }}>{selected.description}</div>
               </div>
               <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:5 }}>
-                <button onClick={() => handleRefresh(selected)} disabled={running || !!syncPhase || !!rateLimitUntil} style={{
-                  padding:'8px 16px', borderRadius:'var(--r-md)', fontSize:13, fontWeight:500,
-                  background:'var(--blue)', color:'#fff', opacity:(running || syncPhase || rateLimitUntil) ? 0.6 : 1,
-                  cursor:(running || syncPhase || rateLimitUntil) ?'not-allowed':'pointer', display:'flex', alignItems:'center', gap:7, border:'none'
-                }}>
-                  {syncPhase === 'syncing'  ? <><Spinner size={13} color="#fff"/>Syncing data…</>
-                  : syncPhase === 'querying' ? <><Spinner size={13} color="#fff"/>Refreshing…</>
+                <button
+                  onClick={() => selected?.connection_id ? handleRefresh(selected) : handleSelect(selected)}
+                  disabled={running || !!syncPhase || !!rateLimitUntil}
+                  style={{
+                    padding:'8px 16px', borderRadius:'var(--r-md)', fontSize:13, fontWeight:500,
+                    background:'var(--blue)', color:'#fff',
+                    opacity:(running || syncPhase || rateLimitUntil) ? 0.6 : 1,
+                    cursor:(running || syncPhase || rateLimitUntil) ? 'not-allowed' : 'pointer',
+                    display:'flex', alignItems:'center', gap:7, border:'none'
+                  }}>
+                  {syncPhase === 'syncing'   ? <><Spinner size={13} color="#fff"/>Syncing data…</>
+                  : syncPhase === 'querying' ? <><Spinner size={13} color="#fff"/>Loading report…</>
                   : running                  ? <><Spinner size={13} color="#fff"/>Loading…</>
-                  : rateLimitUntil          ? `Cooling down… ${rlSecsLeft}s`
+                  : rateLimitUntil           ? `Wait ${rlSecsLeft}s…`
                   : '↻ Refresh'}
                 </button>
                 {(lastSyncAt || selected?.last_sync_at) && !syncPhase && (
-                  <div style={{ fontSize:10, color:'var(--text3)' }}>
+                  <div style={{ fontSize:10, color:'var(--text3)', textAlign:'right' }}>
                     Last sync: {new Date(lastSyncAt || selected.last_sync_at).toLocaleString()}
                   </div>
                 )}
@@ -501,27 +523,14 @@ export default function DiscoverPage({ llm, setLlm, sub, hasDB, onNavigate, onQu
                 <Spinner size={14} color="var(--blue)" />
                 <div>
                   <div style={{ fontWeight:600, color:'var(--text)', marginBottom:2 }}>Syncing latest data from your integration…</div>
-                  <div style={{ color:'var(--text3)' }}>This may take a moment. The report will load automatically once sync is complete.</div>
+                  <div style={{ color:'var(--text3)' }}>Please wait — the report will load once sync is complete.</div>
                 </div>
-              </div>
-            )}
-
-            {syncPhase === 'querying' && (
-              <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
-                {[160,40,220].map((h,i) => <div key={i} className="skeleton" style={{ height:h }} />)}
-              </div>
-            )}
-
-            {rateLimitUntil && !syncPhase && (
-              <div style={{ padding:'10px 12px', borderRadius:'var(--r-md)', background:'rgba(251,146,60,0.1)', border:'1px solid rgba(251,146,60,0.25)', fontSize:12, color:'var(--text2)', lineHeight:1.5 }}>
-                Refresh complete — please wait before syncing again.{' '}
-                <span style={{ fontWeight:600, color:'#f97316' }}>Available in {rlSecsLeft}s</span>
               </div>
             )}
 
             {runError && <ErrorBox message={runError} />}
 
-            {running && !syncPhase && <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+            {(running && !syncPhase) && <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
               {[160,40,220].map((h,i) => <div key={i} className="skeleton" style={{ height:h }} />)}
             </div>}
 
