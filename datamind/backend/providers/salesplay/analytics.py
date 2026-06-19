@@ -108,8 +108,7 @@ TEMPLATES = {
         "sql": """
             SELECT
                 customer_name                           AS customer,
-                DATEDIFF(CURDATE(), MAX(created_at))    AS days_since_last_purchase,
-                COUNT(DISTINCT id)                      AS total_orders,
+                COUNT(DISTINCT id)                      AS total_receipts,
                 ROUND(SUM(total_money), 2)              AS lifetime_value,
                 ROUND(AVG(total_money), 2)              AS avg_order_value
             FROM sp_receipts
@@ -143,25 +142,6 @@ TEMPLATES = {
         """
     },
 
-    "hourly_performance": {
-        "title": "Sales by Hour of Day",
-        "description": "Peak sales hours in the last 30 days",
-        "category": "Operations", "complexity": "simple", "icon": "🕐",
-        "type": "chart",
-        "sql": """
-            SELECT
-                HOUR(created_at)            AS hour_of_day,
-                COUNT(*)                    AS transactions,
-                ROUND(SUM(total_money), 2)  AS revenue,
-                ROUND(AVG(total_money), 2)  AS avg_ticket
-            FROM sp_receipts
-            WHERE tenant_id = '{tenant_id}'
-              AND created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
-              AND receipt_type = 'SALE'
-            GROUP BY HOUR(created_at)
-            ORDER BY hour_of_day
-        """
-    },
 
     "category_performance": {
         "title": "Category Sales Performance",

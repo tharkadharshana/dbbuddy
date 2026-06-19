@@ -1390,11 +1390,9 @@ _PROVIDER_SECTION_MAP = {
         "revenue_by_category": "category_performance",
         "revenue_by_location": "shop_performance",
         "growth_metrics":      "daily_summary",
-        "hourly_pattern":      "hourly_performance",
         "top_products":        "top_products",
         "top_customers":       "customer_analysis",
         "payment_methods":     "payment_breakdown",
-        "cashier_performance": "hourly_performance",
     },
     "loyverse": {
         "revenue_trend":       "revenue_trend",
