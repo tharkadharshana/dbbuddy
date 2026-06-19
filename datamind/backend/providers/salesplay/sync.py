@@ -505,10 +505,15 @@ def sync_payment_types(client: SalesPlayAPIClient, conn, prefix: str, user_email
         ptid = _str(pt.get("id"), 64)
         if not ptid:
             continue
+        # A payment type is considered active if ANY shop has it enabled.
+        shops = pt.get("shops") or []
+        is_active = 1 if any(s.get("payment_type_status") == 1 for s in shops) else 0
+
         record = {
             "id":           ptid,
             "payment_name": _str(pt.get("payment_type_name"), 255),
             "payment_type": _str(pt.get("payment_type_code"), 50),
+            "is_active":    is_active,
             "created_at":   _dt(pt.get("created_date")),
             "updated_at":   _dt(pt.get("updated_date")),
         }
