@@ -89,11 +89,12 @@ _SENSITIVE_COL_RE = re.compile(
 # Columns that are internal system plumbing on every sp_*/ly_* shared table.
 # tenant_id  — multi-tenancy routing key, injected by server, never a user column.
 # synced_at  — our internal write timestamp, meaningless to business users.
-# id         — raw DB surrogate key (hashed UUID string), meaningless to users;
-#              human-readable identifiers (customer_code, product_code) are used instead.
 # The LLM must not SELECT these; keeping them out of the schema it sees is the
 # cleanest way to enforce that without relying on prompt instructions alone.
-_SP_INTERNAL_COLS = frozenset({"tenant_id", "synced_at", "id"})
+# NOTE: 'id' is intentionally kept in the schema — hiding it causes the LLM to
+# hallucinate a non-existent 'customer_id'/'product_id' column and crash the query.
+# ID columns are stripped from results in _run_sql instead (main.py).
+_SP_INTERNAL_COLS = frozenset({"tenant_id", "synced_at"})
 
 def _filter_sensitive_schema(schemas: Dict[str, Any]) -> Dict[str, Any]:
     """
