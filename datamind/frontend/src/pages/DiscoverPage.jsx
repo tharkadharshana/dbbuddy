@@ -458,7 +458,7 @@ export default function DiscoverPage({ llm, setLlm, sub, hasDB, onNavigate, onQu
               <div>
                 <div style={{ fontSize:17, fontWeight:700, marginBottom:2, display:'flex', alignItems:'center', gap:6 }}>
                   {selected.title}
-                  {selected.note && (
+                  {(result?.note || selected?.note) && (
                     <span style={{ position:'relative', display:'inline-flex' }} className="info-tip">
                       <span style={{ fontSize:11, color:'var(--text3)', cursor:'default', userSelect:'none',
                         width:15, height:15, borderRadius:'50%', border:'1px solid var(--text3)',
@@ -469,7 +469,7 @@ export default function DiscoverPage({ llm, setLlm, sub, hasDB, onNavigate, onQu
                         padding:'10px 12px', fontSize:11, color:'var(--text2)', lineHeight:1.5,
                         width:280, boxShadow:'0 4px 16px rgba(0,0,0,0.3)',
                         pointerEvents:'none', opacity:0, transition:'opacity .15s'
-                      }}>{selected.note}</span>
+                      }}>{result?.note || selected?.note}</span>
                     </span>
                   )}
                 </div>

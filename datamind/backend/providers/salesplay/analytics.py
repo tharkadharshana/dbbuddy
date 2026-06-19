@@ -246,6 +246,7 @@ def run_salesplay_analytics(conn, table_prefix: str, template_id: str) -> dict:
     result = {
         "title":       template["title"],
         "description": template["description"],
+        "note":        template.get("note"),
         "type":        template["type"],
         "columns":     cols,
         "data":        data,
