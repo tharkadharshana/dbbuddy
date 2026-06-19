@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { fetchDiscover, runAnalytics, fetchCacheProgress, rebuildCache,
-         fetchConnectedProviders, fetchIntegrationTemplates, runIntegrationAnalytics, getErrorMessage } from '../utils/api'
+         fetchConnectedProviders, fetchIntegrationTemplates, runIntegrationAnalytics,
+         syncProvider, fetchProviderStatus, getErrorMessage } from '../utils/api'
 import { Card, Badge, Spinner, Spinner2, ErrorBox, KPICard, ChartCard, DataTable,
          BarChartSimple, LineChartSimple, PieChartSimple, UsageMeter, COLORS, Btn } from '../components/UI'
 import { ComposedChart, Bar, Line, Area, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -249,6 +250,9 @@ export default function DiscoverPage({ llm, setLlm, sub, hasDB, onNavigate, onQu
   const [filter, setFilter]         = useState('All')
   const [rateLimitUntil, setRateLimitUntil] = useState(null)
   const [rlSecsLeft, setRlSecsLeft]         = useState(0)
+  const [syncPhase, setSyncPhase]           = useState(null)  // null | 'syncing' | 'querying'
+  const [lastSyncAt, setLastSyncAt]         = useState(null)
+  const syncPollRef                         = useRef(null)
 
   useEffect(() => {
     if (!rateLimitUntil) return
@@ -288,6 +292,8 @@ export default function DiscoverPage({ llm, setLlm, sub, hasDB, onNavigate, onQu
                 ...t,
                 category: c.display_name || c.provider_id,
                 provider: c.provider_id,
+                connection_id: c.connection_id,
+                last_sync_at: c.last_sync_at,
               })))
               .catch(() => [])
           )
@@ -308,21 +314,59 @@ export default function DiscoverPage({ llm, setLlm, sub, hasDB, onNavigate, onQu
   }
 
   useEffect(() => { load() }, [])
+  useEffect(() => () => { if (syncPollRef.current) clearInterval(syncPollRef.current) }, [])
 
-  async function handleRun(item) {
-    if (rateLimitUntil && Date.now() < rateLimitUntil) return
-    setSelected(item); setRunning(true); setResult(null); setRunError(null)
-    try {
-      const data = item.provider
-        ? await runIntegrationAnalytics(item.provider, item.id)
-        : await runAnalytics(item.id, llm, {})
-      if (data.ok === false || data.success === false) {
-        setRateLimitUntil(Date.now() + (data.retry_after_seconds || 60) * 1000)
-      } else {
-        setResult(data)
-      }
-    } catch(e) { setRunError(getErrorMessage(e)) }
-    finally { setRunning(false); onQueryComplete?.() }
+  async function handleRefresh(item) {
+    if (running || syncPhase || (rateLimitUntil && Date.now() < rateLimitUntil)) return
+    setSelected(item); setResult(null); setRunError(null)
+
+    // Integration: sync first, then query
+    if (item.provider && item.connection_id) {
+      setRunning(true); setSyncPhase('syncing')
+      try {
+        await syncProvider(item.connection_id)
+      } catch { /* sync trigger failed — proceed to query anyway */ }
+
+      // Poll until sync finishes (max 3 min)
+      const deadline = Date.now() + 180_000
+      await new Promise(resolve => {
+        syncPollRef.current = setInterval(async () => {
+          try {
+            const s = await fetchProviderStatus(item.connection_id)
+            if (s.status !== 'syncing' || Date.now() > deadline) {
+              clearInterval(syncPollRef.current)
+              if (s.last_sync_at) setLastSyncAt(s.last_sync_at)
+              resolve()
+            }
+          } catch { clearInterval(syncPollRef.current); resolve() }
+        }, 2500)
+      })
+
+      setSyncPhase('querying')
+      try {
+        const data = await runIntegrationAnalytics(item.provider, item.id)
+        if (data.ok === false || data.success === false) {
+          setRateLimitUntil(Date.now() + (data.retry_after_seconds || 60) * 1000)
+        } else {
+          setResult(data)
+          setRateLimitUntil(Date.now() + 60_000)
+        }
+      } catch(e) { setRunError(getErrorMessage(e)) }
+      finally { setRunning(false); setSyncPhase(null); onQueryComplete?.() }
+
+    } else {
+      // Own-DB: just run the query
+      setRunning(true)
+      try {
+        const data = await runAnalytics(item.id, llm, {})
+        if (data.ok === false || data.success === false) {
+          setRateLimitUntil(Date.now() + (data.retry_after_seconds || 60) * 1000)
+        } else {
+          setResult(data)
+        }
+      } catch(e) { setRunError(getErrorMessage(e)) }
+      finally { setRunning(false); onQueryComplete?.() }
+    }
   }
 
   async function handleRebuild() {
@@ -389,7 +433,7 @@ export default function DiscoverPage({ llm, setLlm, sub, hasDB, onNavigate, onQu
 
         <div style={{ flex:1, overflowY:'auto', padding:'0 10px 16px' }}>
           {visible.map(item => (
-            <AnalyticsCard key={item.id} item={item} isSelected={selected?.id===item.id} onRun={() => handleRun(item)} disabled={running} />
+            <AnalyticsCard key={item.id} item={item} isSelected={selected?.id===item.id} onRun={() => handleRefresh(item)} disabled={running || !!syncPhase} />
           ))}
         </div>
       </div>
@@ -411,25 +455,52 @@ export default function DiscoverPage({ llm, setLlm, sub, hasDB, onNavigate, onQu
                 <div style={{ fontSize:17, fontWeight:700, marginBottom:2 }}>{selected.title}</div>
                 <div style={{ fontSize:12, color:'var(--text3)' }}>{selected.description}</div>
               </div>
-              <button onClick={() => handleRun(selected)} disabled={running || !!rateLimitUntil} style={{
-                padding:'8px 16px', borderRadius:'var(--r-md)', fontSize:13, fontWeight:500,
-                background:'var(--blue)', color:'#fff', opacity:(running || rateLimitUntil) ? 0.6 : 1,
-                cursor:(running || rateLimitUntil) ?'not-allowed':'pointer', display:'flex', alignItems:'center', gap:7, border:'none'
-              }}>
-                {running ? <><Spinner size={13} color="#fff"/>Running…</> : rateLimitUntil ? `Cooling down… ${rlSecsLeft}s` : '↻ Re-run'}
-              </button>
+              <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:5 }}>
+                <button onClick={() => handleRefresh(selected)} disabled={running || !!syncPhase || !!rateLimitUntil} style={{
+                  padding:'8px 16px', borderRadius:'var(--r-md)', fontSize:13, fontWeight:500,
+                  background:'var(--blue)', color:'#fff', opacity:(running || syncPhase || rateLimitUntil) ? 0.6 : 1,
+                  cursor:(running || syncPhase || rateLimitUntil) ?'not-allowed':'pointer', display:'flex', alignItems:'center', gap:7, border:'none'
+                }}>
+                  {syncPhase === 'syncing'  ? <><Spinner size={13} color="#fff"/>Syncing data…</>
+                  : syncPhase === 'querying' ? <><Spinner size={13} color="#fff"/>Refreshing…</>
+                  : running                  ? <><Spinner size={13} color="#fff"/>Loading…</>
+                  : rateLimitUntil          ? `Cooling down… ${rlSecsLeft}s`
+                  : '↻ Refresh'}
+                </button>
+                {(lastSyncAt || selected?.last_sync_at) && !syncPhase && (
+                  <div style={{ fontSize:10, color:'var(--text3)' }}>
+                    Last sync: {new Date(lastSyncAt || selected.last_sync_at).toLocaleString()}
+                  </div>
+                )}
+              </div>
             </div>
 
-            {rateLimitUntil && (
+            {syncPhase === 'syncing' && (
+              <div style={{ padding:'12px 14px', borderRadius:'var(--r-md)', background:'rgba(99,102,241,0.08)', border:'1px solid rgba(99,102,241,0.2)', fontSize:12, color:'var(--text2)', display:'flex', alignItems:'center', gap:10 }}>
+                <Spinner size={14} color="var(--blue)" />
+                <div>
+                  <div style={{ fontWeight:600, color:'var(--text)', marginBottom:2 }}>Syncing latest data from your integration…</div>
+                  <div style={{ color:'var(--text3)' }}>This may take a moment. The report will load automatically once sync is complete.</div>
+                </div>
+              </div>
+            )}
+
+            {syncPhase === 'querying' && (
+              <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+                {[160,40,220].map((h,i) => <div key={i} className="skeleton" style={{ height:h }} />)}
+              </div>
+            )}
+
+            {rateLimitUntil && !syncPhase && (
               <div style={{ padding:'10px 12px', borderRadius:'var(--r-md)', background:'rgba(251,146,60,0.1)', border:'1px solid rgba(251,146,60,0.25)', fontSize:12, color:'var(--text2)', lineHeight:1.5 }}>
-                Too many requests — let the system cool down.{' '}
-                <span style={{ fontWeight:600, color:'#f97316' }}>Try again in {rlSecsLeft}s</span>
+                Refresh complete — please wait before syncing again.{' '}
+                <span style={{ fontWeight:600, color:'#f97316' }}>Available in {rlSecsLeft}s</span>
               </div>
             )}
 
             {runError && <ErrorBox message={runError} />}
 
-            {running && <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+            {running && !syncPhase && <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
               {[160,40,220].map((h,i) => <div key={i} className="skeleton" style={{ height:h }} />)}
             </div>}
 
