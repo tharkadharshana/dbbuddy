@@ -532,6 +532,7 @@ def sync_customers(client: SalesPlayAPIClient, conn, prefix: str, user_email: st
         "customer_ids":   "",
         "email":          "",
         "created_at_min": since.strftime(DT_FMT),
+        "updated_at_min": since.strftime(DT_FMT),
     }
     items = client._paginate("/customers", "customers", body)
 
