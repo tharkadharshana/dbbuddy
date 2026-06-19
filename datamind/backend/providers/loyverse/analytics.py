@@ -142,7 +142,7 @@ TEMPLATES = {
         "type": "table",
         "sql": """
             SELECT
-                COALESCE(cat.name, 'Uncategorized')     AS category,
+                COALESCE(cat.name, 'No Category')       AS category,
                 COUNT(DISTINCT li.item_id)              AS items_count,
                 SUM(li.quantity)                        AS units_sold,
                 ROUND(SUM(li.total_money), 2)           AS revenue,
