@@ -63,11 +63,11 @@ chat suite (/query endpoint):
 
 reports suite (SalesPlay analytics templates):
   revenue_trend        Daily revenue, transactions, avg ticket
-  top_products         Top 20 products by revenue; units_sold must be integer
+  top_products         Top 20 products by net sales; gross_sales, discounts, net_sales columns
   customer_analysis    Lifetime value, order count, days since last purchase
   payment_breakdown    Revenue and transaction count per payment method
   hourly_performance   Sales by hour of day (0-23 range; hour_of_day is a dimension, not KPI)
-  category_performance Revenue and units per category; no blank category names
+  category_performance Gross sales, discounts, net sales per category; no blank category names
   daily_summary        Per-day revenue, transactions, unique customers
   shop_performance     Per-shop revenue and traffic; no blank shop names
 
@@ -494,9 +494,9 @@ REPORT_TESTS = [
     },
     {
         "template_id": "top_products",
-        "label":       "Top 20 Products by Revenue",
-        "required_cols": ["product", "units_sold", "revenue", "avg_price"],
-        "monetary_cols": ["revenue", "avg_price"],
+        "label":       "Top 20 Products by Net Sales",
+        "required_cols": ["product", "units_sold", "gross_sales", "discounts", "net_sales", "avg_price"],
+        "monetary_cols": ["gross_sales", "discounts", "net_sales", "avg_price"],
         "no_blank_cols": ["product"],
         "integer_cols":  ["units_sold"],
     },
@@ -531,10 +531,9 @@ REPORT_TESTS = [
     {
         "template_id": "category_performance",
         "label":       "Category Sales Performance",
-        "required_cols": ["category", "products_count", "units_sold", "revenue",
-                          "avg_price"],
-        "monetary_cols": ["revenue", "avg_price"],
-        # After the fix, category must never be blank or empty string
+        "required_cols": ["category", "products_count", "units_sold", "gross_sales",
+                          "discounts", "net_sales", "avg_price"],
+        "monetary_cols": ["gross_sales", "discounts", "net_sales", "avg_price"],
         "no_blank_cols": ["category"],
         "integer_cols":  ["products_count", "units_sold"],
     },
