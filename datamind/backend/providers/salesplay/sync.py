@@ -420,14 +420,6 @@ def sync_categories(client: SalesPlayAPIClient, conn, prefix: str, user_email: s
                          ext_updated_field="updated_at", budget=budget):
             count += 1
         upsert_to_shared(conn, "sp_categories", prefix, record)
-        # Back-fill category_name into sp_products so JOIN queries don't need it
-        if record.get("category_name") and record.get("id"):
-            _cur = conn.cursor()
-            _cur.execute(
-                "UPDATE sp_products SET category_name=%s WHERE tenant_id=%s AND category_id=%s",
-                (record["category_name"], prefix, record["id"]),
-            )
-            _cur.close()
 
     log.info("Synced categories", prefix=prefix, count=count)
     return count
