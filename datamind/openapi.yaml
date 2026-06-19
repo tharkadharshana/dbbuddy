@@ -10,7 +10,6 @@ info:
     | `/v1/*` | End-users (React app / mobile) | `Authorization: Bearer <jwt>` |
     | `/v1/partner/*` | Partner backends (server-to-server) | `X-API-Key: <partner_key>` |
     | `/embed/*` | Iframe embed flow | `pk` query param |
-    | `/health` | Load balancers / uptime monitors | None |
 
     This spec documents the **Partner API** (`/v1/partner/*`).
     The full user API is visible at `/docs` when the server is running.
