@@ -248,23 +248,8 @@ export default function DiscoverPage({ llm, setLlm, sub, hasDB, onNavigate, onQu
   const [result, setResult]         = useState(null)
   const [runError, setRunError]     = useState(null)
   const [filter, setFilter]         = useState('All')
-  const [rateLimitUntil, setRateLimitUntil] = useState(null)
-  const [rlSecsLeft, setRlSecsLeft]         = useState(0)
-  const [syncPhase, setSyncPhase]           = useState(null)  // null | 'syncing' | 'querying'
+  const [syncPhase, setSyncPhase]           = useState(null)  // null | 'syncing'
   const [lastSyncAt, setLastSyncAt]         = useState(null)
-  const syncPollRef                         = useRef(null)
-
-  useEffect(() => {
-    if (!rateLimitUntil) return
-    const tick = () => {
-      const secs = Math.ceil((rateLimitUntil - Date.now()) / 1000)
-      if (secs <= 0) { setRateLimitUntil(null); setRlSecsLeft(0) }
-      else setRlSecsLeft(secs)
-    }
-    tick()
-    const id = setInterval(tick, 500)
-    return () => clearInterval(id)
-  }, [rateLimitUntil])
 
   const load = async () => {
     setLoading(true); setError(null)
@@ -324,46 +309,17 @@ export default function DiscoverPage({ llm, setLlm, sub, hasDB, onNavigate, onQu
   }
 
   useEffect(() => { load() }, [])
-  useEffect(() => () => { if (syncPollRef.current) clearInterval(syncPollRef.current) }, [])
 
-  async function handleRefresh(item) {
-    if (running || syncPhase || (rateLimitUntil && Date.now() < rateLimitUntil)) return
-    setSelected(item); setResult(null); setRunError(null); setLastSyncAt(null)
-
+  async function _runQuery(item) {
+    // Run the report query only — no sync. Used by card click and after sync completes.
     if (item.provider) {
-      // Integration template — sync first (if we have connection_id), then query
-      setRunning(true)
-
-      if (item.connection_id) {
-        setSyncPhase('syncing')
-        try {
-          await syncProvider(item.connection_id)
-        } catch { /* sync trigger failed — proceed to query anyway */ }
-
-        // Poll until sync finishes (max 3 min)
-        const deadline = Date.now() + 180_000
-        await new Promise(resolve => {
-          syncPollRef.current = setInterval(async () => {
-            try {
-              const s = await fetchProviderStatus(item.connection_id)
-              if (s.status !== 'syncing' || Date.now() > deadline) {
-                clearInterval(syncPollRef.current)
-                if (s.last_sync_at) setLastSyncAt(s.last_sync_at)
-                resolve()
-              }
-            } catch { clearInterval(syncPollRef.current); resolve() }
-          }, 2500)
-        })
-      }
-
       setSyncPhase('querying')
       try {
         const data = await runIntegrationAnalytics(item.provider, item.id)
         if (data.ok === false || data.success === false) {
-          setRateLimitUntil(Date.now() + (data.retry_after_seconds || 60) * 1000)
+          setRunError(data.message || 'Something went wrong. Please try again.')
         } else {
           setResult(data)
-          if (item.connection_id) setRateLimitUntil(Date.now() + 60_000)
         }
       } catch(e) { setRunError(getErrorMessage(e)) }
       finally { setRunning(false); setSyncPhase(null); onQueryComplete?.() }
@@ -374,13 +330,34 @@ export default function DiscoverPage({ llm, setLlm, sub, hasDB, onNavigate, onQu
       try {
         const data = await runAnalytics(item.id, llm, {})
         if (data.ok === false || data.success === false) {
-          setRateLimitUntil(Date.now() + (data.retry_after_seconds || 60) * 1000)
+          setRunError(data.message || 'Something went wrong. Please try again.')
         } else {
           setResult(data)
         }
       } catch(e) { setRunError(getErrorMessage(e)) }
       finally { setRunning(false); onQueryComplete?.() }
     }
+  }
+
+  // Card click — just run the query, no sync
+  function handleSelect(item) {
+    if (running || syncPhase) return
+    setSelected(item); setResult(null); setRunError(null); setLastSyncAt(null)
+    setRunning(true)
+    _runQuery(item)
+  }
+
+  // Sync button — fire-and-forget, same as Data Sources page sync button
+  async function handleRefresh(item) {
+    if (running || syncPhase) return
+    if (!item.connection_id) return
+    setSyncPhase('syncing')
+    try {
+      await syncProvider(item.connection_id)
+      const s = await fetchProviderStatus(item.connection_id).catch(() => null)
+      if (s?.last_sync_at) setLastSyncAt(s.last_sync_at)
+    } catch { /* ignore */ }
+    finally { setSyncPhase(null) }
   }
 
   async function handleRebuild() {
@@ -447,7 +424,7 @@ export default function DiscoverPage({ llm, setLlm, sub, hasDB, onNavigate, onQu
 
         <div style={{ flex:1, overflowY:'auto', padding:'0 10px 16px' }}>
           {visible.map(item => (
-            <AnalyticsCard key={item.id} item={item} isSelected={selected?.id===item.id} onRun={() => handleRefresh(item)} disabled={running || !!syncPhase} />
+            <AnalyticsCard key={item.id} item={item} isSelected={selected?.id===item.id} onRun={() => handleSelect(item)} disabled={running || !!syncPhase} />
           ))}
         </div>
       </div>
@@ -487,51 +464,39 @@ export default function DiscoverPage({ llm, setLlm, sub, hasDB, onNavigate, onQu
                 <div style={{ fontSize:12, color:'var(--text3)' }}>{selected.description}</div>
               </div>
               <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:5 }}>
-                <button onClick={() => handleRefresh(selected)} disabled={running || !!syncPhase || !!rateLimitUntil} style={{
-                  padding:'8px 16px', borderRadius:'var(--r-md)', fontSize:13, fontWeight:500,
-                  background:'var(--blue)', color:'#fff', opacity:(running || syncPhase || rateLimitUntil) ? 0.6 : 1,
-                  cursor:(running || syncPhase || rateLimitUntil) ?'not-allowed':'pointer', display:'flex', alignItems:'center', gap:7, border:'none'
-                }}>
-                  {syncPhase === 'syncing'  ? <><Spinner size={13} color="#fff"/>Syncing data…</>
-                  : syncPhase === 'querying' ? <><Spinner size={13} color="#fff"/>Refreshing…</>
-                  : running                  ? <><Spinner size={13} color="#fff"/>Loading…</>
-                  : rateLimitUntil          ? `Cooling down… ${rlSecsLeft}s`
-                  : '↻ Refresh'}
-                </button>
+                <div style={{ display:'flex', gap:8 }}>
+                  {selected?.connection_id && (
+                    <button onClick={() => handleRefresh(selected)} disabled={running || !!syncPhase} style={{
+                      padding:'8px 14px', borderRadius:'var(--r-md)', fontSize:13, fontWeight:500,
+                      background:'var(--bg3)', color:'var(--text2)', border:'1px solid var(--border2)',
+                      opacity:(running || syncPhase) ? 0.5 : 1,
+                      cursor:(running || syncPhase) ? 'not-allowed' : 'pointer',
+                      display:'flex', alignItems:'center', gap:6
+                    }}>
+                      {syncPhase === 'syncing' ? <><Spinner size={13} color="var(--text2)"/>Syncing…</> : '↺ Sync'}
+                    </button>
+                  )}
+                  <button onClick={() => handleSelect(selected)} disabled={running || !!syncPhase} style={{
+                    padding:'8px 16px', borderRadius:'var(--r-md)', fontSize:13, fontWeight:500,
+                    background:'var(--blue)', color:'#fff',
+                    opacity:(running || syncPhase) ? 0.6 : 1,
+                    cursor:(running || syncPhase) ? 'not-allowed' : 'pointer',
+                    display:'flex', alignItems:'center', gap:7, border:'none'
+                  }}>
+                    {(running && !syncPhase) ? <><Spinner size={13} color="#fff"/>Loading…</> : '↻ Re-run'}
+                  </button>
+                </div>
                 {(lastSyncAt || selected?.last_sync_at) && !syncPhase && (
-                  <div style={{ fontSize:10, color:'var(--text3)' }}>
+                  <div style={{ fontSize:10, color:'var(--text3)', textAlign:'right' }}>
                     Last sync: {new Date(lastSyncAt || selected.last_sync_at).toLocaleString()}
                   </div>
                 )}
               </div>
             </div>
 
-            {syncPhase === 'syncing' && (
-              <div style={{ padding:'12px 14px', borderRadius:'var(--r-md)', background:'rgba(99,102,241,0.08)', border:'1px solid rgba(99,102,241,0.2)', fontSize:12, color:'var(--text2)', display:'flex', alignItems:'center', gap:10 }}>
-                <Spinner size={14} color="var(--blue)" />
-                <div>
-                  <div style={{ fontWeight:600, color:'var(--text)', marginBottom:2 }}>Syncing latest data from your integration…</div>
-                  <div style={{ color:'var(--text3)' }}>This may take a moment. The report will load automatically once sync is complete.</div>
-                </div>
-              </div>
-            )}
-
-            {syncPhase === 'querying' && (
-              <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
-                {[160,40,220].map((h,i) => <div key={i} className="skeleton" style={{ height:h }} />)}
-              </div>
-            )}
-
-            {rateLimitUntil && !syncPhase && (
-              <div style={{ padding:'10px 12px', borderRadius:'var(--r-md)', background:'rgba(251,146,60,0.1)', border:'1px solid rgba(251,146,60,0.25)', fontSize:12, color:'var(--text2)', lineHeight:1.5 }}>
-                Refresh complete — please wait before syncing again.{' '}
-                <span style={{ fontWeight:600, color:'#f97316' }}>Available in {rlSecsLeft}s</span>
-              </div>
-            )}
-
             {runError && <ErrorBox message={runError} />}
 
-            {running && !syncPhase && <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
+            {running && <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
               {[160,40,220].map((h,i) => <div key={i} className="skeleton" style={{ height:h }} />)}
             </div>}
 
