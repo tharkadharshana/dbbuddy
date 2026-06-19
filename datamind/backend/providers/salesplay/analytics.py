@@ -78,22 +78,24 @@ TEMPLATES = {
     },
 
     "top_products": {
-        "title": "Top 20 Products by Revenue",
-        "description": "Best-selling products in the last 30 days",
+        "title": "Top 20 Products by Net Sales",
+        "description": "Best-selling products in the last 30 days.",
         "category": "Products", "complexity": "simple", "icon": "🏆",
         "type": "table",
         "sql": """
             SELECT
-                product_name                            AS product,
+                product_name                                        AS product,
                 COALESCE(NULLIF(category_name, ''), 'Uncategorized') AS category,
-                ROUND(SUM(quantity))                    AS units_sold,
-                ROUND(SUM(total_money), 2)              AS revenue,
-                ROUND(AVG(price), 2)                    AS avg_price
+                ROUND(SUM(quantity))                                AS units_sold,
+                ROUND(SUM(gross_total_money), 2)                   AS gross_sales,
+                ROUND(SUM(total_discount), 2)                      AS discounts,
+                ROUND(SUM(gross_total_money - total_discount), 2)  AS net_sales,
+                ROUND(AVG(price), 2)                               AS avg_price
             FROM sp_receipt_line_items
             WHERE tenant_id = '{tenant_id}'
               AND created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
             GROUP BY product_name, category_name
-            ORDER BY revenue DESC
+            ORDER BY net_sales DESC
             LIMIT 20
         """
     },
@@ -106,8 +108,7 @@ TEMPLATES = {
         "sql": """
             SELECT
                 customer_name                           AS customer,
-                DATEDIFF(CURDATE(), MAX(created_at))    AS days_since_last_purchase,
-                COUNT(DISTINCT id)                      AS total_orders,
+                COUNT(DISTINCT id)                      AS total_receipts,
                 ROUND(SUM(total_money), 2)              AS lifetime_value,
                 ROUND(AVG(total_money), 2)              AS avg_order_value
             FROM sp_receipts
@@ -124,6 +125,7 @@ TEMPLATES = {
     "payment_breakdown": {
         "title": "Payment Method Distribution",
         "description": "Revenue breakdown by payment type in the last 30 days",
+        "note": "Per-method figures may differ from SalesPlay for split-method receipts (e.g. partly Cash, partly Card) — the full receipt total is attributed to the primary payment method. The overall total always matches SalesPlay exactly.",
         "category": "Payments", "complexity": "simple", "icon": "💳",
         "type": "chart",
         "sql": """
@@ -141,43 +143,26 @@ TEMPLATES = {
         """
     },
 
-    "hourly_performance": {
-        "title": "Sales by Hour of Day",
-        "description": "Peak sales hours in the last 30 days",
-        "category": "Operations", "complexity": "simple", "icon": "🕐",
-        "type": "chart",
-        "sql": """
-            SELECT
-                HOUR(created_at)            AS hour_of_day,
-                COUNT(*)                    AS transactions,
-                ROUND(SUM(total_money), 2)  AS revenue,
-                ROUND(AVG(total_money), 2)  AS avg_ticket
-            FROM sp_receipts
-            WHERE tenant_id = '{tenant_id}'
-              AND created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
-              AND receipt_type = 'SALE'
-            GROUP BY HOUR(created_at)
-            ORDER BY hour_of_day
-        """
-    },
 
     "category_performance": {
         "title": "Category Sales Performance",
-        "description": "Revenue breakdown by product category in the last 30 days",
+        "description": "Net sales by product category in the last 30 days.",
         "category": "Products", "complexity": "simple", "icon": "🏷️",
         "type": "table",
         "sql": """
             SELECT
                 COALESCE(NULLIF(category_name, ''), 'Uncategorized') AS category,
-                COUNT(DISTINCT product_name)             AS products_count,
-                ROUND(SUM(quantity))                     AS units_sold,
-                ROUND(SUM(total_money), 2)               AS revenue,
-                ROUND(AVG(price), 2)                     AS avg_price
+                COUNT(DISTINCT product_name)                          AS products_count,
+                ROUND(SUM(quantity))                                  AS units_sold,
+                ROUND(SUM(gross_total_money), 2)                     AS gross_sales,
+                ROUND(SUM(total_discount), 2)                        AS discounts,
+                ROUND(SUM(gross_total_money - total_discount), 2)    AS net_sales,
+                ROUND(AVG(price), 2)                                  AS avg_price
             FROM sp_receipt_line_items
             WHERE tenant_id = '{tenant_id}'
               AND created_at >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
             GROUP BY COALESCE(NULLIF(category_name, ''), 'Uncategorized')
-            ORDER BY revenue DESC
+            ORDER BY net_sales DESC
         """
     },
 
@@ -261,6 +246,7 @@ def run_salesplay_analytics(conn, table_prefix: str, template_id: str) -> dict:
     result = {
         "title":       template["title"],
         "description": template["description"],
+        "note":        template.get("note"),
         "type":        template["type"],
         "columns":     cols,
         "data":        data,

@@ -166,7 +166,9 @@ function RenderedReport({ report }) {
             <div key={k} style={{ background:'rgba(255,255,255,0.04)', borderRadius:'var(--r-md)', padding:'12px 14px', border:'1px solid rgba(255,255,255,0.06)' }}>
               <div style={{ fontSize:10, color:'var(--text3)', textTransform:'uppercase', letterSpacing:'.07em', marginBottom:6 }}>{kpiLabels[k]}</div>
               <div style={{ fontSize:20, fontWeight:700, color:kpiColors[i] }}>
-                {k.includes('revenue')||k.includes('ticket') ? formatCurrency(kpis[k]) : formatNumber(kpis[k], null, 0)}
+                {/* Currency symbol hidden in Analytics Hub reports — single-currency tenants don't need it */}
+                {/* {k.includes('revenue')||k.includes('ticket') ? formatCurrency(kpis[k]) : formatNumber(kpis[k], null, 0)} */}
+                {formatNumber(kpis[k], null, isCurrencyColumn(k) ? 2 : 0)}
               </div>
             </div>
           ))}
@@ -194,7 +196,9 @@ function RenderedReport({ report }) {
                   {data.columns.slice(0,3).map(c => (
                     <span key={c}><span style={{ color:'var(--text3)' }}>{c}: </span><span style={{ color: typeof row[c]==='number' ? 'var(--blue)' : 'var(--text2)', fontFamily: typeof row[c]==='number' ? 'var(--mono)' : 'inherit' }}>
                       {typeof row[c] === 'number'
-                        ? isCurrencyColumn(c) ? formatCurrency(row[c]) : formatNumber(row[c])
+                        // Currency symbol hidden in Analytics Hub reports — single-currency tenants don't need it
+                        // ? isCurrencyColumn(c) ? formatCurrency(row[c]) : formatNumber(row[c])
+                        ? formatNumber(row[c], null, isCurrencyColumn(c) ? 2 : 0)
                         : row[c]}
                     </span></span>
                   ))}

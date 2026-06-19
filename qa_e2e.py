@@ -63,11 +63,10 @@ chat suite (/query endpoint):
 
 reports suite (SalesPlay analytics templates):
   revenue_trend        Daily revenue, transactions, avg ticket
-  top_products         Top 20 products by revenue; units_sold must be integer
-  customer_analysis    Lifetime value, order count, days since last purchase
+  top_products         Top 20 products by net sales; gross_sales, discounts, net_sales columns
+  customer_analysis    Lifetime value, receipt count per customer
   payment_breakdown    Revenue and transaction count per payment method
-  hourly_performance   Sales by hour of day (0-23 range; hour_of_day is a dimension, not KPI)
-  category_performance Revenue and units per category; no blank category names
+  category_performance Gross sales, discounts, net sales per category; no blank category names
   daily_summary        Per-day revenue, transactions, unique customers
   shop_performance     Per-shop revenue and traffic; no blank shop names
 
@@ -476,7 +475,7 @@ report_results = []
 # Columns that must be whole numbers in the data rows (no .0 fractional part)
 _INTEGER_COLS = {
     "transactions", "transaction_count", "units_sold", "products_count",
-    "unique_customers", "total_orders",
+    "unique_customers", "total_orders", "total_receipts",
 }
 
 # Columns that should NOT appear as KPI-summed dimensions
@@ -494,20 +493,19 @@ REPORT_TESTS = [
     },
     {
         "template_id": "top_products",
-        "label":       "Top 20 Products by Revenue",
-        "required_cols": ["product", "units_sold", "revenue", "avg_price"],
-        "monetary_cols": ["revenue", "avg_price"],
+        "label":       "Top 20 Products by Net Sales",
+        "required_cols": ["product", "units_sold", "gross_sales", "discounts", "net_sales", "avg_price"],
+        "monetary_cols": ["gross_sales", "discounts", "net_sales", "avg_price"],
         "no_blank_cols": ["product"],
         "integer_cols":  ["units_sold"],
     },
     {
         "template_id": "customer_analysis",
         "label":       "Customer Purchase Analysis",
-        "required_cols": ["customer", "days_since_last_purchase", "total_orders",
-                          "lifetime_value", "avg_order_value"],
+        "required_cols": ["customer", "total_receipts", "lifetime_value", "avg_order_value"],
         "monetary_cols": ["lifetime_value", "avg_order_value"],
         "no_blank_cols": ["customer"],
-        "integer_cols":  ["total_orders"],
+        "integer_cols":  ["total_receipts"],
     },
     {
         "template_id": "payment_breakdown",
@@ -519,22 +517,11 @@ REPORT_TESTS = [
         "integer_cols":  ["transaction_count"],
     },
     {
-        "template_id": "hourly_performance",
-        "label":       "Sales by Hour of Day",
-        "required_cols": ["hour_of_day", "transactions", "revenue", "avg_ticket"],
-        "monetary_cols": ["revenue", "avg_ticket"],
-        "no_blank_cols": [],
-        "integer_cols":  ["transactions"],
-        # hour_of_day must exist but must NOT be a KPI metric (it's a dimension)
-        "dimension_cols": ["hour_of_day"],
-    },
-    {
         "template_id": "category_performance",
         "label":       "Category Sales Performance",
-        "required_cols": ["category", "products_count", "units_sold", "revenue",
-                          "avg_price"],
-        "monetary_cols": ["revenue", "avg_price"],
-        # After the fix, category must never be blank or empty string
+        "required_cols": ["category", "products_count", "units_sold", "gross_sales",
+                          "discounts", "net_sales", "avg_price"],
+        "monetary_cols": ["gross_sales", "discounts", "net_sales", "avg_price"],
         "no_blank_cols": ["category"],
         "integer_cols":  ["products_count", "units_sold"],
     },

@@ -237,8 +237,11 @@ export function DataTable({ columns, data, maxHeight=320 }) {
     if (v === null || v === undefined) return <span style={{color:'var(--text3)'}}>—</span>
     if (isNum(v)) {
       if (col.includes('pct') || col.includes('rate') || col.includes('growth')) return `${v > 0 ? '+' : ''}${v}%`
+      // Currency symbol hidden in Analytics Hub reports — single-currency tenants don't need it
+      // if (isCurrencyColumn(col))
+      //   return formatCurrency(v)
       if (isCurrencyColumn(col))
-        return formatCurrency(v)
+        return formatNumber(v, null, 2)
       return formatNumber(v, null, 0)
     }
     return String(v)
