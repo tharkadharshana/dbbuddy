@@ -155,8 +155,9 @@ function ResultTable({ columns, data, rowCount }) {
     if (v === null || v === undefined)
       return <span style={{ color:'var(--text3)' }}>—</span>
     if (typeof v === 'number') {
-      if (col.includes('revenue') || col.includes('total') || col.includes('amount') ||
-          col.includes('price') || col.includes('value') || col.includes('spent'))
+      const isCount = col.includes('visit') || col.includes('count') || col.includes('qty') || col.includes('quantity') || col.includes('num_')
+      if (!isCount && (col.includes('revenue') || col.includes('total') || col.includes('amount') ||
+          col.includes('price') || col.includes('value') || col.includes('spent')))
         return <span style={{ color:'var(--blue)', fontFamily:'var(--mono)' }}>{formatCurrency(v)}</span>
       if (col.includes('pct') || col.includes('rate') || col.includes('percent'))
         return <span style={{ color: v > 0 ? 'var(--green)' : 'var(--red)', fontFamily:'var(--mono)' }}>{v > 0 ? '+' : ''}{v}%</span>
