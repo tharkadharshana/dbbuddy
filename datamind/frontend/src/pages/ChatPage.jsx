@@ -189,7 +189,6 @@ function Message({ msg, llm }) {
                   <ResultChart columns={msg.data.columns} data={msg.data.data} />
                   <ResultTable columns={msg.data.columns} data={msg.data.data} rowCount={msg.data.row_count} />
                 </>}
-                {msg.data.type === 'data' && msg.data.row_count === 0 && <div style={{ fontSize:12, color:'var(--text3)', marginTop:8 }}>No results returned.</div>}
               </>
             )}
           </>

@@ -260,9 +260,6 @@ function Message({ msg, theme }) {
                 <ResultTable columns={msg.data.columns} data={msg.data.data} rowCount={msg.data.row_count} />
               </>
             )}
-            {msg.data?.type === 'data' && msg.data?.row_count === 0 && (
-              <div style={{ fontSize:11, color:'var(--text3)', marginTop:6 }}>No data matched your search.</div>
-            )}
           </>
         )}
       </div>

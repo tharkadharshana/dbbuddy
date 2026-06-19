@@ -1949,9 +1949,14 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
         cursor = conn.cursor()
         _set_query_timeout(cursor)
         cursor.execute(sql)
-        columns = [desc[0] for desc in cursor.description]
+        raw_cols = [desc[0] for desc in cursor.description]
         rows = cursor.fetchall()
-        data = [{k: _safe(v) for k, v in dict(zip(columns, row)).items()} for row in rows]
+        # Strip surrogate ID columns — keep only business-meaningful columns.
+        columns = [c for c in raw_cols if not _ID_COL_RE.search(c)]
+        data = [{k: _safe(v) for k, v in dict(zip(raw_cols, row)).items() if not _ID_COL_RE.search(k)} for row in rows]
+        # Treat all-NULL results the same as 0 rows — no meaningful data found.
+        if data and all(all(v is None for v in row.values()) for row in data):
+            data = []
         if len(data) > row_limit:
             data = data[:row_limit]
         steps[-1]["status"] = "done"
