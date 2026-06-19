@@ -250,6 +250,20 @@ export default function DiscoverPage({ llm, setLlm, sub, hasDB, onNavigate, onQu
   const [filter, setFilter]         = useState('All')
   const [syncPhase, setSyncPhase]           = useState(null)  // null | 'syncing'
   const [lastSyncAt, setLastSyncAt]         = useState(null)
+  const [rateLimitUntil, setRateLimitUntil] = useState(null)
+  const [rlSecsLeft, setRlSecsLeft]         = useState(0)
+
+  useEffect(() => {
+    if (!rateLimitUntil) return
+    const tick = () => {
+      const secs = Math.ceil((rateLimitUntil - Date.now()) / 1000)
+      if (secs <= 0) { setRateLimitUntil(null); setRlSecsLeft(0) }
+      else setRlSecsLeft(secs)
+    }
+    tick()
+    const id = setInterval(tick, 500)
+    return () => clearInterval(id)
+  }, [rateLimitUntil])
 
   const load = async () => {
     setLoading(true); setError(null)
@@ -317,7 +331,7 @@ export default function DiscoverPage({ llm, setLlm, sub, hasDB, onNavigate, onQu
       try {
         const data = await runIntegrationAnalytics(item.provider, item.id)
         if (data.ok === false || data.success === false) {
-          setRunError(data.message || 'Something went wrong. Please try again.')
+          setRateLimitUntil(Date.now() + (data.retry_after_seconds || 60) * 1000)
         } else {
           setResult(data)
         }
@@ -330,7 +344,7 @@ export default function DiscoverPage({ llm, setLlm, sub, hasDB, onNavigate, onQu
       try {
         const data = await runAnalytics(item.id, llm, {})
         if (data.ok === false || data.success === false) {
-          setRunError(data.message || 'Something went wrong. Please try again.')
+          setRateLimitUntil(Date.now() + (data.retry_after_seconds || 60) * 1000)
         } else {
           setResult(data)
         }
@@ -341,7 +355,7 @@ export default function DiscoverPage({ llm, setLlm, sub, hasDB, onNavigate, onQu
 
   // Card click — just run the query, no sync
   function handleSelect(item) {
-    if (running || syncPhase) return
+    if (running || syncPhase || (rateLimitUntil && Date.now() < rateLimitUntil)) return
     setSelected(item); setResult(null); setRunError(null); setLastSyncAt(null)
     setRunning(true)
     _runQuery(item)
@@ -476,14 +490,16 @@ export default function DiscoverPage({ llm, setLlm, sub, hasDB, onNavigate, onQu
                       {syncPhase === 'syncing' ? <><Spinner size={13} color="var(--text2)"/>Syncing…</> : '↺ Sync'}
                     </button>
                   )}
-                  <button onClick={() => handleSelect(selected)} disabled={running || !!syncPhase} style={{
+                  <button onClick={() => handleSelect(selected)} disabled={running || !!syncPhase || !!rateLimitUntil} style={{
                     padding:'8px 16px', borderRadius:'var(--r-md)', fontSize:13, fontWeight:500,
                     background:'var(--blue)', color:'#fff',
-                    opacity:(running || syncPhase) ? 0.6 : 1,
-                    cursor:(running || syncPhase) ? 'not-allowed' : 'pointer',
+                    opacity:(running || syncPhase || rateLimitUntil) ? 0.6 : 1,
+                    cursor:(running || syncPhase || rateLimitUntil) ? 'not-allowed' : 'pointer',
                     display:'flex', alignItems:'center', gap:7, border:'none'
                   }}>
-                    {(running && !syncPhase) ? <><Spinner size={13} color="#fff"/>Loading…</> : '↻ Re-run'}
+                    {running ? <><Spinner size={13} color="#fff"/>Loading…</>
+                    : rateLimitUntil ? `Wait ${rlSecsLeft}s…`
+                    : '↻ Re-run'}
                   </button>
                 </div>
                 {(lastSyncAt || selected?.last_sync_at) && !syncPhase && (
