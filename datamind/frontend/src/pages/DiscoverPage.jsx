@@ -146,7 +146,7 @@ function ResultPanel({ result, templateId }) {
       return <ChartCard title="Customer Segments"><BarChartSimple data={data} xKey="segment" yKey="customers" color="var(--purple)" horizontal /></ChartCard>
     }
     if (templateId === 'revenue_trend') {
-      const chartData = [...data].reverse()
+      const chartData = data
       return (
         <ChartCard title="Daily Revenue & Transactions">
           <ResponsiveContainer width="100%" height={240}>
@@ -171,11 +171,6 @@ function ResultPanel({ result, templateId }) {
     if (templateId === 'customer_analysis') {
       const yKey = numCols.find(c => c.includes('lifetime')) || numCols[1] || numCols[0]
       return <ChartCard title="Lifetime Value by Customer"><BarChartSimple data={data.slice(0,15)} xKey={strCols[0]||'customer'} yKey={yKey} color="var(--purple)" horizontal /></ChartCard>
-    }
-    if (templateId === 'hourly_performance') {
-      const chartData = data.map(r => ({ ...r, hour: `${r.hour_of_day}:00` }))
-      const yKey = numCols.find(c => c.includes('revenue')) || numCols[1] || numCols[0]
-      return <ChartCard title="Revenue by Hour of Day"><BarChartSimple data={chartData} xKey="hour" yKey={yKey} color="var(--blue)" /></ChartCard>
     }
     if (templateId === 'loyalty_tiers') {
       return <ChartCard title="Customers per Tier"><PieChartSimple data={data} nameKey={strCols[0]||'tier'} valueKey={numCols[0]||'customers'} height={220} /></ChartCard>
@@ -215,7 +210,7 @@ function ResultPanel({ result, templateId }) {
           {kpiCols.map((col, i) => {
             const vals = data.map(r => r[col]||0)
             const total = vals.reduce((a,b)=>a+b,0)
-            const isAvg = col.includes('avg')||col.includes('pct')||col.includes('rate')||col.includes('margin')||col.includes('days_since')
+            const isAvg = col.includes('avg')||col.includes('pct')||col.includes('rate')||col.includes('margin')
             const val = data.length===1 ? data[0][col] : (isAvg ? total/vals.length : total)
             const colors = ['var(--blue)','var(--green)','var(--purple)','var(--amber)']
             const decimals = Number.isInteger(val) ? 0 : 1
