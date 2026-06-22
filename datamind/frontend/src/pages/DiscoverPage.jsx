@@ -136,7 +136,11 @@ function SourceBadge({ source }) {
 
 // ── Result Panel ──────────────────────────────────────────────────────────────
 function ResultPanel({ result, templateId }) {
-  const { title, columns, data, row_count, source } = result
+  const { title, columns, data, row_count, source,
+          table_columns, table_data, table_count } = result
+  const tblCols = table_columns || columns
+  const tblData = table_data    || data
+  const tblCount = table_count  ?? row_count
 
   const renderChart = () => {
     if (!data?.length) return null
@@ -246,9 +250,9 @@ function ResultPanel({ result, templateId }) {
 
       <Card style={{ overflow:'hidden' }}>
         <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'12px 16px', borderBottom:'1px solid var(--border)' }}>
-          <span style={{ fontSize:12, fontWeight:500, color:'var(--text2)' }}>Data · {row_count} rows</span>
+          <span style={{ fontSize:12, fontWeight:500, color:'var(--text2)' }}>Data · {tblCount} rows</span>
         </div>
-        <DataTable columns={columns} data={data} maxHeight={320} />
+        <DataTable columns={tblCols} data={tblData} maxHeight={320} />
       </Card>
     </div>
   )

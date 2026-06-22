@@ -27,8 +27,8 @@ _result_cache: dict = {}
 _CACHE_TTL = int(os.getenv("ANALYTICS_CACHE_TTL", "300"))  # configurable via .env
 
 
-def _cache_get(tenant_id: str, template_id: str):
-    key = (tenant_id, template_id)
+def _cache_get(tenant_id: str, template_id: str, history_months: int = 12):
+    key = (tenant_id, template_id, history_months)
     entry = _result_cache.get(key)
     if entry:
         result, expires_at = entry
@@ -38,8 +38,8 @@ def _cache_get(tenant_id: str, template_id: str):
     return None
 
 
-def _cache_set(tenant_id: str, template_id: str, result: dict):
-    _result_cache[(tenant_id, template_id)] = (result, _time.monotonic() + _CACHE_TTL)
+def _cache_set(tenant_id: str, template_id: str, result: dict, history_months: int = 12):
+    _result_cache[(tenant_id, template_id, history_months)] = (result, _time.monotonic() + _CACHE_TTL)
 
 
 def cache_bust(tenant_id: str) -> None:
@@ -64,16 +64,29 @@ TEMPLATES = {
         "type": "timeseries",
         "sql": """
             SELECT
-                DATE_FORMAT(created_at, '%b %Y')  AS month,
-                ROUND(SUM(total_money), 2)         AS revenue,
-                COUNT(*)                           AS transactions,
+                DATE_FORMAT(created_at, '%b %Y')      AS month,
+                ROUND(SUM(total_money), 2)            AS revenue,
+                COUNT(*)                              AS transactions,
                 ROUND(SUM(total_money) / COUNT(*), 2) AS avg_ticket
             FROM sp_receipts
             WHERE tenant_id = '{tenant_id}'
-              AND created_at >= DATE_SUB(CURDATE(), INTERVAL 12 MONTH)
+              AND created_at >= DATE_SUB(CURDATE(), INTERVAL {history_months} MONTH)
               AND receipt_type = 'SALE'
             GROUP BY DATE_FORMAT(created_at, '%Y-%m')
             ORDER BY MIN(created_at)
+        """,
+        "table_sql": """
+            SELECT
+                DATE(created_at)                      AS sale_date,
+                ROUND(SUM(total_money), 2)            AS revenue,
+                COUNT(*)                              AS transactions,
+                ROUND(SUM(total_money) / COUNT(*), 2) AS avg_ticket
+            FROM sp_receipts
+            WHERE tenant_id = '{tenant_id}'
+              AND created_at >= DATE_SUB(CURDATE(), INTERVAL {history_months} MONTH)
+              AND receipt_type = 'SALE'
+            GROUP BY DATE(created_at)
+            ORDER BY sale_date DESC
         """
     },
 
@@ -218,7 +231,7 @@ def _safe(v):
     return v
 
 
-def run_salesplay_analytics(conn, table_prefix: str, template_id: str) -> dict:
+def run_salesplay_analytics(conn, table_prefix: str, template_id: str, history_months: int = 12) -> dict:
     """Run a pre-built SalesPlay analytics template against sp_* shared tables."""
     import re as _re
     if not _re.match(r'^[A-Za-z0-9_]+$', table_prefix):
@@ -228,12 +241,12 @@ def run_salesplay_analytics(conn, table_prefix: str, template_id: str) -> dict:
         raise ValueError(f"Template '{template_id}' not found for SalesPlay")
 
     # Return cached result if still fresh
-    cached = _cache_get(table_prefix, template_id)
+    cached = _cache_get(table_prefix, template_id, history_months)
     if cached is not None:
         return {**cached, "cached": True}
 
     template = TEMPLATES[template_id]
-    sql = template["sql"].format(tenant_id=table_prefix)
+    sql = template["sql"].format(tenant_id=table_prefix, history_months=history_months)
 
     cursor = conn.cursor()
     cursor.execute(sql)
@@ -243,15 +256,30 @@ def run_salesplay_analytics(conn, table_prefix: str, template_id: str) -> dict:
 
     data = [{col: _safe(val) for col, val in zip(cols, row)} for row in rows]
 
+    # Optional separate query for the data table (e.g. daily rows alongside a monthly chart)
+    table_data = None
+    table_columns = None
+    if "table_sql" in template:
+        t_sql = template["table_sql"].format(tenant_id=table_prefix, history_months=history_months)
+        t_cur = conn.cursor()
+        t_cur.execute(t_sql)
+        table_columns = [d[0] for d in t_cur.description]
+        table_rows = t_cur.fetchall()
+        t_cur.close()
+        table_data = [{col: _safe(val) for col, val in zip(table_columns, row)} for row in table_rows]
+
     result = {
-        "title":       template["title"],
-        "description": template["description"],
-        "note":        template.get("note"),
-        "type":        template["type"],
-        "columns":     cols,
-        "data":        data,
-        "row_count":   len(data),
-        "cached":      False,
+        "title":         template["title"],
+        "description":   template["description"],
+        "note":          template.get("note"),
+        "type":          template["type"],
+        "columns":       cols,
+        "data":          data,
+        "row_count":     len(data),
+        "table_columns": table_columns,
+        "table_data":    table_data,
+        "table_count":   len(table_data) if table_data is not None else None,
+        "cached":        False,
     }
-    _cache_set(table_prefix, template_id, result)
+    _cache_set(table_prefix, template_id, result, history_months)
     return result
