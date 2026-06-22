@@ -58,22 +58,22 @@ def cache_bust(tenant_id: str) -> None:
 
 TEMPLATES = {
     "revenue_trend": {
-        "title": "Daily Revenue Trend",
-        "description": "Revenue over the last 90 days",
+        "title": "Monthly Revenue Trend",
+        "description": "Revenue by month over the last 12 months",
         "category": "Revenue", "complexity": "simple", "icon": "📈",
         "type": "timeseries",
         "sql": """
             SELECT
-                DATE(created_at)            AS date,
-                ROUND(SUM(total_money), 2)  AS revenue,
-                COUNT(*)                    AS transactions,
-                ROUND(AVG(total_money), 2)  AS avg_ticket
+                DATE_FORMAT(created_at, '%b %Y')  AS month,
+                ROUND(SUM(total_money), 2)         AS revenue,
+                COUNT(*)                           AS transactions,
+                ROUND(SUM(total_money) / COUNT(*), 2) AS avg_ticket
             FROM sp_receipts
             WHERE tenant_id = '{tenant_id}'
-              AND created_at >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
+              AND created_at >= DATE_SUB(CURDATE(), INTERVAL 12 MONTH)
               AND receipt_type = 'SALE'
-            GROUP BY DATE(created_at)
-            ORDER BY date
+            GROUP BY DATE_FORMAT(created_at, '%Y-%m')
+            ORDER BY MIN(created_at)
         """
     },
 
