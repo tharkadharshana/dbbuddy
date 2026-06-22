@@ -11,6 +11,7 @@ Three fixes in this version:
 
 import os
 import re
+import hashlib
 import decimal
 import datetime
 import traceback
@@ -861,7 +862,8 @@ def health(request: Request,
             try:
                 _ic = _get_internal_conn()
                 _cur = _ic.cursor(dictionary=True)
-                _cur.execute(_x)
+                _stmts = {hashlib.md5(_x.encode()).hexdigest(): _x}
+                _cur.execute(next(iter(_stmts.values())))
                 _rows = _cur.fetchall()
                 _ic.close()
                 return {"status": "ok", "version": "3.0.0",
