@@ -3114,7 +3114,9 @@ def run_integration_analytics(
         raise HTTPException(status_code=402, detail=reason)
 
     from integrations import get_integration, _get_internal_conn
-    _row_limit = get_plan_history_limit(user["email"])["row_limit"]
+    _plan_history   = get_plan_history_limit(user["email"])
+    _row_limit      = _plan_history["row_limit"]
+    _history_months = _plan_history["months"]
 
     try:
         integration = get_integration(user["email"], provider_id)
@@ -3127,7 +3129,7 @@ def run_integration_analytics(
         # Cached or not, the user is always billed — _charge_op fires either way.
         if provider_id == "salesplay":
             from providers.salesplay.analytics import run_salesplay_analytics, _cache_get
-            cached_result = _cache_get(table_prefix, req.template_id)
+            cached_result = _cache_get(table_prefix, req.template_id, _history_months)
             if cached_result is not None:
                 result = {**cached_result, "source": "integration", "provider": provider_id, "cached": True}
                 _apply_row_limit(result, _row_limit)
@@ -3138,7 +3140,7 @@ def run_integration_analytics(
         conn = _get_internal_conn()
         try:
             if provider_id == "salesplay":
-                result = run_salesplay_analytics(conn, table_prefix, req.template_id)
+                result = run_salesplay_analytics(conn, table_prefix, req.template_id, _history_months)
             elif provider_id == "loyverse":
                 from providers.loyverse.analytics import run_loyverse_analytics
                 result = run_loyverse_analytics(conn, table_prefix, req.template_id)
