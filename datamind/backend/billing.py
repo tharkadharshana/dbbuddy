@@ -383,9 +383,9 @@ def bootstrap_billing_tables():
 
         # Seed plans  (name, price_usd, price_cents, ai_credits, db_rows, sort_order)
         plans = [
-            ("Starter", "5.00",   500,    50,  2_000_000,    1),
-            ("Growth",  "10.00", 1000,   125,  5_000_000,    2),
-            ("Pro",     "25.00", 2500,   500, 20_000_000,    3),
+            ("Starter", "5.00",   500,   100,  2_000_000,    1),
+            ("Growth",  "10.00", 1000,   250,  5_000_000,    2),
+            ("Pro",     "25.00", 2500,  1000, 20_000_000,    3),
         ]
         for name, price_usd, price_cents, ai_credits, db_rows, sort_order in plans:
             cur.execute("SELECT id FROM subscription_plans WHERE name = %s", (name,))
@@ -406,7 +406,7 @@ def bootstrap_billing_tables():
                 """, (name, price_usd, price_cents, ai_credits, db_rows, sort_order))
 
         # Seed unified token limits — must match _TOKEN_LIMITS dict below
-        _TOKEN_LIMITS_SEED = {"Starter": 50.0, "Growth": 125.0, "Pro": 500.0}
+        _TOKEN_LIMITS_SEED = {"Starter": 100.0, "Growth": 250.0, "Pro": 1000.0}
         for _pname, _tlimit in _TOKEN_LIMITS_SEED.items():
             cur.execute(
                 "UPDATE subscription_plans SET tokens_limit=%s WHERE name=%s",
@@ -662,7 +662,7 @@ def get_user_subscription(user_email: str) -> Dict:
 
 
 # In-memory token limit enforcement — must stay in sync with the bootstrap seed above.
-_TOKEN_LIMITS: dict = {"Starter": 50.0, "Growth": 125.0, "Pro": 500.0}
+_TOKEN_LIMITS: dict = {"Starter": 100.0, "Growth": 250.0, "Pro": 1000.0}
 
 # Plans that include each gated feature.
 _PLAN_FEATURE_GATE: dict = {
