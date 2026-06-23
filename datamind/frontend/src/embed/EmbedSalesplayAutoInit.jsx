@@ -14,6 +14,7 @@
 import React, { useState, useEffect } from 'react'
 import { salesplayOnboard, embedGetProviderStatus, embedGetPlans } from './embedApi'
 import { notifyParent } from './EmbedApp'
+import { appName, productTitle as resolveProductTitle } from './embedBranding'
 
 // ── SalesPlay visual language (mirrors EmbedChat's isSalesplay branch) ───────
 const SP = {
@@ -202,7 +203,8 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
   // through React state and can be empty on the first render in some React versions.
   const aat = aatToken || new URLSearchParams(window.location.search).get('aat') || ''
 
-  const productTitle  = context?.branding?.product_name || import.meta.env.VITE_APP_NAME || 'SalesPlay AI'
+  const productTitle  = resolveProductTitle(context)
+  const appNm         = appName(context)
   const providerName  = context?.partner_name || 'Salesplay'
 
   // Called when the user clicks "Accept & Connect"
@@ -216,7 +218,7 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
     setErrorMsg('')
 
     if (!aat) {
-      fail('Session token not found. Please access DataMind through the Salesplay backoffice.')
+      fail(`Session token not found. Please access ${appNm} through the Salesplay backoffice.`)
       return
     }
 
@@ -336,7 +338,7 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
 
           <div style={{ textAlign: 'left', marginBottom: 20 }}>
             <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: SP.text, marginBottom: 10, padding: '0 2px' }}>
-              What you can do with DataMind
+              What you can do with {appNm}
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {[
@@ -425,11 +427,11 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
 
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 14 }}>
             <span style={{ width: 8, height: 8, borderRadius: '50%', background: SP.green, flexShrink: 0 }} />
-            <span style={{ fontSize: 11, color: SP.text }}>Real-time data · Powered by DataMind</span>
+            <span style={{ fontSize: 11, color: SP.text }}>Real-time data · Powered by {appNm}</span>
           </div>
 
           <div style={{ fontSize: 11, color: SP.text, marginTop: 10, lineHeight: 1.6 }}>
-            By continuing, you agree to DataMind's{' '}
+            By continuing, you agree to {appNm}'s{' '}
             <a href="https://datamind.ai/terms" target="_blank" rel="noopener noreferrer"
               style={{ color: SP.blue, textDecoration: 'underline' }}>Terms of Service</a>
             {' '}and{' '}
@@ -445,7 +447,7 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
 
           <div style={cardStyle(sp)}>
             <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', marginBottom: 8 }}>
-              What you can do with DataMind
+              What you can do with {appNm}
             </div>
             {[
               { icon: '💬', text: 'Ask questions in plain English — no spreadsheets, no formulas' },
@@ -487,7 +489,7 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
           </button>
 
           <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 10, lineHeight: 1.6 }}>
-            By continuing, you agree to DataMind's{' '}
+            By continuing, you agree to {appNm}'s{' '}
             <a href="https://datamind.ai/terms" target="_blank" rel="noopener noreferrer"
               style={{ color: 'var(--blue)', textDecoration: 'none' }}>Terms of Service</a>
             {' '}and{' '}

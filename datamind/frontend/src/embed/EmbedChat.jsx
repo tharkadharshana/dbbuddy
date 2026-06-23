@@ -13,7 +13,7 @@ import { getErrorMessage } from '../utils/api'
 import { formatCurrency } from '../utils/locale'
 import { notifyParent } from './EmbedApp'
 import EmbedHistoryDrawer from './EmbedHistoryDrawer'
-const APP_NAME = import.meta.env.VITE_APP_NAME || 'SalesPlay AI'
+import { appName, productTitle as resolveProductTitle } from './embedBranding'
 
 const TT = {
   background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)',
@@ -269,7 +269,8 @@ function Message({ msg, theme }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 export default function EmbedChat({ context, onExpired, onLogout, onCollapse, initialInput = '' }) {
-  const productTitle = context?.branding?.product_name || 'Ask Your Data'
+  const productTitle = resolveProductTitle(context)
+  const APP_NAME = appName(context)
   const isSalesplay = context?.provider_id === 'salesplay'
   // Same accent used by the collapsed search bar (EmbedSearchBar) — keeps the
   // "closed" pill and the "open" input bar visually identical.
@@ -822,7 +823,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
           </div>
         )}
         <div style={{ textAlign:'center', marginTop:6, fontSize:9, color: isSalesplay ? '#94A3B8' : 'var(--text3)' }}>
-          DataMind can make mistakes. Please verify important information.
+          {APP_NAME} can make mistakes. Please verify important information.
         </div>
       </div>
 

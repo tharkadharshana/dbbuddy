@@ -12,6 +12,7 @@ import {
   embedGetProviderStatus, embedGetPlans, embedSubscribePlan,
 } from './embedApi'
 import { notifyParent } from './EmbedApp'
+import { appName, productTitle } from './embedBranding'
 
 // ── Shared styles ─────────────────────────────────────────────────────────────
 const inp = {
@@ -95,7 +96,8 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete, onClo
   const [error, setError]             = useState('')
 
   const providerName = context?.partner_name || 'Salesplay'
-  const productTitle = context?.branding?.product_name || import.meta.env.VITE_APP_NAME || 'SalesPlay AI'
+  const appNm        = appName(context)
+  const title        = productTitle(context)
 
   // Fetch plans when entering step 2
   useEffect(() => {
@@ -213,7 +215,7 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete, onClo
             <rect x="9" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.95)"/>
           </svg>
         </div>
-        <div style={{ fontSize:15, fontWeight:700, color:'var(--text)' }}>{productTitle}</div>
+        <div style={{ fontSize:15, fontWeight:700, color:'var(--text)' }}>{title}</div>
         <div style={{ fontSize:12, color:'var(--text3)', marginTop:2 }}>Ask your {providerName} data anything</div>
       </div>
 
@@ -267,12 +269,12 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete, onClo
       {step === 1 && (
         <div>
           <div style={{ fontSize:14, fontWeight:600, color:'var(--text)', marginBottom:6 }}>
-            {mode === 'register' ? 'Create your DataMind account' : 'Log in to DataMind'}
+            {mode === 'register' ? `Create your ${appNm} account` : `Log in to ${appNm}`}
           </div>
           <div style={{ fontSize:12, color:'var(--text2)', marginBottom:14, lineHeight:1.6 }}>
             {mode === 'register'
-              ? 'Your account gives you full access at datamind.ai — analytics, forecasting, reports and more.'
-              : 'Use your existing DataMind credentials.'}
+              ? `Your account gives you full access to ${appNm} — analytics, forecasting, reports and more.`
+              : `Use your existing ${appNm} credentials.`}
           </div>
 
           {mode === 'register' && (
@@ -374,7 +376,7 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete, onClo
           {!connecting && !error && (
             <>
               <div style={{ fontSize:12, color:'var(--text2)', marginBottom:14, lineHeight:1.6 }}>
-                DataMind will sync your {providerName} receipts, products, and customers.
+                {appNm} will sync your {providerName} receipts, products, and customers.
                 This takes 1–3 minutes for most accounts.
               </div>
 
