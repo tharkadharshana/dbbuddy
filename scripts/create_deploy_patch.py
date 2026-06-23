@@ -28,7 +28,7 @@ BACKEND_FILES = [
     "analytics.py", "auth.py", "billing.py", "cache.py", "conversations.py",
     "credits.py", "db.py", "Dockerfile", "embed.py", "integrations.py",
     "limiter.py", "logger.py", "pool.py",
-    "requirements.txt", "schema_builder.py", "start.py", "v1.py",
+    "requirements.txt", "schema_builder.py", "start.py", "v1.py", ".env.example",
 ]
 
 # These files are .gitignored on the production server, so they must be applied
@@ -51,8 +51,8 @@ PATCH_NOTES = """
 PATCH NOTES
 ===========
 Branch : chore/double-token-quotas
-PR     : -
-Date   : 2026-06-22
+PR     : #53
+Date   : 2026-06-23
 
 MANUAL DEPLOY FILES
 ───────────────────
@@ -109,6 +109,99 @@ CHANGES IN THIS PATCH
              Starter=1mo · Growth=3mo · Pro=12mo
    FILES   : datamind/backend/providers/salesplay/analytics.py
              datamind/backend/main.py   ← MANUAL DEPLOY
+
+6. feat(embed): add close button to onboarding wizard
+   PROBLEM : No way to dismiss the wizard without refreshing the page.
+   FIX     : X button added to EmbedSalesplayAutoInit and EmbedOnboarding.
+             Fires dm:close to parent and collapses bar layout if active.
+             Hidden during active sync to prevent mid-flight abandonment.
+   FILES   : datamind/frontend/src/embed/EmbedApp.jsx
+             datamind/frontend/src/embed/EmbedOnboarding.jsx
+             datamind/frontend/src/embed/EmbedSalesplayAutoInit.jsx
+
+── PREVIOUS PATCH (PR #52 · fix/analytics-hub-ux · 2026-06-19) ──────────────
+
+7. fix(analytics): correct product & category revenue to use net sales
+   PROBLEM : top_products and category_performance summed total_money from
+             sp_receipt_line_items, which includes added taxes — causing
+             DataMind totals to exceed SalesPlay's reported net sales.
+   FIX     : Queries now use gross_total_money - total_discount for net_sales
+             and expose gross_sales, discounts, net_sales as separate columns.
+   FILES   : datamind/backend/providers/salesplay/analytics.py
+
+8. feat(analytics): rename total_orders → total_receipts in Customer Purchase Analysis
+   PROBLEM : Column was labelled "total_orders" but receipts are the correct term.
+             Also removed days_since_last_purchase (unreliable metric).
+   FIX     : Column renamed to total_receipts; days_since_last_purchase removed.
+   FILES   : datamind/backend/providers/salesplay/analytics.py
+
+9. feat(analytics): remove Sales by Hour of Day report
+   PROBLEM : Hourly performance template was low-value and cluttered the hub.
+   FIX     : hourly_performance template and its UI render block removed.
+   FILES   : datamind/backend/providers/salesplay/analytics.py
+             datamind/backend/main.py
+             datamind/frontend/src/pages/DiscoverPage.jsx
+
+10. feat(reports-ui): hide currency symbol in Analytics Hub tables
+    PROBLEM : Single-currency tenants don't need the LKR/$ prefix on every
+              monetary value — it adds noise without information.
+    FIX     : formatCurrency() call commented out; formatNumber(v,null,2) used
+              instead. Chat interface untouched.
+    FILES   : datamind/frontend/src/components/UI.jsx
+
+11. fix(locale): enforce 2 decimal places on all monetary columns
+    PROBLEM : 'discounts' column showed no decimals (e.g. "0" not "0.00").
+              KPI cards in Analytics Hub and Reports showed 0dp or 1dp on
+              monetary values.
+    FIX     : Added 'discount' to isCurrencyColumn() regex; KPI decimal logic
+              updated in DiscoverPage and ReportsPage to use isCurrencyColumn.
+    FILES   : datamind/frontend/src/utils/locale.js
+              datamind/frontend/src/pages/DiscoverPage.jsx
+              datamind/frontend/src/pages/ReportsPage.jsx
+
+12. fix(discover-ui): Daily Revenue Trend ascending date order
+    PROBLEM : Chart reversed the SQL result so dates appeared descending.
+    FIX     : Removed .reverse() — SQL already returns ORDER BY date ASC.
+    FILES   : datamind/frontend/src/pages/DiscoverPage.jsx
+
+13. feat(analytics): add hoverable info icon for split-payment note
+    PROBLEM : DataMind Cash/Card breakdown can differ from SalesPlay by a fixed
+              amount for tenants using split-method receipts — sync stores only
+              payments[0] and attributes the full receipt total to it.
+    FIX     : payment_breakdown template defines a "note" field; a small ⓘ icon
+              appears next to the report title on hover showing the explanation.
+              Icon is data-driven — only renders when template defines "note";
+              no provider-specific code in the frontend.
+    FILES   : datamind/backend/providers/salesplay/analytics.py
+              datamind/backend/main.py
+              datamind/frontend/src/pages/DiscoverPage.jsx
+              datamind/frontend/src/index.css
+
+14. fix(table): right-align numeric column headers to match cell alignment
+    PROBLEM : Numeric column headers (e.g. UNITS SOLD) were left-aligned while
+              cell values were right-aligned, making values appear visually
+              shifted between columns.
+    FIX     : DataTable now detects numeric columns from first row and applies
+              text-align:right to both headers and cells.
+    FILES   : datamind/frontend/src/components/UI.jsx
+
+15. fix(analytics): rename 'Uncategorized' to 'No Category'
+    PROBLEM : Products with no category were labelled "Uncategorized" in all
+              reports — replaced with cleaner "No Category" label.
+    FIX     : Updated COALESCE fallback in SalesPlay and Loyverse queries.
+    FILES   : datamind/backend/providers/salesplay/analytics.py
+              datamind/backend/providers/loyverse/analytics.py
+
+16. fix(discover): Refresh button overhaul — sync + re-run combined with
+    visual progress feedback
+    PROBLEM : (a) connection_id missing on catalogue fast-path so sync never
+              fired. (b) Clicking a report card triggered a full sync.
+              (c) Sync had no visual feedback in the hub.
+    FIX     : Fast-path now merges live connection data onto catalogue items.
+              Card click runs query only; Refresh button syncs (with spinner
+              + blue progress banner) then loads the report. Rate-limit
+              countdown shown on button when backend throttles.
+    FILES   : datamind/frontend/src/pages/DiscoverPage.jsx
 
 DB CHANGES  : None
 .ENV CHANGES: None
