@@ -752,7 +752,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
               onFocus={() => setInputFocused(true)}
               onBlur={() => setInputFocused(false)}
-              placeholder="Ask about your data…"
+              placeholder="Ask AI about your data…"
               rows={1}
               style={{ flex:1, background:'transparent', border:'none', color:'#1E293B', fontSize:14, resize:'none', outline:'none', lineHeight:1.5, padding:'8px 0', maxHeight:90, overflowY:'auto', fontFamily:'var(--font)' }}
             />
@@ -792,7 +792,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
               onFocus={() => setInputFocused(true)}
               onBlur={() => setInputFocused(false)}
-              placeholder="Ask about your data…"
+              placeholder="Ask AI about your data…"
               rows={1}
               style={{ flex:1, background:'transparent', border:'none', color:'var(--text)', fontSize:14, resize:'none', outline:'none', lineHeight:1.5, padding:'3px 0', maxHeight:90, overflowY:'auto', fontFamily:'var(--font)' }}
             />
