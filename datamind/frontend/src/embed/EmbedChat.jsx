@@ -286,6 +286,15 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
   const bottomRef = useRef(null)
   const inputRef  = useRef(null)
 
+  // Track iframe viewport width so we can tighten layout on narrow phones
+  const [windowWidth, setWindowWidth] = useState(() => window.innerWidth)
+  useEffect(() => {
+    const handler = () => setWindowWidth(window.innerWidth)
+    window.addEventListener('resize', handler)
+    return () => window.removeEventListener('resize', handler)
+  }, [])
+  const isNarrow = windowWidth < 370
+
   // Token usage for the header indicator — non-fatal if it fails.
   useEffect(() => {
     embedGetSubscription().then(setSub).catch(() => setSub(null))
@@ -434,9 +443,9 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
 
       {/* Header */}
       {isSalesplay ? (
-        <div style={{ padding:'14px 16px 12px', borderBottom:'1px solid rgba(15,23,42,0.05)', flexShrink:0 }}>
-          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:8 }}>
-            <div style={{ display:'flex', alignItems:'center', gap:8, minWidth:0 }}>
+        <div style={{ padding: isNarrow ? '10px 12px 10px' : '14px 16px 12px', borderBottom:'1px solid rgba(15,23,42,0.05)', flexShrink:0 }}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap: isNarrow ? 6 : 8 }}>
+            <div style={{ display:'flex', alignItems:'center', gap: isNarrow ? 6 : 8, minWidth:0 }}>
               <div style={{ width:32, height:32, borderRadius:9, background:'linear-gradient(135deg,#4f8ef7,#a78bfa)', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                   <rect x="2" y="2" width="5" height="5" rx="1" fill="rgba(255,255,255,0.9)"/>
@@ -445,10 +454,10 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
                   <rect x="9" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.9)"/>
                 </svg>
               </div>
-              <span style={{ fontSize:18, fontWeight:800, color:'#191C1E', letterSpacing:'-0.02em', fontFamily:"'Manrope', 'Plus Jakarta Sans', sans-serif", whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{productTitle}</span>
-              <BetaBadge isSalesplay={isSalesplay} />
+              <span style={{ fontSize: isNarrow ? 15 : 18, fontWeight:800, color:'#191C1E', letterSpacing:'-0.02em', fontFamily:"'Manrope', 'Plus Jakarta Sans', sans-serif", overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{productTitle}</span>
+              {!isNarrow && <BetaBadge isSalesplay={isSalesplay} />}
             </div>
-            <div style={{ display:'flex', alignItems:'center', gap:8, flexShrink:0 }}>
+            <div style={{ display:'flex', alignItems:'center', gap: isNarrow ? 6 : 8, flexShrink:0 }}>
               {/* Minimize back to the collapsed search bar (?layout=bar only) */}
               {onCollapse && (
                 <button
@@ -472,12 +481,13 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
                 title={`Open ${productTitle} in a new tab`}
                 style={{
                   background:'#fff', border:'1.5px solid #191C1E',
-                  borderRadius:9999, cursor:'pointer', padding:'7px 14px',
+                  borderRadius:9999, cursor:'pointer',
+                  padding: isNarrow ? '7px 10px' : '7px 14px',
                   display:'flex', alignItems:'center', gap:5,
                   fontSize:12, fontWeight:700, color:'#191C1E', whiteSpace:'nowrap',
                 }}
               >
-                Open App <span style={{ fontSize:13 }}>↗</span>
+                {isNarrow ? <span style={{ fontSize:13 }}>↗</span> : <>Open App <span style={{ fontSize:13 }}>↗</span></>}
               </button>
               {/* Chat history toggle */}
               <button
@@ -500,7 +510,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
           <TokenUsage sub={sub} isSalesplay={isSalesplay} />
         </div>
       ) : (
-        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'10px 14px', borderBottom:'1px solid var(--border)', flexShrink:0, gap:8 }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding: isNarrow ? '10px 10px' : '10px 14px', borderBottom:'1px solid var(--border)', flexShrink:0, gap:8 }}>
           <div style={{ display:'flex', alignItems:'center', gap:8, minWidth:0, flex:1 }}>
             {/* Chat history toggle */}
             <button
@@ -526,9 +536,9 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
               </svg>
             </div>
             <span style={{ fontSize:15, fontWeight:600, color:'var(--text)', letterSpacing:'-0.01em', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{productTitle}</span>
-            <BetaBadge isSalesplay={isSalesplay} />
+            {!isNarrow && <BetaBadge isSalesplay={isSalesplay} />}
           </div>
-          <div style={{ display:'flex', alignItems:'center', gap:8, flexShrink:0 }}>
+          <div style={{ display:'flex', alignItems:'center', gap: isNarrow ? 4 : 8, flexShrink:0 }}>
             <TokenUsage sub={sub} isSalesplay={isSalesplay} />
             {/* Open in main DataMind app — leaves the partner iframe in a new tab */}
             <button
@@ -541,7 +551,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
                 fontSize:11, color:'var(--text2)',
               }}
             >
-              <span style={{ fontSize:12 }}>↗</span> Open in {APP_NAME}
+              {isNarrow ? <span style={{ fontSize:12 }}>↗</span> : <><span style={{ fontSize:12 }}>↗</span> Open in {APP_NAME}</>}
             </button>
             {/* Light / dark toggle */}
             <button
@@ -580,7 +590,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
       {/* Messages area */}
       <div className={isSalesplay ? 'dm-scroll-hidden' : undefined} style={{ flex:1, overflowY:'auto', padding:'14px 0' }}>
         {!hasMessages ? (
-          <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%', padding: isSalesplay ? '0 24px' : '0 18px', textAlign:'center' }}>
+          <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%', padding: isSalesplay ? (isNarrow ? '0 16px' : '0 24px') : (isNarrow ? '0 12px' : '0 18px'), textAlign:'center' }}>
             <div style={{
               fontSize: isSalesplay ? 21 : 18, fontWeight: isSalesplay ? 800 : 600,
               color: isSalesplay ? '#0F172A' : 'var(--text)',
@@ -678,7 +688,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
             </div>
           </div>
         ) : (
-          <div style={{ padding:'0 14px' }}>
+          <div style={{ padding: isNarrow ? '0 10px' : '0 14px' }}>
             {messages.map(msg => <Message key={msg.id} msg={msg} theme={theme} />)}
             <div ref={bottomRef} />
           </div>
@@ -687,7 +697,10 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
 
       {/* Input */}
       <div style={{
-        flexShrink:0, padding: isSalesplay ? '14px 16px' : '10px 12px',
+        flexShrink:0,
+        padding: isSalesplay
+          ? (isNarrow ? '10px 12px' : '14px 16px')
+          : (isNarrow ? '8px 10px' : '10px 12px'),
         borderTop: !isSalesplay && hasMessages ? '1px solid var(--border)' : 'none',
       }}>
         {/* Think Mode toggle — hidden for the embed; thinkMode is always true above.

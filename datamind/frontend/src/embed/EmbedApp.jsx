@@ -23,7 +23,16 @@ import EmbedSearchBar from './EmbedSearchBar'
 // `dm:resize` postMessage — the partner snippet must apply width/height to
 // the <iframe> element. See docs/SALESPLAY_EMBED.md.
 const SIZE_COLLAPSED = { width: 320, height: 64 }
-const SIZE_EXPANDED  = { width: 420, height: 680 }
+
+// Cap expanded width at the device screen width so the iframe doesn't overflow
+// on narrow phones (e.g. 375px iPhone). window.screen.width is the physical
+// device width, not the iframe viewport width, so it's readable here.
+function getExpandedSize() {
+  const sw = typeof window !== 'undefined' && window.screen?.width > 0
+    ? window.screen.width
+    : 420
+  return { width: Math.min(420, sw - 16), height: 680 }
+}
 
 // ── postMessage helper ────────────────────────────────────────────────────────
 // Populated once /embed/context loads; used to validate incoming messages and
@@ -75,7 +84,7 @@ function EmbedApp() {
   // behind a collapsed bar show through (transparent background).
   useEffect(() => {
     if (!layoutBar) return
-    const size = expanded ? SIZE_EXPANDED : SIZE_COLLAPSED
+    const size = expanded ? getExpandedSize() : SIZE_COLLAPSED
     notifyParent('dm:resize', { ...size, expanded })
     document.documentElement.classList.toggle('dm-collapsed', !expanded)
     document.body.classList.toggle('dm-collapsed', !expanded)
@@ -223,6 +232,11 @@ function EmbedApp() {
     document.documentElement.style.setProperty('--blue', accentColor)
   }
 
+  function handleClose() {
+    notifyParent('dm:close')
+    if (layoutBar) setExpanded(false)
+  }
+
   if (state === 'salesplay_init') {
     return (
       <EmbedSalesplayAutoInit
@@ -231,6 +245,7 @@ function EmbedApp() {
         aatToken={aatToken}
         onComplete={handleOnboardingComplete}
         onError={(msg) => { setError(msg); setState('error') }}
+        onClose={handleClose}
       />
     )
   }
@@ -241,6 +256,7 @@ function EmbedApp() {
         context={context}
         partnerKey={partnerKey}
         onComplete={handleOnboardingComplete}
+        onClose={handleClose}
       />
     )
   }

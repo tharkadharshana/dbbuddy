@@ -171,7 +171,7 @@ function BetaBadge({ sp, large }) {
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, onComplete, onError }) {
+export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, onComplete, onError, onClose }) {
   const sp = context?.provider_id === 'salesplay'
 
   const [phase, setPhase]       = useState('consent')  // 'consent' | 'profile' | 'account' | 'sync' | 'error'
@@ -289,6 +289,8 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
   }
 
   // ── Render ────────────────────────────────────────────────────────────────────
+  const canClose = phase === 'consent' || phase === 'error'
+
   return (
     <div style={{
       height: '100%', overflowY: 'auto',
@@ -296,7 +298,17 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
       alignItems: 'center', justifyContent: phase === 'consent' ? 'flex-start' : 'center',
       padding: '24px 20px', textAlign: 'center',
       background: sp ? SP.bg : undefined,
+      position: 'relative',
     }}>
+      {canClose && onClose && (
+        <button onClick={onClose} style={{
+          position: 'absolute', top: 12, right: 12,
+          background: 'none', border: 'none', cursor: 'pointer',
+          color: sp ? SP.text3 : 'var(--text3)',
+          fontSize: 18, lineHeight: 1, padding: 4, borderRadius: 6,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>✕</button>
+      )}
       {!(sp && phase === 'consent') && (
         <>
           <Logo />

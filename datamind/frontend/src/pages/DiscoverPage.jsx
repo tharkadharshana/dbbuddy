@@ -136,7 +136,11 @@ function SourceBadge({ source }) {
 
 // ── Result Panel ──────────────────────────────────────────────────────────────
 function ResultPanel({ result, templateId }) {
-  const { title, columns, data, row_count, source } = result
+  const { title, columns, data, row_count, source,
+          table_columns, table_data, table_count } = result
+  const tblCols = table_columns || columns
+  const tblData = table_data    || data
+  const tblCount = table_count  ?? row_count
 
   const renderChart = () => {
     if (!data?.length) return null
@@ -149,7 +153,7 @@ function ResultPanel({ result, templateId }) {
     if (templateId === 'revenue_trend') {
       const chartData = data
       return (
-        <ChartCard title="Daily Revenue & Transactions">
+        <ChartCard title="Monthly Revenue & Transactions">
           <ResponsiveContainer width="100%" height={240}>
             <ComposedChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
@@ -212,13 +216,32 @@ function ResultPanel({ result, templateId }) {
             const vals = data.map(r => r[col]||0)
             const total = vals.reduce((a,b)=>a+b,0)
             const isAvg = col.includes('avg')||col.includes('pct')||col.includes('rate')||col.includes('margin')
-            const val = data.length===1 ? data[0][col] : (isAvg ? total/vals.length : total)
+
+            let val
+            if (data.length === 1) {
+              val = data[0][col]
+            } else if (isAvg && (col.includes('avg_ticket') || col.includes('avg_order'))) {
+              // Weighted average: total revenue / total transactions — averaging daily
+              // averages gives the wrong result when transaction counts differ across rows.
+              const revCol  = columns.find(c => c.includes('revenue') || c.includes('total_money'))
+              const txCol   = columns.find(c => c.includes('transaction') || c.includes('receipt') || c.includes('order'))
+              const totalRev = revCol ? data.reduce((a, r) => a + (r[revCol] || 0), 0) : null
+              const totalTx  = txCol  ? data.reduce((a, r) => a + (r[txCol]  || 0), 0) : null
+              val = totalRev !== null && totalTx ? totalRev / totalTx : total / vals.length
+            } else {
+              val = isAvg ? total / vals.length : total
+            }
+
+            // For multi-row timeseries, clarify that non-avg KPIs are period totals
+            const multiRow = data.length > 1
+            const label = multiRow && !isAvg
+              ? `total ${col.replace(/_/g,' ')}`
+              : col.replace(/_/g,' ')
+
             const colors = ['var(--blue)','var(--green)','var(--purple)','var(--amber)']
             const decimals = isCurrencyColumn(col) ? 2 : (Number.isInteger(val) ? 0 : 1)
-            // Currency symbol hidden in Analytics Hub reports — single-currency tenants don't need it
-            // const kpiVal = typeof val==='number'?(isCurrencyColumn(col)?formatCurrency(val):formatNumber(val,null,decimals)):val
             const kpiVal = typeof val==='number' ? formatNumber(val, null, decimals) : val
-            return <KPICard key={col} label={col.replace(/_/g,' ')} value={kpiVal} color={colors[i%4]} />
+            return <KPICard key={col} label={label} value={kpiVal} color={colors[i%4]} />
           })}
         </div>
       )}
@@ -227,9 +250,9 @@ function ResultPanel({ result, templateId }) {
 
       <Card style={{ overflow:'hidden' }}>
         <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'12px 16px', borderBottom:'1px solid var(--border)' }}>
-          <span style={{ fontSize:12, fontWeight:500, color:'var(--text2)' }}>Data · {row_count} rows</span>
+          <span style={{ fontSize:12, fontWeight:500, color:'var(--text2)' }}>Data · {tblCount} rows</span>
         </div>
-        <DataTable columns={columns} data={data} maxHeight={320} />
+        <DataTable columns={tblCols} data={tblData} maxHeight={320} />
       </Card>
     </div>
   )
