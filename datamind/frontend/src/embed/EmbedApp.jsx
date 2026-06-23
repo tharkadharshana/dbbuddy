@@ -232,6 +232,11 @@ function EmbedApp() {
     document.documentElement.style.setProperty('--blue', accentColor)
   }
 
+  function handleClose() {
+    notifyParent('dm:close')
+    if (layoutBar) setExpanded(false)
+  }
+
   if (state === 'salesplay_init') {
     return (
       <EmbedSalesplayAutoInit
@@ -240,6 +245,7 @@ function EmbedApp() {
         aatToken={aatToken}
         onComplete={handleOnboardingComplete}
         onError={(msg) => { setError(msg); setState('error') }}
+        onClose={handleClose}
       />
     )
   }
@@ -250,6 +256,7 @@ function EmbedApp() {
         context={context}
         partnerKey={partnerKey}
         onComplete={handleOnboardingComplete}
+        onClose={handleClose}
       />
     )
   }

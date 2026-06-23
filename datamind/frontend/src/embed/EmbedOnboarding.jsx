@@ -69,7 +69,7 @@ function Spin() {
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function EmbedOnboarding({ context, partnerKey, onComplete }) {
+export default function EmbedOnboarding({ context, partnerKey, onComplete, onClose }) {
   const [step, setStep]               = useState(0)
 
   // Step 0
@@ -190,8 +190,18 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete }) {
   }
 
   // ── Render ───────────────────────────────────────────────────────────────────
+  const canClose = !(step === 3 && connecting)
+
   return (
-    <div style={{ height:'100%', overflowY:'auto', padding:'20px 16px', display:'flex', flexDirection:'column' }}>
+    <div style={{ height:'100%', overflowY:'auto', padding:'20px 16px', display:'flex', flexDirection:'column', position:'relative' }}>
+      {canClose && onClose && (
+        <button onClick={onClose} style={{
+          position:'absolute', top:12, right:12,
+          background:'none', border:'none', cursor:'pointer',
+          color:'var(--text3)', fontSize:18, lineHeight:1, padding:4, borderRadius:6,
+          display:'flex', alignItems:'center', justifyContent:'center',
+        }}>✕</button>
+      )}
 
       {/* Header */}
       <div style={{ textAlign:'center', marginBottom:20 }}>
