@@ -66,13 +66,12 @@ diff against the live server copy first.
 CHANGES IN THIS PATCH
 ─────────────────────
 
-1. feat(logo): single <Logo/> component + "AI" wordmark logo
+1. refactor(logo): consolidate brand mark into a single <Logo/> component
    PROBLEM : The brand mark was hand-copied inline in ~10 places across the
              app and embed widget, so there was no single place to change it.
    FIX     : Extracted one reusable <Logo/> component (single source of truth)
-             referenced everywhere, then set the logo to the "AI" wordmark with
-             the 4-square brand mark as a top-right accent. Favicon kept as the
-             standalone 4-square badge (legible at favicon sizes).
+             referenced everywhere. The logo itself is unchanged — the original
+             4-square brand mark. Future logo changes are now a one-file edit.
    FILES   : datamind/frontend/src/components/Logo.jsx  (new)
              datamind/frontend/src/components/Sidebar.jsx
              datamind/frontend/src/pages/AuthPage.jsx
