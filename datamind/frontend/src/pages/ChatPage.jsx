@@ -396,7 +396,7 @@ export default function ChatPage({
                 maxHeight:120, overflowY:'auto', fontFamily:'var(--font)',
               }}
             />
-            {/* Think Mode toggle */}
+            {/* Think Mode toggle (brain icon) — temporarily hidden.
             <button
               onClick={() => setThinkMode(m => !m)}
               title={thinkMode ? 'Think Mode ON — click to turn off (Uses X2 Tokens)' : 'Think Mode OFF — click to enable AI analysis of results'}
@@ -411,6 +411,7 @@ export default function ChatPage({
             >
               🧠
             </button>
+            */}
             <button onClick={() => send()} disabled={loading || !input.trim()} style={{
               width:38, height:38, borderRadius:10, flexShrink:0, alignSelf:'flex-end',
               background: loading || !input.trim() ? 'var(--bg3)' : 'var(--blue)',
