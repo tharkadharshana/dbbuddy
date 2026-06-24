@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { runNLQuery, createConversation, getConversationMessages, getErrorMessage } from '../utils/api'
 import { Spinner, UsageMeter } from '../components/UI'
+import Logo from '../components/Logo'
 import { formatCurrency, formatNumber } from '../utils/locale'
 
 const TT = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)', borderRadius:8, fontSize:12, color:'#f0f1fa' }
@@ -134,9 +135,7 @@ function Message({ msg, llm }) {
 
   return (
     <div style={{ display:'flex', gap:12, marginBottom:24, alignItems:'flex-start' }}>
-      <div style={{ width:30, height:30, borderRadius:'50%', background:'linear-gradient(135deg,#4f8ef7,#a78bfa)', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, marginTop:2 }}>
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="5" height="5" rx="1" fill="rgba(255,255,255,0.9)"/><rect x="9" y="2" width="5" height="5" rx="1" fill="rgba(255,255,255,0.5)"/><rect x="2" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.5)"/><rect x="9" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.9)"/></svg>
-      </div>
+      <Logo size={30} radius={15} style={{ flexShrink:0, marginTop:2 }} />
       <div style={{ flex:1, minWidth:0 }}>
         {msg.loading ? (
           <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
@@ -348,9 +347,7 @@ export default function ChatPage({
         {!hasMessages ? (
           /* Empty state — ChatGPT style welcome */
           <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%', padding:'0 24px', textAlign:'center' }}>
-            <div style={{ width:56, height:56, borderRadius:16, background:'linear-gradient(135deg,#4f8ef7,#a78bfa)', display:'flex', alignItems:'center', justifyContent:'center', marginBottom:20, boxShadow:'0 8px 24px rgba(79,142,247,0.25)' }}>
-              <svg width="26" height="26" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="5" height="5" rx="1" fill="rgba(255,255,255,0.95)"/><rect x="9" y="2" width="5" height="5" rx="1" fill="rgba(255,255,255,0.5)"/><rect x="2" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.5)"/><rect x="9" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.95)"/></svg>
-            </div>
+            <Logo size={56} radius={16} shadow="0 8px 24px rgba(79,142,247,0.25)" style={{ marginBottom:20 }} />
             <h2 style={{ fontSize:22, fontWeight:700, color:'var(--text)', marginBottom:8 }}>
               {connection ? `Ask your ${connection.display_name || connection.name} data` : 'Ask your data anything'}
             </h2>

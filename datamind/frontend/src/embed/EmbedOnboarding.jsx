@@ -13,6 +13,7 @@ import {
 } from './embedApi'
 import { notifyParent } from './EmbedApp'
 import { appName, productTitle } from './embedBranding'
+import Logo from '../components/Logo'
 
 // ── Shared styles ─────────────────────────────────────────────────────────────
 const inp = {
@@ -207,14 +208,7 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete, onClo
 
       {/* Header */}
       <div style={{ textAlign:'center', marginBottom:20 }}>
-        <div style={{ width:40, height:40, borderRadius:11, background:'linear-gradient(135deg,#4f8ef7,#a78bfa)', display:'inline-flex', alignItems:'center', justifyContent:'center', marginBottom:10, boxShadow:'0 4px 16px rgba(79,142,247,0.3)' }}>
-          <svg width="18" height="18" viewBox="0 0 16 16" fill="none">
-            <rect x="2" y="2" width="5" height="5" rx="1" fill="rgba(255,255,255,0.95)"/>
-            <rect x="9" y="2" width="5" height="5" rx="1" fill="rgba(255,255,255,0.5)"/>
-            <rect x="2" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.5)"/>
-            <rect x="9" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.95)"/>
-          </svg>
-        </div>
+        <Logo size={40} radius={11} shadow="0 4px 16px rgba(79,142,247,0.3)" style={{ marginBottom:10 }} />
         <div style={{ fontSize:15, fontWeight:700, color:'var(--text)' }}>{title}</div>
         <div style={{ fontSize:12, color:'var(--text3)', marginTop:2 }}>Ask your {providerName} data anything</div>
       </div>

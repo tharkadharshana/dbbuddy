@@ -15,6 +15,7 @@ import React, { useState, useEffect } from 'react'
 import { salesplayOnboard, embedGetProviderStatus, embedGetPlans } from './embedApi'
 import { notifyParent } from './EmbedApp'
 import { appName, productTitle as resolveProductTitle } from './embedBranding'
+import BrandLogo from '../components/Logo'
 
 // ── SalesPlay visual language (mirrors EmbedChat's isSalesplay branch) ───────
 const SP = {
@@ -115,22 +116,7 @@ function Spin({ sp }) {
 }
 
 function Logo() {
-  return (
-    <div style={{
-      width: 40, height: 40, borderRadius: 11,
-      background: 'linear-gradient(135deg,#4f8ef7,#a78bfa)',
-      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-      marginBottom: 10,
-      boxShadow: '0 4px 16px rgba(79,142,247,0.3)',
-    }}>
-      <svg width="18" height="18" viewBox="0 0 16 16" fill="none">
-        <rect x="2" y="2" width="5" height="5" rx="1" fill="rgba(255,255,255,0.95)" />
-        <rect x="9" y="2" width="5" height="5" rx="1" fill="rgba(255,255,255,0.5)" />
-        <rect x="2" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.5)" />
-        <rect x="9" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.95)" />
-      </svg>
-    </div>
-  )
+  return <BrandLogo size={40} radius={11} shadow="0 4px 16px rgba(79,142,247,0.3)" style={{ marginBottom: 10 }} />
 }
 
 // Translates raw backend sync-progress messages (which name specific data

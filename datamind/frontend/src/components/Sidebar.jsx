@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react'
 import { deleteConversation } from '../utils/api'
 import { APP_NAME } from '../appName'
+import Logo from './Logo'
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
 const IC = {
@@ -297,14 +298,7 @@ export default function Sidebar({ active, setActive, connection, cacheStatus, to
       {/* Logo */}
       <div style={{ padding:'16px 14px 12px', borderBottom:'1px solid var(--border)' }}>
         <div style={{ display:'flex', alignItems:'center', gap:9 }}>
-          <div style={{ width:32, height:32, borderRadius:9, background:'linear-gradient(135deg,#4f8ef7,#a78bfa)', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-              <rect x="2" y="2" width="5" height="5" rx="1" fill="rgba(255,255,255,0.95)"/>
-              <rect x="9" y="2" width="5" height="5" rx="1" fill="rgba(255,255,255,0.5)"/>
-              <rect x="2" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.5)"/>
-              <rect x="9" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.95)"/>
-            </svg>
-          </div>
+          <Logo size={32} />
           <div>
             <div style={{ fontWeight:700, fontSize:14, lineHeight:1.1, display:'flex', alignItems:'center', gap:5 }}>
               {APP_NAME}
