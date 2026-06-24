@@ -1,45 +1,115 @@
 import React from 'react'
 
 /**
- * Brand logo lockup: the 4-square mark + "AI" wordmark.
+ * Brand logo: the pixel-art "AI" mark on a dark indigo card with a glowing
+ * gradient border.
  *
  * This is the single source of truth for the app logo so every surface
- * (sidebar, auth, onboarding, embed widget, …) stays in sync.
+ * (sidebar, auth, onboarding, embed widget, …) stays in sync. To change the
+ * logo app-wide, edit only this file.
  *
  * Props:
- *   size       – height of the badge in px (the "AI" wordmark scales with it)
- *   wordmark   – show the "AI" wordmark next to the badge (default true)
- *   wordColor  – color of the "AI" wordmark (default brand blue)
- *   style      – extra wrapper styles
+ *   size    – width/height of the (square) logo in px
+ *   radius  – kept for API compatibility with call sites; the pixel card has
+ *             its own corner radius, so this is only used to clip the wrapper
+ *   shadow  – optional CSS box-shadow on the logo
+ *   style   – extra wrapper styles
+ *
+ *   `wordmark`/`wordColor` are accepted but ignored — the "AI" letters are
+ *   baked into the pixel art.
  */
-export default function Logo({ size = 32, radius, wordmark = false, wordColor = '#4f8ef7', shadow = false, style = {} }) {
-  const r = radius != null ? radius : Math.round(size * 0.28)
-  const inner  = Math.round(size * 0.5)
-  const fontSize = Math.round(size * 0.92)
-
+export default function Logo({ size = 32, radius, shadow = false, style = {}, wordmark, wordColor }) {
   return (
-    <div style={{ display: 'inline-flex', alignItems: 'center', gap: Math.round(size * 0.3), ...style }}>
-      <div style={{
-        width: size, height: size, borderRadius: r, flexShrink: 0,
-        background: 'linear-gradient(135deg,#4f8ef7,#a78bfa)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        boxShadow: shadow || 'none',
-      }}>
-        <svg width={inner} height={inner} viewBox="0 0 16 16" fill="none">
-          <rect x="2" y="2" width="5" height="5" rx="1" fill="rgba(255,255,255,0.95)" />
-          <rect x="9" y="2" width="5" height="5" rx="1" fill="rgba(255,255,255,0.5)" />
-          <rect x="2" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.5)" />
-          <rect x="9" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.95)" />
-        </svg>
-      </div>
-      {wordmark && (
-        <span style={{
-          fontWeight: 800, fontSize, lineHeight: 1, letterSpacing: '-0.04em',
-          color: wordColor, fontFamily: 'inherit',
-        }}>
-          AI
-        </span>
-      )}
+    <div style={{
+      width: size, height: size, flexShrink: 0,
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+      borderRadius: radius != null ? radius : Math.round(size * 0.22),
+      boxShadow: shadow || 'none',
+      ...style,
+    }}>
+      <svg width={size} height={size} viewBox="0 0 680 680" role="img" aria-label="AI logo" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <radialGradient id="ai-pixel-bg" cx="40%" cy="35%" r="70%">
+            <stop offset="0%" stopColor="#1e1b4b" />
+            <stop offset="100%" stopColor="#0a0918" />
+          </radialGradient>
+          <linearGradient id="ai-pixel-border" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#a5b4fc" />
+            <stop offset="40%" stopColor="#6366f1" />
+            <stop offset="100%" stopColor="#4338ca" />
+          </linearGradient>
+          <linearGradient id="ai-pixel-border2" x1="100%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stopColor="#e0e7ff" />
+            <stop offset="50%" stopColor="#818cf8" />
+            <stop offset="100%" stopColor="#3730a3" />
+          </linearGradient>
+        </defs>
+
+        {/* Outer glow rings */}
+        <rect x="80" y="80" width="520" height="520" rx="96" fill="none" stroke="#6366f1" strokeWidth="6" opacity="0.15" />
+        <rect x="86" y="86" width="508" height="508" rx="90" fill="none" stroke="#818cf8" strokeWidth="4" opacity="0.2" />
+
+        {/* Gradient border */}
+        <rect x="92" y="92" width="496" height="496" rx="84" fill="none" stroke="url(#ai-pixel-border)" strokeWidth="14" />
+        <rect x="92" y="92" width="496" height="496" rx="84" fill="none" stroke="url(#ai-pixel-border2)" strokeWidth="14" opacity="0.5" />
+        <rect x="107" y="107" width="466" height="466" rx="72" fill="none" stroke="#c7d2fe" strokeWidth="1.5" opacity="0.3" />
+
+        {/* Card */}
+        <rect x="110" y="110" width="460" height="460" rx="70" fill="url(#ai-pixel-bg)" />
+
+        {/* Corner accents */}
+        <circle cx="110" cy="110" r="5" fill="#a5b4fc" opacity="0.6" />
+        <circle cx="570" cy="110" r="5" fill="#a5b4fc" opacity="0.6" />
+        <circle cx="110" cy="570" r="5" fill="#a5b4fc" opacity="0.6" />
+        <circle cx="570" cy="570" r="5" fill="#a5b4fc" opacity="0.6" />
+
+        {/* Pixel "A" */}
+        <rect x="156" y="116" width="36" height="36" rx="5" fill="#818cf8" />
+        <rect x="196" y="116" width="36" height="36" rx="5" fill="#a5b4fc" />
+        <rect x="236" y="116" width="36" height="36" rx="5" fill="#a5b4fc" />
+        <rect x="276" y="116" width="36" height="36" rx="5" fill="#818cf8" />
+        <rect x="116" y="156" width="36" height="36" rx="5" fill="#6366f1" />
+        <rect x="316" y="156" width="36" height="36" rx="5" fill="#6366f1" />
+        <rect x="116" y="196" width="36" height="36" rx="5" fill="#6366f1" />
+        <rect x="316" y="196" width="36" height="36" rx="5" fill="#6366f1" />
+        <rect x="116" y="236" width="36" height="36" rx="5" fill="#6366f1" />
+        <rect x="316" y="236" width="36" height="36" rx="5" fill="#6366f1" />
+        <rect x="116" y="276" width="36" height="36" rx="5" fill="#e0e7ff" />
+        <rect x="156" y="276" width="36" height="36" rx="5" fill="#e0e7ff" />
+        <rect x="196" y="276" width="36" height="36" rx="5" fill="#e0e7ff" />
+        <rect x="236" y="276" width="36" height="36" rx="5" fill="#e0e7ff" />
+        <rect x="276" y="276" width="36" height="36" rx="5" fill="#e0e7ff" />
+        <rect x="316" y="276" width="36" height="36" rx="5" fill="#e0e7ff" />
+        <rect x="116" y="316" width="36" height="36" rx="5" fill="#818cf8" />
+        <rect x="316" y="316" width="36" height="36" rx="5" fill="#818cf8" />
+        <rect x="116" y="356" width="36" height="36" rx="5" fill="#818cf8" />
+        <rect x="316" y="356" width="36" height="36" rx="5" fill="#818cf8" />
+        <rect x="116" y="396" width="36" height="36" rx="5" fill="#6366f1" />
+        <rect x="316" y="396" width="36" height="36" rx="5" fill="#6366f1" />
+        <rect x="116" y="436" width="36" height="36" rx="5" fill="#6366f1" />
+        <rect x="316" y="436" width="36" height="36" rx="5" fill="#6366f1" />
+        <rect x="116" y="476" width="36" height="36" rx="5" fill="#6366f1" />
+        <rect x="316" y="476" width="36" height="36" rx="5" fill="#6366f1" />
+        <rect x="116" y="516" width="36" height="36" rx="5" fill="#4f46e5" />
+        <rect x="316" y="516" width="36" height="36" rx="5" fill="#4f46e5" />
+
+        {/* Pixel "I" */}
+        <rect x="436" y="116" width="36" height="36" rx="5" fill="#818cf8" />
+        <rect x="476" y="116" width="36" height="36" rx="5" fill="#e0e7ff" />
+        <rect x="516" y="116" width="36" height="36" rx="5" fill="#818cf8" />
+        <rect x="476" y="156" width="36" height="36" rx="5" fill="#a5b4fc" />
+        <rect x="476" y="196" width="36" height="36" rx="5" fill="#a5b4fc" />
+        <rect x="476" y="236" width="36" height="36" rx="5" fill="#a5b4fc" />
+        <rect x="476" y="276" width="36" height="36" rx="5" fill="#e0e7ff" />
+        <rect x="476" y="316" width="36" height="36" rx="5" fill="#a5b4fc" />
+        <rect x="476" y="356" width="36" height="36" rx="5" fill="#a5b4fc" />
+        <rect x="476" y="396" width="36" height="36" rx="5" fill="#a5b4fc" />
+        <rect x="476" y="436" width="36" height="36" rx="5" fill="#a5b4fc" />
+        <rect x="476" y="476" width="36" height="36" rx="5" fill="#a5b4fc" />
+        <rect x="436" y="516" width="36" height="36" rx="5" fill="#818cf8" />
+        <rect x="476" y="516" width="36" height="36" rx="5" fill="#e0e7ff" />
+        <rect x="516" y="516" width="36" height="36" rx="5" fill="#818cf8" />
+      </svg>
     </div>
   )
 }
