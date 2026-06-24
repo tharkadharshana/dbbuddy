@@ -819,7 +819,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
         )}
         {hasMessages && (
           <div style={{ textAlign:'center', marginTop:6 }}>
-            <button onClick={() => { setMessages([]); setConvId(null) }} style={{ fontSize:10, color: isSalesplay ? '#94A3B8' : 'var(--text3)', background:'none', border:'none', cursor:'pointer' }}>
+            <button onClick={() => { setMessages([]); setConvId(null) }} style={{ fontSize:10, fontWeight:700, textDecoration:'underline', color: isSalesplay ? '#94A3B8' : 'var(--text3)', background:'none', border:'none', cursor:'pointer' }}>
               Clear conversation
             </button>
           </div>
