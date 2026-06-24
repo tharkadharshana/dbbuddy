@@ -66,12 +66,13 @@ diff against the live server copy first.
 CHANGES IN THIS PATCH
 ─────────────────────
 
-1. refactor(logo): consolidate brand mark into a single <Logo/> component
+1. feat(logo): single <Logo/> component + Gemini-style three-sparkle mark
    PROBLEM : The brand mark was hand-copied inline in ~10 places across the
              app and embed widget, so there was no single place to change it.
    FIX     : Extracted one reusable <Logo/> component (single source of truth)
-             referenced everywhere. The logo itself is unchanged — the original
-             4-square brand mark. Future logo changes are now a one-file edit.
+             referenced everywhere, then set the logo to a Gemini-style three-
+             sparkle mark (one large + two small) in blue. Favicon updated to
+             match. Future logo changes are now a one-file edit.
    FILES   : datamind/frontend/src/components/Logo.jsx  (new)
              datamind/frontend/src/components/Sidebar.jsx
              datamind/frontend/src/pages/AuthPage.jsx
