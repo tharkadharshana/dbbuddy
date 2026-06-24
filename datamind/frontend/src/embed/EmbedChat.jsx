@@ -13,7 +13,8 @@ import { getErrorMessage } from '../utils/api'
 import { formatCurrency } from '../utils/locale'
 import { notifyParent } from './EmbedApp'
 import EmbedHistoryDrawer from './EmbedHistoryDrawer'
-const APP_NAME = import.meta.env.VITE_APP_NAME || 'SalesPlay AI'
+import { appName, productTitle as resolveProductTitle } from './embedBranding'
+import Logo from '../components/Logo'
 
 const TT = {
   background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)',
@@ -216,14 +217,7 @@ function Message({ msg, theme }) {
 
   return (
     <div style={{ display:'flex', gap:8, marginBottom:18, alignItems:'flex-start' }}>
-      <div style={{ width:24, height:24, borderRadius:'50%', background:'linear-gradient(135deg,#4f8ef7,#a78bfa)', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, marginTop:2 }}>
-        <svg width="11" height="11" viewBox="0 0 16 16" fill="none">
-          <rect x="2" y="2" width="5" height="5" rx="1" fill="rgba(255,255,255,0.9)"/>
-          <rect x="9" y="2" width="5" height="5" rx="1" fill="rgba(255,255,255,0.5)"/>
-          <rect x="2" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.5)"/>
-          <rect x="9" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.9)"/>
-        </svg>
-      </div>
+      <Logo size={24} radius={12} style={{ flexShrink:0, marginTop:2 }} />
       <div style={{ flex:1, minWidth:0 }}>
         {msg.loading ? (
           <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
@@ -269,7 +263,8 @@ function Message({ msg, theme }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 export default function EmbedChat({ context, onExpired, onLogout, onCollapse, initialInput = '' }) {
-  const productTitle = context?.branding?.product_name || 'Ask Your Data'
+  const productTitle = resolveProductTitle(context)
+  const APP_NAME = appName(context)
   const isSalesplay = context?.provider_id === 'salesplay'
   // Same accent used by the collapsed search bar (EmbedSearchBar) — keeps the
   // "closed" pill and the "open" input bar visually identical.
@@ -446,14 +441,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
         <div style={{ padding: isNarrow ? '10px 12px 10px' : '14px 16px 12px', borderBottom:'1px solid rgba(15,23,42,0.05)', flexShrink:0 }}>
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap: isNarrow ? 6 : 8 }}>
             <div style={{ display:'flex', alignItems:'center', gap: isNarrow ? 6 : 8, minWidth:0 }}>
-              <div style={{ width:32, height:32, borderRadius:9, background:'linear-gradient(135deg,#4f8ef7,#a78bfa)', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                  <rect x="2" y="2" width="5" height="5" rx="1" fill="rgba(255,255,255,0.9)"/>
-                  <rect x="9" y="2" width="5" height="5" rx="1" fill="rgba(255,255,255,0.5)"/>
-                  <rect x="2" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.5)"/>
-                  <rect x="9" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.9)"/>
-                </svg>
-              </div>
+              <Logo size={32} radius={9} style={{ flexShrink:0 }} />
               <span style={{ fontSize: isNarrow ? 15 : 18, fontWeight:800, color:'#191C1E', letterSpacing:'-0.02em', fontFamily:"'Manrope', 'Plus Jakarta Sans', sans-serif", overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{productTitle}</span>
               {!isNarrow && <BetaBadge isSalesplay={isSalesplay} />}
             </div>
@@ -527,14 +515,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
                 <path d="M12 7v5l3 3" />
               </svg>
             </button>
-            <div style={{ width:22, height:22, borderRadius:6, background:'linear-gradient(135deg,#4f8ef7,#a78bfa)', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
-              <svg width="11" height="11" viewBox="0 0 16 16" fill="none">
-                <rect x="2" y="2" width="5" height="5" rx="1" fill="rgba(255,255,255,0.9)"/>
-                <rect x="9" y="2" width="5" height="5" rx="1" fill="rgba(255,255,255,0.5)"/>
-                <rect x="2" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.5)"/>
-                <rect x="9" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.9)"/>
-              </svg>
-            </div>
+            <Logo size={22} radius={6} style={{ flexShrink:0 }} />
             <span style={{ fontSize:15, fontWeight:600, color:'var(--text)', letterSpacing:'-0.01em', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{productTitle}</span>
             {!isNarrow && <BetaBadge isSalesplay={isSalesplay} />}
           </div>
@@ -740,8 +721,10 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
               width:28, height:28, borderRadius:'50%', flexShrink:0,
               background:`${accent}1A`, display:'flex', alignItems:'center', justifyContent:'center', color:accent,
             }}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+              {/* AI sparkle — matches the collapsed search bar icon */}
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 2l1.7 5.3L19 9l-5.3 1.7L12 16l-1.7-5.3L5 9l5.3-1.7L12 2z" />
+                <path d="M19 13.5l.85 2.65L22.5 17l-2.65.85L19 20.5l-.85-2.65L15.5 17l2.65-.85L19 13.5z" />
               </svg>
             </span>
             <textarea
@@ -751,7 +734,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
               onFocus={() => setInputFocused(true)}
               onBlur={() => setInputFocused(false)}
-              placeholder="Ask about your data…"
+              placeholder="Ask AI about your data…"
               rows={1}
               style={{ flex:1, background:'transparent', border:'none', color:'#1E293B', fontSize:14, resize:'none', outline:'none', lineHeight:1.5, padding:'8px 0', maxHeight:90, overflowY:'auto', fontFamily:'var(--font)' }}
             />
@@ -791,7 +774,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
               onFocus={() => setInputFocused(true)}
               onBlur={() => setInputFocused(false)}
-              placeholder="Ask about your data…"
+              placeholder="Ask AI about your data…"
               rows={1}
               style={{ flex:1, background:'transparent', border:'none', color:'var(--text)', fontSize:14, resize:'none', outline:'none', lineHeight:1.5, padding:'3px 0', maxHeight:90, overflowY:'auto', fontFamily:'var(--font)' }}
             />
@@ -816,13 +799,13 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
         )}
         {hasMessages && (
           <div style={{ textAlign:'center', marginTop:6 }}>
-            <button onClick={() => { setMessages([]); setConvId(null) }} style={{ fontSize:10, color: isSalesplay ? '#94A3B8' : 'var(--text3)', background:'none', border:'none', cursor:'pointer' }}>
+            <button onClick={() => { setMessages([]); setConvId(null) }} style={{ fontSize:10, fontWeight:700, textDecoration:'underline', color: isSalesplay ? '#94A3B8' : 'var(--text3)', background:'none', border:'none', cursor:'pointer' }}>
               Clear conversation
             </button>
           </div>
         )}
         <div style={{ textAlign:'center', marginTop:6, fontSize:9, color: isSalesplay ? '#94A3B8' : 'var(--text3)' }}>
-          DataMind can make mistakes. Please verify important information.
+          AI can make mistakes.
         </div>
       </div>
 

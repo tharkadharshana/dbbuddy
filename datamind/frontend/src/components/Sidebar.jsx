@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react'
 import { deleteConversation } from '../utils/api'
 import { APP_NAME } from '../appName'
+import Logo from './Logo'
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
 const IC = {
@@ -23,8 +24,10 @@ const ANALYTICS_SUB = [
   { id:'reports',   label:'Reports',        icon: IC.report },
 ]
 const PREDICTIONS_SUB = [
-  { id:'forecast',  label:'Forecasting',    icon: IC.trend },
-  { id:'anomaly',   label:'Anomaly Alerts', icon: IC.alert },
+  // Forecasting & Anomaly Alerts are shown but intentionally non-clickable for now.
+  // The "Predictions" group itself stays expandable.
+  { id:'forecast',  label:'Forecasting',    icon: IC.trend,  disabled:true },
+  { id:'anomaly',   label:'Anomaly Alerts', icon: IC.alert,  disabled:true },
 ]
 
 function NavGroup({ label, icon, items, active, setActive, defaultOpen=false }) {
@@ -47,12 +50,13 @@ function NavGroup({ label, icon, items, active, setActive, defaultOpen=false }) 
       {open && (
         <div style={{ marginLeft:14, marginTop:2, borderLeft:'1px solid var(--border)', paddingLeft:10 }}>
           {items.map(item => (
-            <div key={item.id} onClick={() => setActive(item.id)} style={{
+            <div key={item.id} onClick={item.disabled ? undefined : () => setActive(item.id)} style={{
               display:'flex', alignItems:'center', gap:9, padding:'7px 10px',
-              borderRadius:'var(--r-sm)', cursor:'pointer', fontSize:13, marginBottom:1,
+              borderRadius:'var(--r-sm)', cursor: item.disabled ? 'default' : 'pointer', fontSize:13, marginBottom:1,
               background: active===item.id ? 'var(--blue-dim)' : 'transparent',
-              color: active===item.id ? 'var(--blue)' : 'var(--text2)',
+              color: item.disabled ? 'var(--text3)' : (active===item.id ? 'var(--blue)' : 'var(--text2)'),
               fontWeight: active===item.id ? 600 : 400,
+              opacity: item.disabled ? 0.6 : 1,
             }}>
               <span style={{ opacity:.7 }}>{item.icon}</span>
               {item.label}
@@ -68,6 +72,7 @@ function ChatNavItem({ active, setActive, conversations, activeConvId, onConvSel
   const [open, setOpen] = useState(false)
   const [hoverId, setHoverId] = useState(null)
   const [deletingId, setDeletingId] = useState(null)
+  const [confirmId, setConfirmId] = useState(null) // conversation pending delete confirmation
   const isChatActive = active === 'chat'
 
   function fmtDate(iso) {
@@ -81,9 +86,14 @@ function ChatNavItem({ active, setActive, conversations, activeConvId, onConvSel
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
   }
 
-  async function handleDelete(e, convId) {
+  function handleDelete(e, convId) {
     e.stopPropagation()
-    if (!window.confirm('Delete this conversation?')) return
+    // Open the in-app confirmation modal instead of the browser confirm() dialog.
+    setConfirmId(convId)
+  }
+
+  async function doDelete(convId) {
+    setConfirmId(null)
     setDeletingId(convId)
     try {
       await deleteConversation(convId)
@@ -204,6 +214,56 @@ function ChatNavItem({ active, setActive, conversations, activeConvId, onConvSel
           )}
         </div>
       )}
+
+      {/* In-app delete confirmation modal (replaces browser window.confirm) */}
+      {confirmId && (
+        <div
+          onClick={() => setConfirmId(null)}
+          style={{
+            position: 'fixed', inset: 0, zIndex: 1000,
+            background: 'rgba(0,0,0,0.45)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: 16,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 320, maxWidth: '100%', background: 'var(--bg1)',
+              border: '1px solid var(--border)', borderRadius: 'var(--r-lg)',
+              padding: '20px 20px 16px', boxShadow: '0 12px 40px rgba(0,0,0,0.35)',
+            }}
+          >
+            <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)', marginBottom: 8 }}>
+              Delete conversation?
+            </div>
+            <div style={{ fontSize: 13, color: 'var(--text3)', lineHeight: 1.5, marginBottom: 18 }}>
+              This will permanently delete this conversation and its history. This action cannot be undone.
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button
+                onClick={() => setConfirmId(null)}
+                style={{
+                  padding: '7px 14px', borderRadius: 'var(--r-sm)', fontSize: 13,
+                  background: 'var(--bg2)', color: 'var(--text2)',
+                  border: '1px solid var(--border)', cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => doDelete(confirmId)}
+                style={{
+                  padding: '7px 14px', borderRadius: 'var(--r-sm)', fontSize: 13, fontWeight: 600,
+                  background: 'var(--red)', color: '#fff', border: 'none', cursor: 'pointer',
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -238,14 +298,7 @@ export default function Sidebar({ active, setActive, connection, cacheStatus, to
       {/* Logo */}
       <div style={{ padding:'16px 14px 12px', borderBottom:'1px solid var(--border)' }}>
         <div style={{ display:'flex', alignItems:'center', gap:9 }}>
-          <div style={{ width:32, height:32, borderRadius:9, background:'linear-gradient(135deg,#4f8ef7,#a78bfa)', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-              <rect x="2" y="2" width="5" height="5" rx="1" fill="rgba(255,255,255,0.95)"/>
-              <rect x="9" y="2" width="5" height="5" rx="1" fill="rgba(255,255,255,0.5)"/>
-              <rect x="2" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.5)"/>
-              <rect x="9" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.95)"/>
-            </svg>
-          </div>
+          <Logo size={32} />
           <div>
             <div style={{ fontWeight:700, fontSize:14, lineHeight:1.1, display:'flex', alignItems:'center', gap:5 }}>
               {APP_NAME}

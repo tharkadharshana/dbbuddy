@@ -24,7 +24,7 @@ export default function App() {
   const [cacheStatus, setCacheStatus] = useState(null)
   const [connection, setConnection]   = useState(null) // active connection summary
   const [showOnboarding, setShowOnboarding] = useState(false)
-  const [theme, setTheme]       = useState(() => localStorage.getItem('dm_theme') || 'dark')
+  const [theme, setTheme]       = useState(() => localStorage.getItem('dm_theme') || 'light')
   const [totalRows, setTotalRows] = useState(0)
   const [sub, setSub]             = useState(null)
   const [hasDB, setHasDB]         = useState(false)

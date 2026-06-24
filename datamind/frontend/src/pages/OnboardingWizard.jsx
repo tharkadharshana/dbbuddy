@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { onboardingValidateKey, onboardingTestDB, onboardingConnectDB, patchSettings, fetchProviders, validateProviderCreds, connectProvider, fetchProviderStatus, fetchConnectedProviders, fetchBillingPlans, subscribeToPlan, getErrorMessage } from '../utils/api'
 import { Spinner } from '../components/UI'
 import { APP_NAME } from '../appName'
+import Logo from '../components/Logo'
 
 // ── Step indicator ────────────────────────────────────────────────────────────
 function StepDots({ total, current }) {
@@ -244,14 +245,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
 
       {/* Logo */}
       <div style={{ textAlign:'center', marginBottom:28, zIndex:1 }}>
-        <div style={{ display:'inline-flex', alignItems:'center', justifyContent:'center', width:48, height:48, borderRadius:13, background:'linear-gradient(135deg,#4f8ef7,#a78bfa)', marginBottom:12, boxShadow:'0 8px 24px rgba(79,142,247,0.3)' }}>
-          <svg width="22" height="22" viewBox="0 0 16 16" fill="none">
-            <rect x="2" y="2" width="5" height="5" rx="1" fill="rgba(255,255,255,0.95)"/>
-            <rect x="9" y="2" width="5" height="5" rx="1" fill="rgba(255,255,255,0.5)"/>
-            <rect x="2" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.5)"/>
-            <rect x="9" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.95)"/>
-          </svg>
-        </div>
+        <Logo size={48} radius={13} shadow="0 8px 24px rgba(79,142,247,0.3)" style={{ marginBottom:12 }} />
         <div style={{ fontSize:22, fontWeight:700, color:'var(--text)' }}>Welcome to {APP_NAME}</div>
         <div style={{ fontSize:13, color:'var(--text2)', marginTop:4 }}>Let's get you set up in 3 quick steps</div>
       </div>

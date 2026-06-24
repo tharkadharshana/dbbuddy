@@ -15,6 +15,7 @@ import EmbedOnboarding from './EmbedOnboarding'
 import EmbedChat from './EmbedChat'
 import EmbedSalesplayAutoInit from './EmbedSalesplayAutoInit'
 import EmbedSearchBar from './EmbedSearchBar'
+import { appName } from './embedBranding'
 
 // ── Collapsed "search bar" layout (?layout=bar) ─────────────────────────────
 // The widget can start as a small search-bar pill instead of the full chat
@@ -113,7 +114,7 @@ function EmbedApp() {
           // Salesplay flow: use the AAT to determine the merchant identity,
           // then decide whether to show the consent/onboard screen or go straight to chat.
           if (!aat) {
-            setError('Session token not found. Please access DataMind through the Salesplay backoffice.')
+            setError(`Session token not found. Please access ${appName(ctx)} through the Salesplay backoffice.`)
             setState('error')
             return
           }

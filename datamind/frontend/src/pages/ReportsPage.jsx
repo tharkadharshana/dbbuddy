@@ -278,9 +278,9 @@ export default function ReportsPage({ llm, setLlm, sub, onNavigate, onQueryCompl
           <div style={{ fontSize:15, fontWeight:700, marginBottom:4 }}>Report Builder</div>
           <div style={{ fontSize:12, color:'var(--text3)', marginBottom:16 }}>Select sections and the AI generates a professional report with charts and narrative.</div>
 
-          {/* LLM + Format */}
+          {/* Usage + Format */}
           <div style={{ marginBottom:14 }}>
-            <div style={{ fontSize:11, color:'var(--text3)', marginBottom:6, fontWeight:500, textTransform:'uppercase', letterSpacing:'.07em' }}>LLM</div>
+            <div style={{ fontSize:11, color:'var(--text3)', marginBottom:6, fontWeight:500, textTransform:'uppercase', letterSpacing:'.07em' }}>Usage</div>
             <UsageMeter sub={sub} />
           </div>
           <div style={{ marginBottom:16 }}>

@@ -322,6 +322,10 @@ export default function ConnectionsPage({ onConnectionChange, sub }) {
   }
 
   const availableProviders = providers.filter(p => !connected.some(c => c.provider_id === p.provider_id))
+    // NOTE: External integrations other than Salesplay POS are temporarily hidden.
+    // Right now the only available integration is Salesplay POS. More integrations
+    // (e.g. Loyverse POS, Bring Your Own Database) will be surfaced here in the future.
+    .filter(p => /salesplay/i.test(p.provider_id))
   const canUseDB = sub ? sub.can_use_db : true  // default true while sub is loading
 
   return (
@@ -374,7 +378,9 @@ export default function ConnectionsPage({ onConnectionChange, sub }) {
               You've reached your DB row limit. Connecting or syncing integrations is paused. You can still read and export your existing data. <strong>Purchase add-on rows or upgrade your plan</strong> to continue.
             </div>
           )}
-          {/* BYODB option */}
+          {/* BYODB option — temporarily hidden. Bring Your Own Database will return as a
+              future integration; right now the only available integration is Salesplay POS. */}
+          {/*
           <div style={{ marginBottom:20, padding:'16px 18px', background:'var(--bg1)', border:'1px solid var(--border)', borderRadius:'var(--r-lg)', display:'flex', alignItems:'center', justifyContent:'space-between', gap:16 }}>
             <div style={{ display:'flex', alignItems:'center', gap:14 }}>
               <div style={{ fontSize:28 }}>🗄</div>
@@ -385,7 +391,10 @@ export default function ConnectionsPage({ onConnectionChange, sub }) {
             </div>
             <Btn onClick={() => setModal('byodb')}>Connect</Btn>
           </div>
+          */}
 
+          {/* External Integrations — only Salesplay POS is available for now.
+              More integrations (e.g. Loyverse POS) will be added here in the future. */}
           <div style={{ fontSize:11, color:'var(--text3)', fontWeight:600, textTransform:'uppercase', letterSpacing:'.08em', marginBottom:12 }}>External Integrations</div>
           {providers.length === 0 ? (
             <div style={{ padding:'24px 0', color:'var(--text3)', fontSize:13 }}>
@@ -402,6 +411,9 @@ export default function ConnectionsPage({ onConnectionChange, sub }) {
               ))}
             </div>
           )}
+          <div style={{ fontSize:12, color:'var(--text3)', marginTop:16, fontStyle:'italic' }}>
+            More integrations are on the way. Right now, Salesplay POS is the only available integration.
+          </div>
         </>
       )}
 

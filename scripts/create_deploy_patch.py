@@ -50,9 +50,9 @@ FRONTEND_EXCLUDE_FILES = {"iframe_test.html"}
 PATCH_NOTES = """
 PATCH NOTES
 ===========
-Branch : chore/double-token-quotas
-PR     : #53
-Date   : 2026-06-23
+Branch : feat/embed-appname-and-search-bar-polish
+PR     : #55
+Date   : 2026-06-24
 
 MANUAL DEPLOY FILES
 ───────────────────
@@ -66,7 +66,100 @@ diff against the live server copy first.
 CHANGES IN THIS PATCH
 ─────────────────────
 
-1. chore(billing): double token quotas for all plans during beta
+1. feat(logo): single <Logo/> component + "AI" wordmark logo
+   PROBLEM : The brand mark was hand-copied inline in ~10 places across the
+             app and embed widget, so there was no single place to change it.
+   FIX     : Extracted one reusable <Logo/> component (single source of truth)
+             referenced everywhere, then set the logo to the "AI" wordmark with
+             the 4-square brand mark as a top-right accent. Favicon kept as the
+             standalone 4-square badge (legible at favicon sizes).
+   FILES   : datamind/frontend/src/components/Logo.jsx  (new)
+             datamind/frontend/src/components/Sidebar.jsx
+             datamind/frontend/src/pages/AuthPage.jsx
+             datamind/frontend/src/pages/OnboardingWizard.jsx
+             datamind/frontend/src/pages/ChatPage.jsx
+             datamind/frontend/src/embed/EmbedChat.jsx
+             datamind/frontend/src/embed/EmbedOnboarding.jsx
+             datamind/frontend/src/embed/EmbedSalesplayAutoInit.jsx
+             datamind/frontend/public/favicon.svg
+
+2. feat(app): default to light theme when no preference is set
+   PROBLEM : New users landed in dark theme by default.
+   FIX     : Theme initial state falls back to 'light' instead of 'dark'.
+   FILES   : datamind/frontend/src/App.jsx
+
+3. feat(connections): hide BYODB and Loyverse, show only Salesplay POS
+   PROBLEM : Integrations page advertised Bring-Your-Own-Database and Loyverse,
+             which aren't offered right now.
+   FIX     : Commented out the BYODB card and filtered external integrations to
+             Salesplay POS only, with a note that more are coming.
+   FILES   : datamind/frontend/src/pages/ConnectionsPage.jsx
+
+4. feat(sidebar): make Forecasting and Anomaly Alerts non-clickable
+   PROBLEM : Forecasting/Anomaly Alerts navigated to unfinished views.
+   FIX     : Both sub-items are now display-only; the Predictions group still
+             expands/collapses.
+   FILES   : datamind/frontend/src/components/Sidebar.jsx
+
+5. feat(reports): remove "LLM" label from Report Builder
+   PROBLEM : The usage section was labelled "LLM".
+   FIX     : Renamed the label to "Usage".
+   FILES   : datamind/frontend/src/pages/ReportsPage.jsx
+
+6. feat(chat): hide Think Mode brain icon in Ask Your Data
+   PROBLEM : The brain-icon Think Mode toggle was still visible.
+   FIX     : Commented out the toggle button (state/rendering kept for future
+             re-enable).
+   FILES   : datamind/frontend/src/pages/ChatPage.jsx
+
+7. feat(sidebar): in-app confirmation modal for deleting chats
+   PROBLEM : Deleting a historical conversation used the browser
+             window.confirm() dialog.
+   FIX     : Replaced with a styled in-app confirmation modal.
+   FILES   : datamind/frontend/src/components/Sidebar.jsx
+
+8. style(embed): "AI can make mistakes." + bold/underlined Clear conversation
+   PROBLEM : Disclaimer was verbose ("<APP> can make mistakes. Please verify
+             important information.") and "Clear conversation" was low-emphasis.
+   FIX     : Disclaimer simplified to "AI can make mistakes."; "Clear
+             conversation" is now bold + underlined.
+   FILES   : datamind/frontend/src/embed/EmbedChat.jsx
+
+-- PREVIOUS PATCH (PR #55 · embed branding · 2026-06-23) --------------------
+
+9. feat(embed): source widget app name from backend APP_NAME
+   PROBLEM : Embed onboarding/chat hardcoded "DataMind" (and "datamind.ai")
+             in user-visible copy, ignoring APP_NAME in backend/.env. New
+             SalesPlay webembed users saw "Create your DataMind account" etc.
+   FIX     : /embed/context now returns app_name from APP_NAME. New frontend
+             helper embedBranding.js resolves the name at runtime
+             (context.app_name -> VITE_APP_NAME -> fallback); all embed name
+             literals use it. Real URLs (terms/privacy, VITE_APP_URL) kept.
+   FILES   : datamind/backend/embed.py
+             datamind/frontend/src/embed/embedBranding.js
+             datamind/frontend/src/embed/EmbedApp.jsx
+             datamind/frontend/src/embed/EmbedOnboarding.jsx
+             datamind/frontend/src/embed/EmbedSalesplayAutoInit.jsx
+             datamind/frontend/src/embed/EmbedChat.jsx
+
+2. feat(embed): reword input placeholder to "Ask AI about your data…"
+   PROBLEM : Placeholder "Ask about your data…" didn't signal an AI assistant.
+   FIX     : Updated to "Ask AI about your data…" in the collapsed search bar
+             and both EmbedChat input variants.
+   FILES   : datamind/frontend/src/embed/EmbedSearchBar.jsx
+             datamind/frontend/src/embed/EmbedChat.jsx
+
+3. feat(embed): use AI sparkle icon instead of chat bubble in input
+   PROBLEM : The input led with a generic chat-bubble icon (collapsed search
+             bar and expanded chat input), reading as plain messaging.
+   FIX     : Replaced with an AI sparkle icon in both surfaces; send arrow
+             button unchanged.
+   FILES   : datamind/frontend/src/embed/EmbedSearchBar.jsx
+             datamind/frontend/src/embed/EmbedChat.jsx
+
+-- PREVIOUS PATCH (PR #53 · chore/double-token-quotas · 2026-06-23) ---------
+
+4. chore(billing): double token quotas for all plans during beta
    PROBLEM : Token limits were too low for normal beta usage.
    FIX     : All plan token limits doubled in billing.py seed defaults.
    FILES   : datamind/backend/billing.py

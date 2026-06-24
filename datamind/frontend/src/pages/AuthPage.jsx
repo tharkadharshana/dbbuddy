@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { login, register, getErrorMessage } from '../utils/api'
 import { APP_NAME } from '../appName'
+import Logo from '../components/Logo'
 
 export default function AuthPage({ onAuth }) {
   const [mode, setMode] = useState('login') // 'login' | 'register'
@@ -44,14 +45,7 @@ export default function AuthPage({ onAuth }) {
 
         {/* Logo */}
         <div style={{ textAlign:'center', marginBottom:32 }}>
-          <div style={{ display:'inline-flex', alignItems:'center', justifyContent:'center', width:52, height:52, borderRadius:14, background:'linear-gradient(135deg,#4f8ef7,#a78bfa)', marginBottom:14, boxShadow:'0 8px 24px rgba(79,142,247,0.35)' }}>
-            <svg width="24" height="24" viewBox="0 0 16 16" fill="none">
-              <rect x="2" y="2" width="5" height="5" rx="1" fill="rgba(255,255,255,0.95)"/>
-              <rect x="9" y="2" width="5" height="5" rx="1" fill="rgba(255,255,255,0.5)"/>
-              <rect x="2" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.5)"/>
-              <rect x="9" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.95)"/>
-            </svg>
-          </div>
+          <Logo size={52} radius={14} shadow="0 8px 24px rgba(79,142,247,0.35)" style={{ marginBottom:14 }} />
           <div style={{ fontSize:26, fontWeight:700, color:'#f0f1fa', marginBottom:4 }}>{APP_NAME}</div>
           <div style={{ fontSize:13, color:'#5a5f7d' }}>Transform Data into Actionable Intelligence</div>
         </div>

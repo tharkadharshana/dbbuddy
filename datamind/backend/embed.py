@@ -138,6 +138,7 @@ def get_embed_context(pk: str):
         "partner_name":    partner["partner_name"],
         "provider_id":     partner["provider_id"],
         "partner_key":     pk,
+        "app_name":        os.getenv("APP_NAME", "SalesPlay AI"),
         "branding":        branding,
         "allowed_origins": allowed_origins,
     }
