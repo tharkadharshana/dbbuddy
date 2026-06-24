@@ -1,45 +1,38 @@
 import React from 'react'
 
 /**
- * Brand logo lockup: the 4-square mark + "AI" wordmark.
+ * Brand logo: three blue dots — the "AI" three-dot mark (matches the embed
+ * widget's typing indicator).
  *
  * This is the single source of truth for the app logo so every surface
- * (sidebar, auth, onboarding, embed widget, …) stays in sync.
+ * (sidebar, auth, onboarding, embed widget, …) stays in sync. To change the
+ * logo app-wide, edit only this file.
  *
  * Props:
- *   size       – height of the badge in px (the "AI" wordmark scales with it)
- *   wordmark   – show the "AI" wordmark next to the badge (default true)
- *   wordColor  – color of the "AI" wordmark (default brand blue)
- *   style      – extra wrapper styles
+ *   size    – width/height of the (square) logo box in px
+ *   color   – dot color (default brand blue)
+ *   shadow  – optional CSS box-shadow on the logo box
+ *   style   – extra wrapper styles
+ *
+ *   `radius`/`wordmark`/`wordColor` are accepted for call-site compatibility
+ *   but are not used by this mark.
  */
-export default function Logo({ size = 32, radius, wordmark = false, wordColor = '#4f8ef7', shadow = false, style = {} }) {
-  const r = radius != null ? radius : Math.round(size * 0.28)
-  const inner  = Math.round(size * 0.5)
-  const fontSize = Math.round(size * 0.92)
-
+export default function Logo({ size = 32, color = '#4f8ef7', style = {}, radius, shadow, wordmark, wordColor }) {
+  // `shadow`/`radius` are accepted from existing call sites but ignored — the
+  // bare three-dot mark has no tile to cast a shadow or round.
   return (
-    <div style={{ display: 'inline-flex', alignItems: 'center', gap: Math.round(size * 0.3), ...style }}>
-      <div style={{
-        width: size, height: size, borderRadius: r, flexShrink: 0,
-        background: 'linear-gradient(135deg,#4f8ef7,#a78bfa)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        boxShadow: shadow || 'none',
-      }}>
-        <svg width={inner} height={inner} viewBox="0 0 16 16" fill="none">
-          <rect x="2" y="2" width="5" height="5" rx="1" fill="rgba(255,255,255,0.95)" />
-          <rect x="9" y="2" width="5" height="5" rx="1" fill="rgba(255,255,255,0.5)" />
-          <rect x="2" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.5)" />
-          <rect x="9" y="9" width="5" height="5" rx="1" fill="rgba(255,255,255,0.95)" />
-        </svg>
-      </div>
-      {wordmark && (
-        <span style={{
-          fontWeight: 800, fontSize, lineHeight: 1, letterSpacing: '-0.04em',
-          color: wordColor, fontFamily: 'inherit',
-        }}>
-          AI
-        </span>
-      )}
+    <div style={{
+      width: size, height: size, flexShrink: 0,
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+      ...style,
+    }}>
+      {/* Three dots, centered in a square box so the mark drops into every
+          existing logo slot without changing layout. */}
+      <svg width={size} height={size} viewBox="0 0 48 48" fill="none" role="img" aria-label="AI logo" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="10" cy="24" r="5" fill={color} />
+        <circle cx="24" cy="24" r="5" fill={color} />
+        <circle cx="38" cy="24" r="5" fill={color} />
+      </svg>
     </div>
   )
 }
