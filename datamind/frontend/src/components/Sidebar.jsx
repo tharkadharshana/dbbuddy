@@ -71,6 +71,7 @@ function ChatNavItem({ active, setActive, conversations, activeConvId, onConvSel
   const [open, setOpen] = useState(false)
   const [hoverId, setHoverId] = useState(null)
   const [deletingId, setDeletingId] = useState(null)
+  const [confirmId, setConfirmId] = useState(null) // conversation pending delete confirmation
   const isChatActive = active === 'chat'
 
   function fmtDate(iso) {
@@ -84,9 +85,14 @@ function ChatNavItem({ active, setActive, conversations, activeConvId, onConvSel
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
   }
 
-  async function handleDelete(e, convId) {
+  function handleDelete(e, convId) {
     e.stopPropagation()
-    if (!window.confirm('Delete this conversation?')) return
+    // Open the in-app confirmation modal instead of the browser confirm() dialog.
+    setConfirmId(convId)
+  }
+
+  async function doDelete(convId) {
+    setConfirmId(null)
     setDeletingId(convId)
     try {
       await deleteConversation(convId)
@@ -205,6 +211,56 @@ function ChatNavItem({ active, setActive, conversations, activeConvId, onConvSel
               })}
             </div>
           )}
+        </div>
+      )}
+
+      {/* In-app delete confirmation modal (replaces browser window.confirm) */}
+      {confirmId && (
+        <div
+          onClick={() => setConfirmId(null)}
+          style={{
+            position: 'fixed', inset: 0, zIndex: 1000,
+            background: 'rgba(0,0,0,0.45)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: 16,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 320, maxWidth: '100%', background: 'var(--bg1)',
+              border: '1px solid var(--border)', borderRadius: 'var(--r-lg)',
+              padding: '20px 20px 16px', boxShadow: '0 12px 40px rgba(0,0,0,0.35)',
+            }}
+          >
+            <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text)', marginBottom: 8 }}>
+              Delete conversation?
+            </div>
+            <div style={{ fontSize: 13, color: 'var(--text3)', lineHeight: 1.5, marginBottom: 18 }}>
+              This will permanently delete this conversation and its history. This action cannot be undone.
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button
+                onClick={() => setConfirmId(null)}
+                style={{
+                  padding: '7px 14px', borderRadius: 'var(--r-sm)', fontSize: 13,
+                  background: 'var(--bg2)', color: 'var(--text2)',
+                  border: '1px solid var(--border)', cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => doDelete(confirmId)}
+                style={{
+                  padding: '7px 14px', borderRadius: 'var(--r-sm)', fontSize: 13, fontWeight: 600,
+                  background: 'var(--red)', color: '#fff', border: 'none', cursor: 'pointer',
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
