@@ -23,8 +23,10 @@ const ANALYTICS_SUB = [
   { id:'reports',   label:'Reports',        icon: IC.report },
 ]
 const PREDICTIONS_SUB = [
-  { id:'forecast',  label:'Forecasting',    icon: IC.trend },
-  { id:'anomaly',   label:'Anomaly Alerts', icon: IC.alert },
+  // Forecasting & Anomaly Alerts are shown but intentionally non-clickable for now.
+  // The "Predictions" group itself stays expandable.
+  { id:'forecast',  label:'Forecasting',    icon: IC.trend,  disabled:true },
+  { id:'anomaly',   label:'Anomaly Alerts', icon: IC.alert,  disabled:true },
 ]
 
 function NavGroup({ label, icon, items, active, setActive, defaultOpen=false }) {
@@ -47,12 +49,13 @@ function NavGroup({ label, icon, items, active, setActive, defaultOpen=false }) 
       {open && (
         <div style={{ marginLeft:14, marginTop:2, borderLeft:'1px solid var(--border)', paddingLeft:10 }}>
           {items.map(item => (
-            <div key={item.id} onClick={() => setActive(item.id)} style={{
+            <div key={item.id} onClick={item.disabled ? undefined : () => setActive(item.id)} style={{
               display:'flex', alignItems:'center', gap:9, padding:'7px 10px',
-              borderRadius:'var(--r-sm)', cursor:'pointer', fontSize:13, marginBottom:1,
+              borderRadius:'var(--r-sm)', cursor: item.disabled ? 'default' : 'pointer', fontSize:13, marginBottom:1,
               background: active===item.id ? 'var(--blue-dim)' : 'transparent',
-              color: active===item.id ? 'var(--blue)' : 'var(--text2)',
+              color: item.disabled ? 'var(--text3)' : (active===item.id ? 'var(--blue)' : 'var(--text2)'),
               fontWeight: active===item.id ? 600 : 400,
+              opacity: item.disabled ? 0.6 : 1,
             }}>
               <span style={{ opacity:.7 }}>{item.icon}</span>
               {item.label}
