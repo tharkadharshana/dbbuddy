@@ -825,7 +825,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
           </div>
         )}
         <div style={{ textAlign:'center', marginTop:6, fontSize:9, color: isSalesplay ? '#94A3B8' : 'var(--text3)' }}>
-          {APP_NAME} can make mistakes. Please verify important information.
+          AI can make mistakes.
         </div>
       </div>
 
