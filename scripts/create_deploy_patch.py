@@ -125,6 +125,12 @@ CHANGES IN THIS PATCH
              conversation" is now bold + underlined.
    FILES   : datamind/frontend/src/embed/EmbedChat.jsx
 
+9. feat(embed): update trial button text to reflect SalesPlay AI Beta
+   PROBLEM : Trial CTA read "Start your 14-day trial[ with Starter]", which
+             didn't reflect the SalesPlay AI Beta framing.
+   FIX     : Button text changed to "Try SalesPlay AI Beta[ with Starter]".
+   FILES   : datamind/frontend/src/embed/EmbedSalesplayAutoInit.jsx
+
 -- PREVIOUS PATCH (PR #55 · embed branding · 2026-06-23) --------------------
 
 9. feat(embed): source widget app name from backend APP_NAME
