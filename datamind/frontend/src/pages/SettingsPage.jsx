@@ -369,6 +369,8 @@ export default function SettingsPage({ user, onLogout, onNavigate, sub }) {
       ── end LLM API Keys ── */}
 
       {/* ── Database Connections ──────────────────────────────────────────── */}
+      {/* HIDDEN — commented out via {false &&}; code kept intact, not removed. */}
+      {false && (
       <Section title="Database Connections"
         subtitle="Add your MySQL databases. When you save or activate a connection, the AI automatically builds a custom SQL cache for your schema — one time only.">
 
@@ -478,6 +480,7 @@ export default function SettingsPage({ user, onLogout, onNavigate, sub }) {
           </Card>
         )}
       </Section>
+      )}
 
       {/* ── How caching works ─────────────────────────────────────────────── */}
       {/* BILLING HIDDEN — "How Billing Works" section commented out
@@ -508,7 +511,8 @@ export default function SettingsPage({ user, onLogout, onNavigate, sub }) {
       */}
 
       {/* ── API Access (Pro only) ──────────────────────────────────────── */}
-      {isPro && (
+      {/* HIDDEN — commented out via {false &&}; code kept intact, not removed. */}
+      {false && isPro && (
         <Section
           title="API Access"
           subtitle="Use your personal API key to access DataMind programmatically from scripts, apps, or custom dashboards."
@@ -633,6 +637,8 @@ export default function SettingsPage({ user, onLogout, onNavigate, sub }) {
         </Section>
       )}
 
+      {/* HIDDEN — commented out via {false &&}; code kept intact, not removed. */}
+      {false && (
       <Section title="How the Cache Works">
         <Card style={{ padding: '16px 18px' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -654,6 +660,7 @@ export default function SettingsPage({ user, onLogout, onNavigate, sub }) {
           </div>
         </Card>
       </Section>
+      )}
     </div>
   )
 }
