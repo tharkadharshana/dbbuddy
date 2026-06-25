@@ -66,6 +66,13 @@ diff against the live server copy first.
 CHANGES IN THIS PATCH
 ─────────────────────
 
+0. feat(settings): hide Database Connections, API Access, and cache sections
+   PROBLEM : Settings showed Database Connections, API Access, and "How the
+             Cache Works" sections that should not be visible right now.
+   FIX     : Each section is guarded with {false &&} so it no longer renders.
+             Code is kept intact (not removed) for easy re-enable.
+   FILES   : datamind/frontend/src/pages/SettingsPage.jsx
+
 1. feat(logo): single <Logo/> component + Gemini-style three-sparkle mark
    PROBLEM : The brand mark was hand-copied inline in ~10 places across the
              app and embed widget, so there was no single place to change it.
