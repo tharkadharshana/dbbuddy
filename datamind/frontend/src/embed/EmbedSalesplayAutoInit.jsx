@@ -418,10 +418,10 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
 
           <div style={{ fontSize: 11, color: SP.text, marginTop: 10, lineHeight: 1.6 }}>
             By continuing, you agree to {appNm}'s{' '}
-            <a href="https://datamind.ai/terms" target="_blank" rel="noopener noreferrer"
-              style={{ color: SP.blue, textDecoration: 'underline' }}>Terms of Service</a>
+            <a href="https://salesplay.com/docs/SalesPlayAI_Terms_and_Conditions.pdf" target="_blank" rel="noopener noreferrer"
+              style={{ color: SP.blue, textDecoration: 'underline' }}>Terms and Conditions</a>
             {' '}and{' '}
-            <a href="https://datamind.ai/privacy" target="_blank" rel="noopener noreferrer"
+            <a href="https://salesplay.com/docs/SalesPlayAI_Privacy_Policy.pdf" target="_blank" rel="noopener noreferrer"
               style={{ color: SP.blue, textDecoration: 'underline' }}>Privacy Policy</a>.
           </div>
         </div>
@@ -476,10 +476,10 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
 
           <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 10, lineHeight: 1.6 }}>
             By continuing, you agree to {appNm}'s{' '}
-            <a href="https://datamind.ai/terms" target="_blank" rel="noopener noreferrer"
-              style={{ color: 'var(--blue)', textDecoration: 'none' }}>Terms of Service</a>
+            <a href="https://salesplay.com/docs/SalesPlayAI_Terms_and_Conditions.pdf" target="_blank" rel="noopener noreferrer"
+              style={{ color: 'var(--blue)', textDecoration: 'none' }}>Terms and Conditions</a>
             {' '}and{' '}
-            <a href="https://datamind.ai/privacy" target="_blank" rel="noopener noreferrer"
+            <a href="https://salesplay.com/docs/SalesPlayAI_Privacy_Policy.pdf" target="_blank" rel="noopener noreferrer"
               style={{ color: 'var(--blue)', textDecoration: 'none' }}>Privacy Policy</a>.
           </div>
         </div>
