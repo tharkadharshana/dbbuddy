@@ -51,8 +51,8 @@ PATCH_NOTES = """
 PATCH NOTES
 ===========
 Branch : feat/embed-appname-and-search-bar-polish
-PR     : #55
-Date   : 2026-06-24
+PR     : #56
+Date   : 2026-06-26
 
 MANUAL DEPLOY FILES
 ───────────────────
@@ -65,6 +65,26 @@ diff against the live server copy first.
 
 CHANGES IN THIS PATCH
 ─────────────────────
+
+A. fix(reports): stop LLM fabricating figures for empty accounts
+   PROBLEM : A new account with no sync history produced empty/zero KPIs and
+             sections with no rows, yet the prompt still told the model to
+             write a full multi-paragraph report. The model invented realistic
+             figures (fake monthly revenue, growth %, etc.) shown as real data.
+   FIX     : Skip the LLM entirely when there are no meaningful KPIs and no
+             section rows (return an honest "not enough data yet" message);
+             mark empty sections "(no data available)"; harden the system
+             prompt to forbid estimating/extrapolating. Covers both the
+             provider (SalesPlay/Loyverse) and own-DB report paths.
+   FILES   : datamind/backend/llm.py  (manual_deploy)
+
+B. feat(embed): point legal links to SalesPlay AI policy docs
+   PROBLEM : The SalesPlay consent screens linked generic datamind.ai/terms
+             and datamind.ai/privacy placeholders.
+   FIX     : Both consent blocks now link the official SalesPlay AI Privacy
+             Policy and Terms and Conditions PDFs; "Terms of Service" relabeled
+             to "Terms and Conditions" to match the document.
+   FILES   : datamind/frontend/src/embed/EmbedSalesplayAutoInit.jsx
 
 0. feat(settings): hide Database Connections, API Access, and cache sections
    PROBLEM : Settings showed Database Connections, API Access, and "How the
