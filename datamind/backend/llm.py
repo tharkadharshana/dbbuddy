@@ -683,6 +683,35 @@ def generate_report_summary(title: str, kpis: Dict, section_data: Dict,
                             api_key: str = "", user_email: str = None,
                             currency: str = "$", country: str = "") -> str:
     kpi_text = "\n".join(f"  {k}: {v}" for k, v in kpis.items())
+
+    # Determine whether there is any real data to report on. A brand-new account
+    # (no sync history) yields empty/zero KPIs and sections with no rows. Without
+    # this guard the model invents plausible-looking figures to satisfy the
+    # "write N paragraphs" instruction below.
+    def _is_meaningful(v) -> bool:
+        if v is None:
+            return False
+        if isinstance(v, (int, float)):
+            return v != 0
+        s = str(v).strip()
+        return s not in ("", "0", "0.0", "None", "null")
+
+    has_kpis = any(_is_meaningful(v) for v in kpis.values())
+    total_rows = sum(len(d.get("data", []) or []) for d in section_data.values())
+    has_data = has_kpis or total_rows > 0
+
+    if not has_data:
+        log.info("Report: insufficient data — skipping LLM narrative",
+                 title=title, llm=llm)
+        return (
+            f"# {title}\n\n"
+            "There isn't enough data yet to generate this report. "
+            "Once your sales data has finished syncing and a few transactions "
+            "have been recorded, run the report again to see a full analysis.\n\n"
+            "_No figures are shown here because none are available — this report "
+            "will never display estimated or sample numbers._"
+        )
+
     sections_text = ""
     for sid, data in section_data.items():
         sections_text += f"\n\n## {data.get('title', sid)}\n"
@@ -692,6 +721,8 @@ def generate_report_summary(title: str, kpis: Dict, section_data: Dict,
             sections_text += f"Columns: {', '.join(cols)}\n"
             for row in rows:
                 sections_text += f"  {row}\n"
+        else:
+            sections_text += "(no data available for this section)\n"
 
     if format == "executive":
         length_instruction = "Write 3-4 concise paragraphs (executive summary). Focus on 3 most important findings and one strategic recommendation."
@@ -705,8 +736,12 @@ def generate_report_summary(title: str, kpis: Dict, section_data: Dict,
         _profile += f" The business operates in {country}."
     system = (
         "You are a senior business analyst writing a professional analytics report. "
-        "Use concrete numbers from the data. Be direct and actionable. "
-        f"Do not invent data — only reference what is provided. {_profile}"
+        "Use ONLY the concrete numbers provided in the data below. Be direct and actionable. "
+        "CRITICAL: Never invent, estimate, extrapolate, or illustrate with example figures. "
+        "Every number, date, and percentage in your report must come directly from the "
+        "supplied KPIs or data sections. If a section is marked '(no data available)', "
+        "state plainly that there is not yet enough data for it — do NOT make up sample "
+        f"values to fill the gap. {_profile}"
     )
     prompt = (
         f"Report Title: {title}\n\n"
