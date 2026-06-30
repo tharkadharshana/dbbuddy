@@ -442,7 +442,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap: isNarrow ? 6 : 8 }}>
             <div style={{ display:'flex', alignItems:'center', gap: isNarrow ? 6 : 8, minWidth:0 }}>
               <Logo size={32} radius={9} style={{ flexShrink:0 }} />
-              <span style={{ fontSize: isNarrow ? 15 : 18, fontWeight:800, color:'#191C1E', letterSpacing:'-0.02em', fontFamily:"'Manrope', 'Plus Jakarta Sans', sans-serif", overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{productTitle}</span>
+              <span style={{ fontSize: isNarrow ? 15 : 18, fontWeight:800, color:'#191C1E', letterSpacing:'-0.02em', fontFamily:"'Manrope', 'Plus Jakarta Sans', sans-serif", overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{/* {productTitle} */}Ask Your AI</span>
               {!isNarrow && <BetaBadge isSalesplay={isSalesplay} />}
             </div>
             <div style={{ display:'flex', alignItems:'center', gap: isNarrow ? 6 : 8, flexShrink:0 }}>
