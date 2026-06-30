@@ -2047,6 +2047,25 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
 
         # ── Build conversation summary & persist ──────────────────────────────
         answer_summary = f"Found {len(data)} result{'s' if len(data) != 1 else ''}."
+        # Brand-new integration-connected tenants with essentially no synced data
+        # get a friendlier message instead of a flat "Found 0 results" — that's
+        # a confusing first impression for someone who hasn't recorded any sales
+        # yet (confirmed via trial user investigation). Scoped tightly: only
+        # fires when this specific query returned 0 rows AND the tenant's total
+        # synced row count across ALL their data is near-zero — never for a
+        # healthy tenant whose specific query just happens to return 0 rows.
+        if len(data) == 0 and is_integration:
+            try:
+                from integrations import get_user_total_rows
+                _total_rows = get_user_total_rows(user["email"])
+            except Exception:
+                _total_rows = None
+            if _total_rows is not None and _total_rows < 10:
+                answer_summary = (
+                    "It looks like your account doesn't have any synced data yet. "
+                    "If you've just connected your store, a sync may still be in "
+                    "progress — check your integration status, or try again in a few minutes."
+                )
         if columns and data:
             num_col = next(
                 (c for c in columns if isinstance(data[0].get(c), (int, float))), None
