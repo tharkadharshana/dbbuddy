@@ -93,9 +93,13 @@ API → DB FIELD MAPPING  (verified against live API responses, 2026-06-18)
   id                             id
   product_name / name            product_name
   description                    description
-  category_id                    category_id    Often absent for no-variant products;
-                                                category_name filled via sp_categories lookup
-                                                or direct p.get("category") fallback
+  category_id                    category_id    CONFIRMED ALWAYS ABSENT — SalesPlay's /products
+                                                API never returns category_id on the product
+                                                object (only a "category" name string). This
+                                                lookup branch is defensive/dead code today; the
+                                                real category_id source is backfilled separately
+                                                from /receipts line items, see
+                                                backfill_product_category_from_receipts() below.
   product_code (top-level)       sku            Tried on first variant, then top-level p
   barcode (on variant)           barcode
   cost / default_cost (variant   cost           Fallback chain: variant.default_cost →
@@ -150,6 +154,10 @@ API → DB FIELD MAPPING  (verified against live API responses, 2026-06-18)
   cost                  cost               Tries product_cost, then cost
   category_name         category_name      Uses inline API value if present and not "No category";
                                            falls back to sp_products lookup by product_id
+  category_id            category_id        SalesPlay DOES include this on line items (confirmed
+                                           via raw API dump) even though /products never does.
+                                           This is the real source used to backfill
+                                           sp_products.category_id after sync_receipts runs.
   cost_total            (not stored)       Total cost for line (cost × qty) — omitted
   variant_id            variant_id         API doesn't return at line level; always NULL
   (receipt field)       created_at         Denormalized from receipt.receipt_date_time
@@ -600,6 +608,9 @@ def sync_products(client: SalesPlayAPIClient, conn, prefix: str, user_email: str
             "id":           pid,
             "product_name": _str(p.get("product_name") or p.get("name"), 500),
             "description":  _str(p.get("description")),
+            # category_id is confirmed always absent from /products (see header doc) — this
+            # read is defensive in case SalesPlay ever adds it. The real category_id is
+            # backfilled from receipt line items via backfill_product_category_from_receipts().
             "category_id":  _str(p.get("category_id"), 64),
             "sku":          _str(first.get("product_code") or first.get("sku") or p.get("product_code"), 100),
             "barcode":      _str(first.get("product_barcode") or first.get("barcode"), 100),
@@ -761,6 +772,11 @@ def sync_receipts(client: SalesPlayAPIClient, conn, prefix: str, user_email: str
                 "created_at":       receipt_dt,  # denormalized from receipt for date filtering
             }
 
+            # category_id: SalesPlay DOES return this on receipt line items (confirmed via
+            # raw API dump), even though /products never does. This is the real source for
+            # backfilling sp_products.category_id — see backfill_product_category_from_receipts().
+            li_record["category_id"] = _str(item.get("category_id"), 64)
+
             # category_name: use value from API line item directly; fall back to sp_products lookup
             api_cat = _str(item.get("category_name"), 255)
             if api_cat and api_cat != "No category":
@@ -813,4 +829,58 @@ def refresh_customer_last_purchase(conn, prefix: str) -> int:
     """, (prefix, prefix))
     updated = cursor.rowcount
     log.info("Refreshed last_purchase_date", prefix=prefix, updated=updated)
+    return updated
+
+
+def backfill_product_category_from_receipts(conn, prefix: str) -> int:
+    """
+    Backfill sp_products.category_id (and category_name) from sp_receipt_line_items.
+
+    SalesPlay's /products API never returns category_id on the product object
+    (confirmed via raw API dump analysis — only a "category" name string is
+    present there). SalesPlay's /receipts API DOES include category_id on every
+    line item, paired with product_id, which sync_receipts() now captures into
+    sp_receipt_line_items.category_id. This function uses that real, SalesPlay-
+    verified id to fill the gap, picking the most-recently-observed category_id
+    per product from receipt history. Called after sync_receipts so receipt
+    data is available; only fills NULL/empty values, never overwrites existing
+    ones.
+
+    Coverage caveat: only resolves products with at least one sale within the
+    synced receipt history window (default 90-day lookback unless a full
+    historical sync ran). Products with zero receipts in that window remain
+    uncategorized — this is an inherent SalesPlay API limitation (there is no
+    other source for category_id), not a bug in this function. Re-running this
+    on every sync is intentional: it's idempotent and self-heals as more
+    receipt history accumulates over time.
+
+    Returns the number of sp_products rows updated.
+    """
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE sp_products p
+        INNER JOIN (
+            SELECT product_id, category_id
+            FROM (
+                SELECT product_id, category_id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY product_id
+                           ORDER BY created_at DESC
+                       ) AS rn
+                FROM sp_receipt_line_items
+                WHERE tenant_id = %s
+                  AND product_id IS NOT NULL AND product_id != ''
+                  AND category_id IS NOT NULL AND category_id != ''
+            ) ranked
+            WHERE rn = 1
+        ) latest ON latest.product_id = p.id
+        LEFT JOIN sp_categories cat
+            ON cat.tenant_id = p.tenant_id AND cat.id = latest.category_id
+        SET p.category_id = latest.category_id,
+            p.category_name = COALESCE(cat.category_name, p.category_name)
+        WHERE p.tenant_id = %s
+          AND (p.category_id IS NULL OR p.category_id = '')
+    """, (prefix, prefix))
+    updated = cursor.rowcount
+    log.info("Backfilled product category_id from receipt history", prefix=prefix, updated=updated)
     return updated

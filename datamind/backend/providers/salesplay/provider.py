@@ -15,6 +15,7 @@ from providers.salesplay.sync import (
     sync_shops, sync_categories, sync_payment_types,
     sync_products, sync_customers, sync_receipts,
     refresh_customer_last_purchase,
+    backfill_product_category_from_receipts,
 )
 from providers.salesplay.canonical_metrics import CONSISTENCY_CHECKS
 from logger import get_logger
@@ -125,6 +126,15 @@ class SalesPlayProvider(BaseProvider):
             except Exception as _rce:
                 log.warning("refresh_customer_last_purchase failed — skipping",
                             prefix=table_prefix, error=str(_rce))
+                conn.rollback()
+
+            try:
+                progress("  Backfilling product categories from receipt history…")
+                backfill_product_category_from_receipts(conn, table_prefix)
+                conn.commit()
+            except Exception as _bce:
+                log.warning("backfill_product_category_from_receipts failed — skipping",
+                            prefix=table_prefix, error=str(_bce))
                 conn.rollback()
 
             if budget.skipped > 0:
