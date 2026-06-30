@@ -423,7 +423,7 @@ export default function ChatPage({
             </button>
           </div>
           {hasMessages && (
-            <div style={{ textAlign:'center', marginTop:8 }}>
+            <div style={{ textAlign:'center', marginTop:6 }}>
               <button
                 onClick={() => {
                   setMessages([])
@@ -431,12 +431,15 @@ export default function ChatPage({
                   localConvIdRef.current = null
                   onConvCreated?.()
                 }}
-                style={{ fontSize:11, color:'var(--text3)', background:'none', border:'none', cursor:'pointer' }}
+                style={{ fontSize:12, fontWeight:700, textDecoration:'underline', color:'var(--text3)', background:'none', border:'none', cursor:'pointer' }}
               >
-                New conversation
+                Clear conversation
               </button>
             </div>
           )}
+          <div style={{ textAlign:'center', marginTop:6, fontSize:12, color:'var(--text3)' }}>
+            AI can make mistakes.
+          </div>
         </div>
       </div>
     </div>
