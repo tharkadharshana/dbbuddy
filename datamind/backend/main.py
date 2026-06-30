@@ -29,7 +29,7 @@ from db import get_connection, get_table_schemas, get_foreign_keys, get_sample_d
 from llm import (
     query_to_sql, generate_report_summary, call_llm, validate_llm_key,
     list_gemini_models, LLMTransientError,
-    classify_question, synthesize_multi_step_answer,
+    classify_question, synthesize_multi_step_answer, fix_currency_symbol,
 )
 from cache import get_cache, save_cache, invalidate_cache, get_cache_status
 from schema_builder import build_schema_cache
@@ -1934,7 +1934,8 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
 
                 steps.append({"label": "Combining results", "status": "running"})
                 analysis = synthesize_multi_step_answer(
-                    req.question, step_results, llm, api_key, user["email"]
+                    req.question, step_results, llm, api_key, user["email"],
+                    currency=nl_currency,
                 )
                 steps[-1]["status"] = "done"
 
@@ -2037,6 +2038,7 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
             steps.append({"label": "Analyzing results", "status": "running"})
             try:
                 analysis = _run_think_analysis(req.question, columns, data, llm, api_key, user["email"], currency=nl_currency)
+                analysis = fix_currency_symbol(analysis, nl_currency)
                 log.info("Think mode analysis complete", user=user["email"])
                 steps[-1]["status"] = "done"
             except Exception as _te:
@@ -2052,7 +2054,10 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
             if num_col:
                 try:
                     total = sum(float(r.get(num_col, 0) or 0) for r in data)
-                    answer_summary += f" {num_col.replace('_', ' ')} = {total:,.2f}"
+                    if _is_money_column(num_col):
+                        answer_summary += f" {num_col.replace('_', ' ')} = {nl_currency}{total:,.2f}"
+                    else:
+                        answer_summary += f" {num_col.replace('_', ' ')} = {total:,.2f}"
                 except Exception:
                     pass
         if conv_id:

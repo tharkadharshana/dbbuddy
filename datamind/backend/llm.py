@@ -560,9 +560,46 @@ def classify_question(
         return {"type": "data_query"}
 
 
+# Matches a literal '$' immediately adjacent to a number, in either order:
+# "$1,234.56" or "1234.56$". Captures the numeric/punctuation part so it can
+# be re-emitted with the correct currency symbol substituted in place of '$'.
+_WRONG_CURRENCY_RE = re.compile(
+    r'(?<![A-Za-z])\$\s?(\d[\d,]*\.?\d*)|(\d[\d,]*\.?\d*)\s?\$(?![A-Za-z])'
+)
+
+
+def fix_currency_symbol(text: Optional[str], correct_currency: str) -> Optional[str]:
+    """
+    Deterministic post-processing for LLM-generated narrative text: replaces any
+    literal '$' adjacent to a number with the tenant's correct currency symbol.
+
+    This exists because LLMs sometimes default to '$' out of training bias when
+    writing monetary amounts in free-form prose, even with explicit system-prompt
+    instructions not to — system-prompt instructions alone are not reliable
+    enough (confirmed via production transcripts showing '$' used for LKR/PHP/ZAR
+    tenants despite correct currency being injected into the prompt).
+
+    Only touches '$' immediately adjacent to digits — does not attempt
+    word-level replacement (e.g. "dollars", "USD"), which is unreliable and
+    prone to false positives, and doesn't match the actual observed failure
+    mode (literal '$' glyphs in formatted amounts).
+
+    No-op if correct_currency is '$', empty, or text is empty/None.
+    """
+    if not text or not correct_currency or correct_currency == "$":
+        return text
+
+    def _replace(m):
+        amount = m.group(1) or m.group(2)
+        return f"{correct_currency}{amount}"
+
+    return _WRONG_CURRENCY_RE.sub(_replace, text)
+
+
 def synthesize_multi_step_answer(
     original_question: str, step_results: list,
-    llm: str, api_key: str, user_email: str
+    llm: str, api_key: str, user_email: str,
+    currency: str = "$",
 ) -> Optional[str]:
     """Combine results from multiple sub-queries into a single coherent answer."""
     parts = []
@@ -577,11 +614,14 @@ def synthesize_multi_step_answer(
         )
     system = (
         "You are a data analyst. Combine the query results below into a concise, clear answer to "
-        "the original question. Use specific numbers from the data. No preamble."
+        "the original question. Use specific numbers from the data. No preamble. "
+        f"The user's currency is '{currency}'. When writing any monetary amount, use "
+        f"'{currency}' as the currency symbol — never assume USD or '$'."
     )
     prompt = f"Question: {original_question}\n\n" + "\n\n".join(parts) + "\n\nAnswer:"
     try:
-        return call_llm(prompt, system, llm, max_tokens=600, api_key=api_key, user_email=user_email, operation="synthesize")
+        result = call_llm(prompt, system, llm, max_tokens=600, api_key=api_key, user_email=user_email, operation="synthesize")
+        return fix_currency_symbol(result, currency) if result else result
     except Exception as _se:
         log.warning("Multi-step synthesis failed", error=str(_se))
         return None
