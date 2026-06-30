@@ -1919,6 +1919,7 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                             "columns": sub_cols,
                             "data": sub_data,
                             "row_count": len(sub_data),
+                            "sql": sub_sql,
                         })
                         steps[-1]["status"] = "done"
                     except Exception as _sub_err:
@@ -1942,9 +1943,15 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                 if conv_id:
                     try:
                         _conv.save_message(conv_id, "user", req.question)
+                        # Multi-step queries run several sub-queries; we only persist
+                        # the first sub-query's SQL as conversation history context
+                        # (not all of them) — this is a simplification, but it's enough
+                        # to let a follow-up refinement preserve the primary query's
+                        # date range/filters, which is the common case (see Bug 3 fix).
                         _conv.save_message(
                             conv_id, "assistant",
                             analysis or f"Found results across {len(step_results)} queries.",
+                            sql_query=step_results[0].get("sql"),
                             row_count=sum(r["row_count"] for r in step_results),
                         )
                     except Exception as _ce:

@@ -644,7 +644,12 @@ def query_to_sql(question: str, schemas: Dict[str, Any], llm: str = "openai",
     # questions ("explain this", "drill down", "compare to last month") without
     # generating a broad unrelated SQL query.
     history_section = (
-        f"[Previous conversation — use this to understand follow-up questions]\n"
+        f"[Previous conversation — use this to understand follow-up questions. "
+        f"When a '[Previous SQL: ...]' line is present, treat it as the authoritative "
+        f"prior query: preserve its date range/interval/filters unless the user's new "
+        f"question explicitly asks to change them. Do not silently narrow or widen a "
+        f"previously-established time window when the user is only asking to change "
+        f"presentation (e.g. chart type, grouping) rather than scope.]\n"
         f"{conversation_history}\n\n"
         if conversation_history else ""
     )
