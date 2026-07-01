@@ -320,7 +320,7 @@ def get_history_for_prompt(conv_id: str) -> str:
             # Load only the messages AFTER the summary cutoff
             cur.execute(
                 """
-                SELECT role, content, data_snapshot
+                SELECT role, content, sql_query, data_snapshot
                 FROM conversation_messages
                 WHERE conversation_id = %s AND id > %s
                 ORDER BY created_at ASC, id ASC
@@ -334,7 +334,7 @@ def get_history_for_prompt(conv_id: str) -> str:
             # No summary yet — load up to HISTORY_WINDOW messages
             cur.execute(
                 """
-                SELECT role, content, data_snapshot
+                SELECT role, content, sql_query, data_snapshot
                 FROM conversation_messages
                 WHERE conversation_id = %s
                 ORDER BY created_at DESC, id DESC
@@ -373,6 +373,7 @@ def _build_prompt(summary: Optional[str], messages: list) -> str:
     for msg in messages:
         role = msg.get("role", "")
         content = msg.get("content", "")
+        sql_query = msg.get("sql_query")
         snapshot = msg.get("data_snapshot")
 
         # Parse snapshot from JSON string if needed
@@ -386,6 +387,8 @@ def _build_prompt(summary: Optional[str], messages: list) -> str:
             parts.append(f"User: {content}")
         elif role == "assistant":
             parts.append(f"Assistant: {content}")
+            if sql_query:
+                parts.append(f"[Previous SQL: {sql_query}]")
             if snapshot:
                 parts.append(_fmt_snapshot(snapshot))
 

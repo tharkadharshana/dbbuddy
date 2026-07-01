@@ -29,7 +29,7 @@ from db import get_connection, get_table_schemas, get_foreign_keys, get_sample_d
 from llm import (
     query_to_sql, generate_report_summary, call_llm, validate_llm_key,
     list_gemini_models, LLMTransientError,
-    classify_question, synthesize_multi_step_answer,
+    classify_question, synthesize_multi_step_answer, fix_currency_symbol,
 )
 from cache import get_cache, save_cache, invalidate_cache, get_cache_status
 from schema_builder import build_schema_cache
@@ -1919,6 +1919,7 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                             "columns": sub_cols,
                             "data": sub_data,
                             "row_count": len(sub_data),
+                            "sql": sub_sql,
                         })
                         steps[-1]["status"] = "done"
                     except Exception as _sub_err:
@@ -1933,7 +1934,8 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
 
                 steps.append({"label": "Combining results", "status": "running"})
                 analysis = synthesize_multi_step_answer(
-                    req.question, step_results, llm, api_key, user["email"]
+                    req.question, step_results, llm, api_key, user["email"],
+                    currency=nl_currency,
                 )
                 steps[-1]["status"] = "done"
 
@@ -1942,9 +1944,15 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                 if conv_id:
                     try:
                         _conv.save_message(conv_id, "user", req.question)
+                        # Multi-step queries run several sub-queries; we only persist
+                        # the first sub-query's SQL as conversation history context
+                        # (not all of them) — this is a simplification, but it's enough
+                        # to let a follow-up refinement preserve the primary query's
+                        # date range/filters, which is the common case (see Bug 3 fix).
                         _conv.save_message(
                             conv_id, "assistant",
                             analysis or f"Found results across {len(step_results)} queries.",
+                            sql_query=step_results[0].get("sql"),
                             row_count=sum(r["row_count"] for r in step_results),
                         )
                     except Exception as _ce:
@@ -2030,6 +2038,7 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
             steps.append({"label": "Analyzing results", "status": "running"})
             try:
                 analysis = _run_think_analysis(req.question, columns, data, llm, api_key, user["email"], currency=nl_currency)
+                analysis = fix_currency_symbol(analysis, nl_currency)
                 log.info("Think mode analysis complete", user=user["email"])
                 steps[-1]["status"] = "done"
             except Exception as _te:
@@ -2038,6 +2047,25 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
 
         # ── Build conversation summary & persist ──────────────────────────────
         answer_summary = f"Found {len(data)} result{'s' if len(data) != 1 else ''}."
+        # Brand-new integration-connected tenants with essentially no synced data
+        # get a friendlier message instead of a flat "Found 0 results" — that's
+        # a confusing first impression for someone who hasn't recorded any sales
+        # yet (confirmed via trial user investigation). Scoped tightly: only
+        # fires when this specific query returned 0 rows AND the tenant's total
+        # synced row count across ALL their data is near-zero — never for a
+        # healthy tenant whose specific query just happens to return 0 rows.
+        if len(data) == 0 and is_integration:
+            try:
+                from integrations import get_user_total_rows
+                _total_rows = get_user_total_rows(user["email"])
+            except Exception:
+                _total_rows = None
+            if _total_rows is not None and _total_rows < 10:
+                answer_summary = (
+                    "It looks like your account doesn't have any synced data yet. "
+                    "If you've just connected your store, a sync may still be in "
+                    "progress — check your integration status, or try again in a few minutes."
+                )
         if columns and data:
             num_col = next(
                 (c for c in columns if isinstance(data[0].get(c), (int, float))), None
@@ -2045,7 +2073,10 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
             if num_col:
                 try:
                     total = sum(float(r.get(num_col, 0) or 0) for r in data)
-                    answer_summary += f" {num_col.replace('_', ' ')} = {total:,.2f}"
+                    if _is_money_column(num_col):
+                        answer_summary += f" {num_col.replace('_', ' ')} = {nl_currency}{total:,.2f}"
+                    else:
+                        answer_summary += f" {num_col.replace('_', ' ')} = {total:,.2f}"
                 except Exception:
                     pass
         if conv_id:

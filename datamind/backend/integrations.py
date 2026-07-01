@@ -270,6 +270,16 @@ def bootstrap_integration_tables():
         ADD COLUMN IF NOT EXISTS last_purchase_date DATETIME DEFAULT NULL
         AFTER points_balance
     """)
+    # Migration: add category_id to sp_receipt_line_items. SalesPlay's /receipts
+    # API includes category_id on every line item (confirmed via raw API dump),
+    # but earlier sync versions only captured category_name. This column lets us
+    # backfill sp_products.category_id from receipt history, since SalesPlay's
+    # /products endpoint never returns category_id directly on the product itself.
+    cursor.execute("""
+        ALTER TABLE sp_receipt_line_items
+        ADD COLUMN IF NOT EXISTS category_id VARCHAR(64) DEFAULT NULL
+        AFTER category_name
+    """)
     # Migration: add composite indexes missing from earlier installs.
     # IF NOT EXISTS prevents duplicate-key errors on already-indexed tables.
     _missing_indexes = [
@@ -279,6 +289,7 @@ def bootstrap_integration_tables():
         ("sp_customers", "idx_spending",         "(tenant_id, total_spent)"),
         ("sp_customers", "idx_recency",          "(tenant_id, last_purchase_date)"),
         ("sp_customers", "idx_visits",           "(tenant_id, total_visits)"),
+        ("sp_receipt_line_items", "idx_category", "(tenant_id, product_id, category_id)"),
     ]
     for _tbl, _idx, _cols in _missing_indexes:
         try:
