@@ -383,9 +383,9 @@ def bootstrap_billing_tables():
 
         # Seed plans  (name, price_usd, price_cents, ai_credits, db_rows, sort_order)
         plans = [
-            ("Starter", "5.00",   500,   100,  2_000_000,    1),
-            ("Growth",  "10.00", 1000,   250,  5_000_000,    2),
-            ("Pro",     "25.00", 2500,  1000, 20_000_000,    3),
+            ("Starter", "5.00",   500,   200,  2_000_000,    1),
+            ("Growth",  "10.00", 1000,   500,  5_000_000,    2),
+            ("Pro",     "25.00", 2500,  2000, 20_000_000,    3),
         ]
         for name, price_usd, price_cents, ai_credits, db_rows, sort_order in plans:
             cur.execute("SELECT id FROM subscription_plans WHERE name = %s", (name,))
@@ -406,7 +406,7 @@ def bootstrap_billing_tables():
                 """, (name, price_usd, price_cents, ai_credits, db_rows, sort_order))
 
         # Seed unified token limits — must match _TOKEN_LIMITS dict below
-        _TOKEN_LIMITS_SEED = {"Starter": 100.0, "Growth": 250.0, "Pro": 1000.0}
+        _TOKEN_LIMITS_SEED = {"Starter": 200.0, "Growth": 500.0, "Pro": 2000.0}
         for _pname, _tlimit in _TOKEN_LIMITS_SEED.items():
             cur.execute(
                 "UPDATE subscription_plans SET tokens_limit=%s WHERE name=%s",
@@ -662,7 +662,7 @@ def get_user_subscription(user_email: str) -> Dict:
 
 
 # In-memory token limit enforcement — must stay in sync with the bootstrap seed above.
-_TOKEN_LIMITS: dict = {"Starter": 100.0, "Growth": 250.0, "Pro": 1000.0}
+_TOKEN_LIMITS: dict = {"Starter": 200.0, "Growth": 500.0, "Pro": 2000.0}
 
 # Plans that include each gated feature.
 _PLAN_FEATURE_GATE: dict = {
@@ -674,10 +674,12 @@ _PLAN_FEATURE_GATE: dict = {
 }
 
 # Data-history window per plan: months to look back, and row fallback when no date column.
+# Pro's 200 months (~16.7yr) is a practical stand-in for "all historical data since 2010" —
+# get_plan_history_limit() only ever produces a concrete cutoff_date, there's no "unlimited" sentinel.
 _PLAN_HISTORY: dict = {
-    "Starter": {"months": 1,  "row_limit": 1000},
-    "Growth":  {"months": 3,  "row_limit": 3000},
-    "Pro":     {"months": 12, "row_limit": 12000},
+    "Starter": {"months": 3,   "row_limit": 3000},
+    "Growth":  {"months": 12,  "row_limit": 12000},
+    "Pro":     {"months": 200, "row_limit": 50000},
 }
 
 
