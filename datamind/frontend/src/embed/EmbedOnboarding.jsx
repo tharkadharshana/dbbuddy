@@ -329,9 +329,9 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete, onClo
           <div style={{ display:'flex', flexDirection:'column', gap:8, marginBottom:12 }}>
             {plans.length === 0
               ? [
-                  { id: 1, name: 'Starter', tokens_limit: 50,  price_cents: 500  },
-                  { id: 2, name: 'Growth',  tokens_limit: 125, price_cents: 1000 },
-                  { id: 3, name: 'Pro',     tokens_limit: 500, price_cents: 2500 },
+                  { id: 1, name: 'Starter', tokens_limit: 200,  price_cents: 500  },
+                  { id: 2, name: 'Growth',  tokens_limit: 500,  price_cents: 1000 },
+                  { id: 3, name: 'Pro',     tokens_limit: 2000, price_cents: 2500 },
                 ].map(plan => (
                   <PlanCard key={plan.id} plan={plan} selected={selectedPlanId === plan.id} onSelect={() => setSelectedPlanId(plan.id)} />
                 ))
