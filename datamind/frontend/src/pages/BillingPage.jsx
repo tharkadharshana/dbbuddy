@@ -19,25 +19,25 @@ const fmtTok = (raw) => {
 // ── Plan definitions ──────────────────────────────────────────────────────────
 const PLAN_FEATURES = {
   Starter: [
-    { text: '500K Tokens / month',       ok: true  },
+    { text: '2M Tokens / month',         ok: true  },
     { text: 'Ask Your Data (AI)',         ok: true  },
     { text: 'All Analytics',             ok: true  },
     { text: 'All Reports',               ok: true  },
     { text: 'Forecasting & Anomalies',   ok: false },
     { text: 'Priority Support',          ok: false },
-    { text: '1 Month data history',      ok: true  },
+    { text: '3 Months data history',     ok: true  },
   ],
   Growth: [
-    { text: '1.25M Tokens / month',      ok: true  },
+    { text: '5M Tokens / month',         ok: true  },
     { text: 'Ask Your Data (AI)',         ok: true  },
     { text: 'All Analytics',             ok: true  },
     { text: 'All Reports',               ok: true  },
     { text: 'Forecasting & Anomalies',   ok: true  },
     { text: 'Priority Support',          ok: false },
-    { text: '3 Months data history',     ok: true  },
+    { text: '12 Months data history',    ok: true  },
   ],
   Pro: [
-    { text: '5M Tokens / month',         ok: true  },
+    { text: '20M Tokens / month',        ok: true  },
     { text: 'Ask Your Data (AI)',         ok: true  },
     { text: 'All Analytics',             ok: true  },
     { text: 'All Reports',               ok: true  },
@@ -45,7 +45,7 @@ const PLAN_FEATURES = {
     { text: 'Priority Support',          ok: true  },
     { text: 'External API integrations', ok: true  },
     { text: 'Web widget',                ok: true  },
-    { text: '1 Year data history',       ok: true  },
+    { text: 'All historical data',       ok: true  },
   ],
 }
 
