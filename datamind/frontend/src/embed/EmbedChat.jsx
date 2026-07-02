@@ -262,7 +262,7 @@ function Message({ msg, theme }) {
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function EmbedChat({ context, onExpired, onLogout, onCollapse, initialInput = '' }) {
+export default function EmbedChat({ context, onExpired, onLogout, onCollapse, onMessageSent, initialInput = '' }) {
   const productTitle = resolveProductTitle(context)
   const APP_NAME = appName(context)
   const isSalesplay = context?.provider_id === 'salesplay'
@@ -372,6 +372,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
                        id: Date.now() + 1 }
     setMessages(m => [...m, userMsg, thinkMsg])
     setLoading(true)
+    onMessageSent?.()
 
     notifyParent('dm:query', { question: q })
 

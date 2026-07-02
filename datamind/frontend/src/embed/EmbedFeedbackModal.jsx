@@ -6,7 +6,7 @@ import React, { useState } from 'react'
 
 const STAR_LABELS = ['Poor', 'Fair', 'Good', 'Great', 'Excellent']
 
-export default function EmbedFeedbackModal({ onSubmit, onSkip }) {
+export default function EmbedFeedbackModal({ onSubmit, onRemindLater }) {
   const [rating, setRating] = useState(0)
   const [hovered, setHovered] = useState(0)
   const [comment, setComment] = useState('')
@@ -76,14 +76,14 @@ export default function EmbedFeedbackModal({ onSubmit, onSkip }) {
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <button
             type="button"
-            onClick={onSkip}
+            onClick={onRemindLater}
             disabled={submitting}
             style={{
               background: 'none', border: 'none', cursor: 'pointer',
               fontSize: 13, color: 'var(--text3)', padding: '8px 10px',
             }}
           >
-            Skip
+            Remind me later
           </button>
           <button
             type="button"

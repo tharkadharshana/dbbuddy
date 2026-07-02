@@ -18,9 +18,16 @@ import EmbedSearchBar from './EmbedSearchBar'
 import EmbedFeedbackModal from './EmbedFeedbackModal'
 import { appName } from './embedBranding'
 
-// Don't re-prompt for feedback more than once per day.
-const FEEDBACK_STORAGE_KEY = 'dm_feedback_last_prompt'
-const FEEDBACK_COOLDOWN_MS = 24 * 60 * 60 * 1000
+// "Remind me later" / post-submit cooldown, jittered like App Store / Play
+// Store review prompts so users aren't all re-asked on the same schedule.
+const FEEDBACK_NEXT_PROMPT_KEY = 'dm_feedback_next_prompt'
+const FEEDBACK_COOLDOWN_MIN_MS = 3 * 24 * 60 * 60 * 1000 // 3 days
+const FEEDBACK_COOLDOWN_MAX_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
+
+function snoozeFeedback() {
+  const delay = FEEDBACK_COOLDOWN_MIN_MS + Math.random() * (FEEDBACK_COOLDOWN_MAX_MS - FEEDBACK_COOLDOWN_MIN_MS)
+  localStorage.setItem(FEEDBACK_NEXT_PROMPT_KEY, String(Date.now() + delay))
+}
 
 // ── Collapsed "search bar" layout (?layout=bar) ─────────────────────────────
 // The widget can start as a small search-bar pill instead of the full chat
@@ -80,6 +87,7 @@ function EmbedApp() {
   const [expanded, setExpanded]         = useState(!layoutBar)
   const [initialInput, setInitialInput] = useState('')
   const [feedbackAfter, setFeedbackAfter] = useState(null) // fn to run once the feedback prompt is dismissed
+  const hasChattedRef = React.useRef(false) // only ask for feedback if the user actually sent a message
 
   // Apply saved theme on first load so onboarding is themed consistently
   useEffect(() => {
@@ -239,19 +247,19 @@ function EmbedApp() {
     document.documentElement.style.setProperty('--blue', accentColor)
   }
 
-  // Ask for a rating before actually closing/minimizing the widget, unless
-  // we've already prompted recently.
+  // Ask for a rating before actually closing/minimizing the widget — only if
+  // the user sent at least one message this session, and we're not snoozed.
   function requestClose(after) {
-    const last = Number(localStorage.getItem(FEEDBACK_STORAGE_KEY) || 0)
-    if (Date.now() - last > FEEDBACK_COOLDOWN_MS) {
+    const nextPrompt = Number(localStorage.getItem(FEEDBACK_NEXT_PROMPT_KEY) || 0)
+    if (hasChattedRef.current && Date.now() >= nextPrompt) {
       setFeedbackAfter(() => after)
     } else {
       after()
     }
   }
 
-  function dismissFeedback() {
-    localStorage.setItem(FEEDBACK_STORAGE_KEY, String(Date.now()))
+  function handleRemindLater() {
+    snoozeFeedback()
     const after = feedbackAfter
     setFeedbackAfter(null)
     if (after) after()
@@ -259,7 +267,10 @@ function EmbedApp() {
 
   async function handleFeedbackSubmit(rating, comment) {
     try { await embedSubmitFeedback(rating, comment) } catch { /* best-effort */ }
-    dismissFeedback()
+    snoozeFeedback()
+    const after = feedbackAfter
+    setFeedbackAfter(null)
+    if (after) after()
   }
 
   function handleClose() {
@@ -297,6 +308,7 @@ function EmbedApp() {
         onExpired={handleExpired}
         onLogout={handleLogout}
         onCollapse={layoutBar ? () => requestClose(() => setExpanded(false)) : undefined}
+        onMessageSent={() => { hasChattedRef.current = true }}
         initialInput={initialInput}
       />
     )
@@ -306,7 +318,7 @@ function EmbedApp() {
     <>
       {content}
       {feedbackAfter && (
-        <EmbedFeedbackModal onSubmit={handleFeedbackSubmit} onSkip={dismissFeedback} />
+        <EmbedFeedbackModal onSubmit={handleFeedbackSubmit} onRemindLater={handleRemindLater} />
       )}
     </>
   )
