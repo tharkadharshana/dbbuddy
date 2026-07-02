@@ -59,6 +59,7 @@ from billing import (
     check_plan_feature, get_plan_history_limit,
 )
 from embed import router as embed_router, bootstrap_embed_tables
+from feedback import router as feedback_router, bootstrap_feedback_tables
 from v1 import router as partner_router
 from pool import get_pool
 
@@ -421,6 +422,7 @@ app.add_middleware(
 )
 
 app.include_router(embed_router)   # /embed/* — kept unversioned (live in partner iframes)
+app.include_router(feedback_router)  # /embed/feedback — widget rating + comment
 app.include_router(partner_router)  # /v1/partner/* — Partner API
 # All user-facing routes are registered on this router and included under /v1
 v1 = APIRouter(prefix="/v1", tags=["v1"])
@@ -471,6 +473,10 @@ def startup_event():
         bootstrap_embed_tables()
     except Exception as _be:
         log.warning("Embed bootstrap skipped", error=str(_be))
+    try:
+        bootstrap_feedback_tables()
+    except Exception as _be:
+        log.warning("Feedback bootstrap skipped", error=str(_be))
     start_scheduler()
     log.info("DataMind backend started")
 

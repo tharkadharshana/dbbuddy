@@ -100,3 +100,7 @@ export const salesplayGetProfile = (partnerKey, aat) =>
 // Check whether a DataMind account with Salesplay credentials exists for a given email.
 export const salesplayCheckUser = (partnerKey, email) =>
   api.post('/embed/salesplay/check-user', { partner_key: partnerKey, email }).then(r => r.data)
+
+// Widget rating (1-5 stars) + optional free-text comment, asked when the user closes the widget.
+export const embedSubmitFeedback = (rating, comment = '') =>
+  api.post('/embed/feedback', { rating, comment }).then(r => r.data)

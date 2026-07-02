@@ -10,12 +10,17 @@
 import React, { useState, useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
 import './embed.css'
-import { embedValidateContext, salesplayGetProfile, salesplayCheckUser, salesplayOnboard } from './embedApi'
+import { embedValidateContext, salesplayGetProfile, salesplayCheckUser, salesplayOnboard, embedSubmitFeedback } from './embedApi'
 import EmbedOnboarding from './EmbedOnboarding'
 import EmbedChat from './EmbedChat'
 import EmbedSalesplayAutoInit from './EmbedSalesplayAutoInit'
 import EmbedSearchBar from './EmbedSearchBar'
+import EmbedFeedbackModal from './EmbedFeedbackModal'
 import { appName } from './embedBranding'
+
+// Don't re-prompt for feedback more than once per day.
+const FEEDBACK_STORAGE_KEY = 'dm_feedback_last_prompt'
+const FEEDBACK_COOLDOWN_MS = 24 * 60 * 60 * 1000
 
 // ── Collapsed "search bar" layout (?layout=bar) ─────────────────────────────
 // The widget can start as a small search-bar pill instead of the full chat
@@ -74,6 +79,7 @@ function EmbedApp() {
   const layoutBar = params.get('layout') === 'bar'
   const [expanded, setExpanded]         = useState(!layoutBar)
   const [initialInput, setInitialInput] = useState('')
+  const [feedbackAfter, setFeedbackAfter] = useState(null) // fn to run once the feedback prompt is dismissed
 
   // Apply saved theme on first load so onboarding is themed consistently
   useEffect(() => {
@@ -233,13 +239,39 @@ function EmbedApp() {
     document.documentElement.style.setProperty('--blue', accentColor)
   }
 
-  function handleClose() {
-    notifyParent('dm:close')
-    if (layoutBar) setExpanded(false)
+  // Ask for a rating before actually closing/minimizing the widget, unless
+  // we've already prompted recently.
+  function requestClose(after) {
+    const last = Number(localStorage.getItem(FEEDBACK_STORAGE_KEY) || 0)
+    if (Date.now() - last > FEEDBACK_COOLDOWN_MS) {
+      setFeedbackAfter(() => after)
+    } else {
+      after()
+    }
   }
 
+  function dismissFeedback() {
+    localStorage.setItem(FEEDBACK_STORAGE_KEY, String(Date.now()))
+    const after = feedbackAfter
+    setFeedbackAfter(null)
+    if (after) after()
+  }
+
+  async function handleFeedbackSubmit(rating, comment) {
+    try { await embedSubmitFeedback(rating, comment) } catch { /* best-effort */ }
+    dismissFeedback()
+  }
+
+  function handleClose() {
+    requestClose(() => {
+      notifyParent('dm:close')
+      if (layoutBar) setExpanded(false)
+    })
+  }
+
+  let content
   if (state === 'salesplay_init') {
-    return (
+    content = (
       <EmbedSalesplayAutoInit
         context={context}
         partnerKey={partnerKey}
@@ -249,10 +281,8 @@ function EmbedApp() {
         onClose={handleClose}
       />
     )
-  }
-
-  if (state === 'onboarding') {
-    return (
+  } else if (state === 'onboarding') {
+    content = (
       <EmbedOnboarding
         context={context}
         partnerKey={partnerKey}
@@ -260,16 +290,25 @@ function EmbedApp() {
         onClose={handleClose}
       />
     )
+  } else {
+    content = (
+      <EmbedChat
+        context={context}
+        onExpired={handleExpired}
+        onLogout={handleLogout}
+        onCollapse={layoutBar ? () => requestClose(() => setExpanded(false)) : undefined}
+        initialInput={initialInput}
+      />
+    )
   }
 
   return (
-    <EmbedChat
-      context={context}
-      onExpired={handleExpired}
-      onLogout={handleLogout}
-      onCollapse={layoutBar ? () => setExpanded(false) : undefined}
-      initialInput={initialInput}
-    />
+    <>
+      {content}
+      {feedbackAfter && (
+        <EmbedFeedbackModal onSubmit={handleFeedbackSubmit} onSkip={dismissFeedback} />
+      )}
+    </>
   )
 }
 

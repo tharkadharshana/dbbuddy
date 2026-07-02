@@ -13,5 +13,8 @@
       "Bash(Get-ChildItem -Path \"d:\\\\Projects\\\\datamind-ai\\\\datamind\\\\frontend\" -Filter \"*.tsx\" -Recurse -Exclude \"node_modules\")",
       "Bash(python3 -c ' *)"
     ]
+  },
+  "enabledPlugins": {
+    "ponytail@ponytail": true
   }
 }
