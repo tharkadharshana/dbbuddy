@@ -6,6 +6,8 @@ import React, { useState } from 'react'
 
 const STAR_LABELS = ['Poor', 'Fair', 'Good', 'Great', 'Excellent']
 
+const APP_NAME = import.meta.env.VITE_APP_NAME || 'DataMind AI'
+
 export default function EmbedFeedbackModal({ onSubmit, onRemindLater }) {
   const [rating, setRating] = useState(0)
   const [hovered, setHovered] = useState(0)
@@ -33,10 +35,10 @@ export default function EmbedFeedbackModal({ onSubmit, onRemindLater }) {
       }}>
         <div>
           <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>
-            Before you go — how was your experience?
+            How would you rate your experience with {APP_NAME}?
           </div>
           <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 4 }}>
-            Your feedback helps us improve this AI tool.
+            Your feedback helps us improve.
           </div>
         </div>
 
@@ -63,7 +65,7 @@ export default function EmbedFeedbackModal({ onSubmit, onRemindLater }) {
         <textarea
           value={comment}
           onChange={e => setComment(e.target.value)}
-          placeholder="What do you think about this AI tool? (optional)"
+          placeholder="Your comment here (optional)"
           rows={3}
           style={{
             width: '100%', resize: 'none', borderRadius: 10,

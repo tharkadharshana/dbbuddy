@@ -38,17 +38,21 @@ export default function EmbedHistoryDrawer({ open, onClose, onSelect, onNewChat,
       const r = await embedGetConversationMessages(convId)
       const loaded = (r.messages || []).map((m, i) => {
         const snap = m.data_snapshot || null
+        const isAssistant = m.role !== 'user'
         return {
           id: m.id || i,
           role: m.role === 'user' ? 'user' : 'ai',
           content: m.content,
-          data: snap ? {
+          data: (snap || isAssistant) ? {
             type: 'data',
-            columns: snap.columns || [],
-            data: snap.rows || [],
+            columns: snap?.columns || [],
+            data: snap?.rows || [],
             row_count: m.row_count || 0,
+            message_id: m.id,
+            conversation_id: convId,
           } : null,
           analysis: snap?.analysis || null,
+          vote: m.vote ?? null,
         }
       })
       onSelect(convId, loaded)
