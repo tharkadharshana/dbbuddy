@@ -94,18 +94,34 @@ def copy_backend(dest):
             shutil.copytree(src, dest / name, ignore=ignore_excluded)
 
 
-def copy_manual_files(dest):
-    """Copy git-ignored prod files to manual_deploy/ — must be applied by hand on the server."""
-    print("==> Copying manual deploy files (main.py, llm.py)...")
+def copy_manual_files(dest, baseline):
+    """Copy git-ignored prod files to manual_deploy/ — must be applied by hand on the server.
+
+    Only includes files that actually changed since the last patch tag, so an
+    admin doesn't get main.py/llm.py in every patch when only one of them (or
+    neither) actually differs from what's already deployed.
+    """
+    print("==> Copying manual deploy files (only those changed since last patch)...")
     dest.mkdir(parents=True, exist_ok=True)
+    changed = None
+    if baseline is not None:
+        try:
+            changed = set(_git("diff", "--name-only", f"{baseline}..HEAD").splitlines())
+        except subprocess.CalledProcessError:
+            changed = None  # fall back to "include all" if git diff fails
+
     found = []
     for name in MANUAL_DEPLOY_FILES:
         src = BACKEND_DIR / name
-        if src.exists():
-            shutil.copy2(src, dest / name)
-            found.append(name)
-        else:
+        rel_path = str((BACKEND_DIR / name).relative_to(ROOT)).replace("\\", "/")
+        if not src.exists():
             print(f"    (skip, not found) {name}")
+            continue
+        if changed is not None and rel_path not in changed:
+            print(f"    (skip, unchanged since {baseline}) {name}")
+            continue
+        shutil.copy2(src, dest / name)
+        found.append(name)
     if found:
         readme = (
             "MANUAL DEPLOY REQUIRED\n"
@@ -204,7 +220,7 @@ def main():
     dist_dir = build_frontend()
     copy_frontend(dist_dir, patch_dir / "frontend")
     copy_backend(patch_dir / "backend")
-    copy_manual_files(patch_dir / "manual_deploy")
+    copy_manual_files(patch_dir / "manual_deploy", baseline)
     write_patch_notes(patch_dir, patch_name, baseline)
 
     print("==> Zipping...")

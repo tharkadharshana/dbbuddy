@@ -15,20 +15,19 @@ diff against the live server copy first.
 CHANGES IN THIS PATCH
 ─────────────────────
 
-A. feat(chat): add Clear conversation styling and AI disclaimer to main app
-   PROBLEM : The main app's chat ("New conversation" link, no disclaimer)
-             was inconsistent with the SalesPlay embed chat.
-   FIX     : Renamed to "Clear conversation", styled bold + underlined to
-             match the embed; added the "AI can make mistakes." disclaimer
-             beneath the input.
-   FILES   : datamind/frontend/src/pages/ChatPage.jsx
-
-B. fix(embed): shorten SalesPlay header title to avoid truncation
-   PROBLEM : "Ask Your Salesplay Data" truncated to "Ask Your..." in the
-             widget header at narrow widths.
-   FIX     : Replaced with "Ask Your AI"; original productTitle expression
-             left commented for easy revert.
-   FILES   : datamind/frontend/src/embed/EmbedChat.jsx
+A. fix(query): surface broken SalesPlay sync on stale time-scoped queries
+   PROBLEM : A user asking a "last month/week/year" question against a
+             tenant whose SalesPlay sync had silently failed (expired API
+             token) got a bare "Found 0 results" with no indication their
+             data was stale — the existing staleness-note keyword list only
+             covered "this month", "last 24", "last hour", etc., not "last
+             month/week/year".
+   FIX     : Added the missing keywords. Also escalate to a clearer
+             broken-connection message (last-synced date + reconnect
+             instructions) specifically when the query returns 0 rows and
+             the sync is over 24h stale, since that combination almost
+             certainly means the answer is wrong rather than genuinely $0.
+   FILES   : datamind/backend/main.py
 
 DB CHANGES  : None
 .ENV CHANGES: None
