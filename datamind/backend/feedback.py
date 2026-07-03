@@ -58,3 +58,23 @@ def submit_feedback(req: FeedbackRequest, user: dict = Depends(current_user)):
     finally:
         conn.close()
     return {"ok": True}
+
+
+@router.get("/feedback/status")
+def get_feedback_status(user: dict = Depends(current_user)):
+    """
+    Whether this user has ever submitted widget feedback — checked server-side
+    (not localStorage) so the prompt doesn't reappear on a different browser/device.
+    """
+    conn = _get_conn()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT 1 FROM widget_feedback WHERE user_email = %s LIMIT 1",
+            (user["email"],),
+        )
+        has_feedback = cursor.fetchone() is not None
+        cursor.close()
+    finally:
+        conn.close()
+    return {"has_feedback": has_feedback}

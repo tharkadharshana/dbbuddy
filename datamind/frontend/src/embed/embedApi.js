@@ -108,3 +108,7 @@ export const salesplayCheckUser = (partnerKey, email) =>
 // Widget rating (1-5 stars) + optional free-text comment, asked when the user closes the widget.
 export const embedSubmitFeedback = (rating, comment = '') =>
   api.post('/embed/feedback', { rating, comment }).then(r => r.data)
+
+// Whether this user has ever submitted widget feedback (server-side, cross-device).
+export const embedGetFeedbackStatus = () =>
+  api.get('/embed/feedback/status').then(r => r.data)
