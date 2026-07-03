@@ -74,6 +74,10 @@ export const embedListConversations = () =>
 export const embedGetConversationMessages = (convId) =>
   api.get(`/conversations/${convId}/messages`).then(r => r.data)
 
+// Thumbs up/down on an assistant reply. vote: 1 (up), -1 (down), or null (clear).
+export const embedVoteMessage = (convId, messageId, vote) =>
+  api.patch(`/conversations/${convId}/messages/${messageId}/vote`, { vote }).then(r => r.data)
+
 // One-time link so an already-authenticated embed user can open the
 // standalone DataMind app without re-entering credentials.
 export const embedGetSSOHandoff = () =>

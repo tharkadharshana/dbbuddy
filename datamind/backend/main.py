@@ -526,6 +526,7 @@ def _base_query_response(**kwargs) -> dict:
         "think_mode":      kwargs.get("think_mode", False),
         "conversation_id": kwargs.get("conversation_id", None),
         "data_as_of":      kwargs.get("data_as_of", None),
+        "message_id":      kwargs.get("message_id", None),
     }
     if "sql" in kwargs:
         base["sql"] = kwargs["sql"]
@@ -1829,15 +1830,17 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                 "Ask me anything about your data — for example: "
                 "'Show me sales from last month' or 'Who are my top customers?'"
             )
+            msg_id = None
             if conv_id:
                 try:
                     _conv.save_message(conv_id, "user", req.question)
-                    _conv.save_message(conv_id, "assistant", response_text)
+                    msg_id = _conv.save_message(conv_id, "assistant", response_text)
                 except Exception:
                     pass
             return _base_query_response(
                 success=True, type="conversational", message=response_text,
                 steps=steps, conversation_id=conv_id, think_mode=req.think_mode,
+                message_id=msg_id,
             )
 
         # ── Unsupported query (predictions, external data, etc.) ─────────────
@@ -1846,15 +1849,17 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                 "response",
                 "I can't answer that from your data, but I can show you historical trends instead."
             )
+            msg_id = None
             if conv_id:
                 try:
                     _conv.save_message(conv_id, "user", req.question)
-                    _conv.save_message(conv_id, "assistant", response_text)
+                    msg_id = _conv.save_message(conv_id, "assistant", response_text)
                 except Exception:
                     pass
             return _base_query_response(
                 success=True, type="conversational", message=response_text,
                 steps=steps, conversation_id=conv_id, think_mode=req.think_mode,
+                message_id=msg_id,
             )
 
         # ── Needs clarification ───────────────────────────────────────────────
@@ -1864,15 +1869,17 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                 "Could you provide more details about what you're looking for? "
                 "For example, specify a time period, a product category, or a metric."
             )
+            msg_id = None
             if conv_id:
                 try:
                     _conv.save_message(conv_id, "user", req.question)
-                    _conv.save_message(conv_id, "assistant", clarification)
+                    msg_id = _conv.save_message(conv_id, "assistant", clarification)
                 except Exception:
                     pass
             return _base_query_response(
                 success=True, type="clarification", message=clarification,
                 steps=steps, conversation_id=conv_id, think_mode=req.think_mode,
+                message_id=msg_id,
             )
 
         # ── Multi-step query ──────────────────────────────────────────────────
@@ -1947,6 +1954,7 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
 
                 _charge_op(user["email"], "nl_query_rows", sum(r["row_count"] for r in step_results))
 
+                msg_id = None
                 if conv_id:
                     try:
                         _conv.save_message(conv_id, "user", req.question)
@@ -1955,7 +1963,7 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                         # (not all of them) — this is a simplification, but it's enough
                         # to let a follow-up refinement preserve the primary query's
                         # date range/filters, which is the common case (see Bug 3 fix).
-                        _conv.save_message(
+                        msg_id = _conv.save_message(
                             conv_id, "assistant",
                             analysis or f"Found results across {len(step_results)} queries.",
                             sql_query=step_results[0].get("sql"),
@@ -1971,7 +1979,7 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                     columns=primary["columns"], data=primary["data"], row_count=primary["row_count"],
                     analysis=analysis, think_mode=req.think_mode,
                     conversation_id=conv_id, data_as_of=nl_last_sync_at,
-                    multi_results=step_results,
+                    multi_results=step_results, message_id=msg_id,
                 )
 
         # ── Single data query ─────────────────────────────────────────────────
@@ -2085,13 +2093,14 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                         answer_summary += f" {num_col.replace('_', ' ')} = {total:,.2f}"
                 except Exception:
                     pass
+        msg_id = None
         if conv_id:
             try:
                 stat_col = next(
                     (c for c in columns if isinstance(data[0].get(c), (int, float))), None
                 ) if data else None
                 _conv.save_message(conv_id, "user", req.question)
-                _conv.save_message(
+                msg_id = _conv.save_message(
                     conv_id, "assistant", answer_summary,
                     sql_query=sql, row_count=len(data),
                     columns=columns, data=data, stat_col=stat_col,
@@ -2141,6 +2150,7 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
             columns=columns, data=data, row_count=len(data),
             analysis=analysis, think_mode=req.think_mode,
             conversation_id=conv_id, data_as_of=nl_last_sync_at,
+            message_id=msg_id,
         )
         # Only own-DB users get the generated SQL back (used by QueryPage's
         # "Show SQL" debugging view). Integration users query shared internal
@@ -2338,6 +2348,29 @@ def api_delete_conversation(request: Request, conv_id: str,
     except Exception as e:
         log.error("delete_conversation failed", user=user["email"], error=str(e))
         raise _server_error("Could not delete conversation.")
+
+
+class VoteRequest(BaseModel):
+    vote: Optional[int] = None  # 1 = thumbs up, -1 = thumbs down, None/0 = clear
+
+
+@v1.patch("/conversations/{conv_id}/messages/{message_id}/vote")
+@_limiter.limit(RL_WRITE)
+def api_vote_message(request: Request, conv_id: str, message_id: int, body: VoteRequest,
+                     user: dict = Depends(current_user)):
+    vote = body.vote or None
+    if vote not in (1, -1, None):
+        raise HTTPException(status_code=422, detail="vote must be 1, -1, or null.")
+    try:
+        ok = _conv.set_vote(conv_id, message_id, user["email"], vote)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Message not found.")
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("vote_message failed", user=user["email"], error=str(e))
+        raise _server_error("Could not save vote.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════

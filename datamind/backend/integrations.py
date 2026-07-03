@@ -364,12 +364,19 @@ def bootstrap_integration_tables():
             sql_query       TEXT,
             row_count       INT          NOT NULL DEFAULT 0,
             data_snapshot   JSON,
+            vote            TINYINT      NULL,
             created_at      DATETIME     NOT NULL DEFAULT NOW(),
             PRIMARY KEY (id),
             INDEX idx_cmsg_conv (conversation_id, created_at),
             FOREIGN KEY (conversation_id)
                 REFERENCES conversations(id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """)
+    # vote: 1 = thumbs up, -1 = thumbs down, NULL = not rated. Added after the
+    # table already existed in production, so add it for pre-existing installs too.
+    cursor.execute("""
+        ALTER TABLE conversation_messages
+        ADD COLUMN IF NOT EXISTS vote TINYINT NULL AFTER data_snapshot
     """)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS conversation_summaries (

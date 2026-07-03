@@ -65,6 +65,22 @@ input, textarea { font-family: var(--font); }
   100% { transform: translateX(400%);  }
 }
 
+@keyframes dmVotePop {
+  0%   { transform: scale(1);    }
+  40%  { transform: scale(1.35); }
+  100% { transform: scale(1);    }
+}
+
+.dm-vote-btn {
+  transition: transform .12s ease, color .12s ease, opacity .12s ease;
+}
+.dm-vote-btn:hover {
+  transform: scale(1.15);
+}
+.dm-vote-btn.dm-vote-pop {
+  animation: dmVotePop .3s ease;
+}
+
 /* ── Collapsed bar → full chat entrance (?layout=bar) ───────────────────────── */
 /* The iframe snaps to its full size instantly; the panel itself grows from
    height:0 up to full height, anchored to the bottom edge so it visually
