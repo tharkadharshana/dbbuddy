@@ -2122,7 +2122,8 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
         if nl_last_sync_at and data is not None:
             _TIME_KEYWORDS = (
                 "today", "yesterday", "this week", "this month", "last 24",
-                "last hour", "right now", "current", "latest", "recent",
+                "last hour", "last week", "last month", "last year",
+                "right now", "current", "latest", "recent",
                 "tonight", "this morning", "this afternoon",
             )
             if any(kw in req.question.lower() for kw in _TIME_KEYWORDS):
@@ -2133,13 +2134,27 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                         _synced = _synced.replace(tzinfo=_tz.utc)
                     _age_min = (_dt.now(_tz.utc) - _synced).total_seconds() / 60
                     if _age_min > 60:
-                        _hours = int(_age_min // 60)
+                        _days  = int(_age_min // 1440)
+                        _hours = int((_age_min % 1440) // 60)
                         _mins  = int(_age_min % 60)
-                        _age_str = f"{_hours}h {_mins}m" if _hours else f"{_mins}m"
-                        _note = (
-                            f"Note: your Salesplay data was last synced {_age_str} ago. "
-                            f"Transactions added since then are not included in this result."
-                        )
+                        if _days:
+                            _age_str = f"{_days}d {_hours}h"
+                        elif _hours:
+                            _age_str = f"{_hours}h {_mins}m"
+                        else:
+                            _age_str = f"{_mins}m"
+                        if len(data) == 0 and _age_min > 1440:
+                            _note = (
+                                f"Your SalesPlay connection hasn't synced since "
+                                f"{_synced.strftime('%B %d, %Y')} ({_age_str} ago), which is "
+                                f"likely why this period has no data. Please reconnect your "
+                                f"SalesPlay integration in Settings to resume syncing."
+                            )
+                        else:
+                            _note = (
+                                f"Note: your Salesplay data was last synced {_age_str} ago. "
+                                f"Transactions added since then are not included in this result."
+                            )
                         analysis = f"{analysis}\n\n{_note}" if analysis else _note
                 except Exception as _age_err:
                     log.debug("Staleness note skipped", error=str(_age_err))

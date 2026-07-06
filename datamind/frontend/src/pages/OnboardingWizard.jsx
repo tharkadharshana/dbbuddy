@@ -42,9 +42,9 @@ function StatusBox({ ok, message }) {
 const TOTAL_STEPS = 4
 
 const PLAN_HIGHLIGHTS = {
-  Starter: { tokens: '100 Tokens / mo',   price: '$5' },
-  Growth:  { tokens: '250 Tokens / mo',   price: '$10' },
-  Pro:     { tokens: '1,000 Tokens / mo', price: '$25' },
+  Starter: { tokens: '200 Tokens / mo',   price: '$5' },
+  Growth:  { tokens: '500 Tokens / mo',   price: '$10' },
+  Pro:     { tokens: '2,000 Tokens / mo', price: '$25' },
 }
 
 export default function OnboardingWizard({ onComplete, theme, setTheme }) {
@@ -389,7 +389,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
                 </div>
                 <div style={{ display:'flex', flexDirection:'column', gap:6, marginBottom:6 }}>
                   {plans.map(plan => {
-                    const dataMonths = plan.name === 'Starter' ? '1 month' : plan.name === 'Growth' ? '3 months' : '12 months'
+                    const dataMonths = plan.name === 'Starter' ? '3 months' : plan.name === 'Growth' ? '12 months' : 'all historical'
                     const isSelected = selectedPlanId === plan.id
                     return (
                       <button key={plan.id} onClick={() => handleSelectPlan(plan)}

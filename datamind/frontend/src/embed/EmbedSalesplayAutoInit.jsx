@@ -33,7 +33,7 @@ const SP = {
 }
 
 // Backend stores small "AI credit" values (e.g. 50); the Billing page displays
-// these multiplied out as "Tokens" (50 -> 500K). Mirrors PLAN_FEATURES/fmtTok
+// these multiplied out as "Tokens" (200 -> 2M). Mirrors PLAN_FEATURES/fmtTok
 // in pages/BillingPage.jsx so the embed consent screen matches exactly.
 const TDM = 10_000
 const fmtTok = (raw) => {
@@ -50,7 +50,7 @@ const PLAN_FEATURES = {
     { text: 'All Reports',               ok: true  },
     { text: 'Forecasting & Anomalies',   ok: false },
     { text: 'Priority Support',          ok: false },
-    { text: '1 Month data history',      ok: true  },
+    { text: '3 Months data history',     ok: true  },
   ],
   Growth: [
     { text: 'Ask Your Data (AI)',        ok: true  },
@@ -58,7 +58,7 @@ const PLAN_FEATURES = {
     { text: 'All Reports',               ok: true  },
     { text: 'Forecasting & Anomalies',   ok: true  },
     { text: 'Priority Support',          ok: false },
-    { text: '3 Months data history',     ok: true  },
+    { text: '12 Months data history',    ok: true  },
   ],
   Pro: [
     { text: 'Ask Your Data (AI)',        ok: true  },
@@ -68,7 +68,7 @@ const PLAN_FEATURES = {
     { text: 'Priority Support',          ok: true  },
     { text: 'External API integrations', ok: true  },
     { text: 'Web widget',                ok: true  },
-    { text: '1 Year data history',       ok: true  },
+    { text: 'All historical data',       ok: true  },
   ],
 }
 
