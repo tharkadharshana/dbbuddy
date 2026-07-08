@@ -11,6 +11,7 @@ Three fixes in this version:
 
 import os
 import re
+import asyncio
 import hashlib
 import decimal
 import datetime
@@ -25,11 +26,12 @@ from dotenv import load_dotenv
 load_dotenv()  # must run before any local module reads os.getenv at import time
 
 from logger import get_logger
-from db import get_connection, get_table_schemas, get_foreign_keys, get_sample_data
+from db import get_connection, get_table_schemas, get_foreign_keys, get_sample_data, run_select_and_format
 from llm import (
     query_to_sql, generate_report_summary, call_llm, validate_llm_key,
     list_gemini_models, LLMTransientError,
     classify_question, synthesize_multi_step_answer, fix_currency_symbol,
+    _filter_sensitive_schema,
 )
 from cache import get_cache, save_cache, invalidate_cache, get_cache_status
 from schema_builder import build_schema_cache
@@ -61,6 +63,9 @@ from billing import (
 from embed import router as embed_router, bootstrap_embed_tables
 from v1 import router as partner_router
 from pool import get_pool
+import mcp_server.safety as _safety
+from mcp_server.business_tools import ToolContext as _MCPToolContext
+from mcp_server.orchestrator import answer_business_question as _mcp_answer_business_question
 
 log = get_logger(__name__)
 
@@ -136,6 +141,14 @@ app.add_middleware(SlowAPIMiddleware)
 _FORCE_HTTPS    = os.getenv("FORCE_HTTPS", "").lower() == "true"
 _SQL_TIMEOUT_MS = int(os.getenv("SQL_TIMEOUT_MS", "30000"))  # hard-kill runaway LLM queries
 
+# MCP tool-calling rollout flags (see docs/04_MCP_Architecture_And_Implementation_Guide.md).
+# Empty _MCP_TOOL_CALLING_TEST_EMAILS = the master flag alone controls it for everyone.
+# Non-empty = only those accounts get the new path even with the flag on (staged rollout).
+_MCP_TOOL_CALLING_ENABLED = os.getenv("MCP_TOOL_CALLING_ENABLED", "").lower() == "true"
+_MCP_TOOL_CALLING_TEST_EMAILS = {
+    e.strip().lower() for e in os.getenv("MCP_TOOL_CALLING_TEST_EMAILS", "").split(",") if e.strip()
+}
+
 # Cached name of the session timeout variable for this MySQL/MariaDB server.
 # "max_execution_time" (MySQL 5.7.8+, milliseconds)
 # "max_statement_time"  (MariaDB, seconds)
@@ -174,220 +187,26 @@ def _set_query_timeout(cursor) -> None:
         log.warning("Failed to set SQL timeout", var=_sql_timeout_var, error=str(e))
 
 
-# SQL keywords that can never be a table alias. The LLM often omits aliases,
-# so the FROM/JOIN regex captures the next keyword (e.g. WHERE, JOIN, ON) as the
-# alias, which then produces invalid SQL like WHERE.tenant_id = '...'. Both the
-# tenant-isolation and date-filter enforcers guard against this by falling back
-# to the table name when the captured alias is one of these.
-_SQL_KEYWORDS = frozenset({
-    'WHERE', 'GROUP', 'ORDER', 'LIMIT', 'HAVING', 'ON', 'SET',
-    'INNER', 'LEFT', 'RIGHT', 'CROSS', 'FULL', 'JOIN', 'UNION',
-    'SELECT', 'FROM', 'AND', 'OR', 'NOT', 'IN', 'IS', 'NULL',
-    'AS', 'BY', 'ASC', 'DESC', 'WITH', 'USING',
-})
-
-
 def _enforce_tenant_isolation(sql: str, tenant_id: str) -> str:
     """
     SEC-15: Server-side tenant isolation enforcement for shared sp_*/ly_* tables.
 
-    The LLM is instructed to add WHERE tenant_id = '...' but sometimes omits it
-    or adds it only for the primary table while leaving JOINed tables unscoped.
-    This function post-processes the generated SQL to guarantee every shared-table
-    reference is filtered to the correct tenant BEFORE execution.
-
-    Strategy:
-      1. Find all sp_*/ly_* table references with their aliases (FROM and JOIN).
-      2. For each alias not already scoped with alias.tenant_id = '...':
-         - If it's the FROM table: inject into the WHERE clause (or create one).
-         - If it's a JOINed table: inject AND alias.tenant_id = '...' into the ON clause.
-      3. Raise ValueError if ANY other tenant_id literal appears in the SQL
-         (prevents prompt-injection attacks requesting another tenant's data).
+    Logic now lives in mcp_server/safety.py (shared with the MCP business-data
+    tools, which run the identical check on every run_select_query tool call)
+    — see that module's docstring for the full strategy. This wrapper just
+    keeps every existing call site in this file unchanged.
     """
-    if not tenant_id:
-        return sql
-
-    safe_tid = tenant_id.replace("'", "\\'")
-    expected_literal = f"'{safe_tid}'"
-
-    # Security: reject if a *different* tenant_id literal appears in the SQL.
-    # e.g. user tries: "show me data where tenant_id = 'other_user_prefix'"
-    tid_val_re = re.compile(r"tenant_id\s*=\s*'([^']*)'", re.IGNORECASE)
-    for m in tid_val_re.finditer(sql):
-        found_tid = m.group(1)
-        if found_tid != tenant_id:
-            raise ValueError(
-                f"Query references tenant_id '{found_tid}' which does not match "
-                f"your account. Cross-tenant queries are not allowed."
-            )
-
-    # Find all sp_*/ly_* table references: (FROM|JOIN) table_name [AS] alias
-    # Captures: group1=clause, group2=table, group3=alias (may be None)
-    table_re = re.compile(
-        r'\b(FROM|(?:INNER|LEFT|RIGHT|CROSS|FULL)?\s*JOIN)\s+'
-        r'(`?(?:sp|ly)_\w+`?)'
-        r'(?:\s+(?:AS\s+)?(`?\w+`?))?',
-        re.IGNORECASE,
-    )
-
-    # Build list of (alias, clause_type, match_end_pos)
-    refs = []
-    for m in table_re.finditer(sql):
-        clause = m.group(1).strip().upper()
-        clause_type = "FROM" if clause == "FROM" else "JOIN"
-        table_raw = m.group(2).strip('`')
-        captured_alias = (m.group(3) or "").strip('`')
-        # If the captured alias is a SQL keyword, the table has no alias — use table name.
-        alias_raw = table_raw if (not captured_alias or captured_alias.upper() in _SQL_KEYWORDS) else captured_alias
-        refs.append((alias_raw, clause_type, m.end()))
-
-    if not refs:
-        return sql  # No shared tables referenced — nothing to enforce.
-
-    # Determine which aliases are already correctly scoped
-    already_scoped = set()
-    for alias, _, _ in refs:
-        pattern = re.compile(
-            rf'\b{re.escape(alias)}\.tenant_id\s*=\s*{re.escape(expected_literal)}',
-            re.IGNORECASE,
-        )
-        if pattern.search(sql):
-            already_scoped.add(alias)
-
-    # Also consider bare "tenant_id = '...'" (no alias prefix) as scoping the FROM table
-    bare_scoped = bool(re.search(
-        rf'\btenant_id\s*=\s*{re.escape(expected_literal)}', sql, re.IGNORECASE
-    ))
-    from_alias = next((a for a, ct, _ in refs if ct == "FROM"), None)
-    if bare_scoped and from_alias:
-        already_scoped.add(from_alias)
-
-    unscoped = [(a, ct, pos) for (a, ct, pos) in refs if a not in already_scoped]
-    if not unscoped:
-        return sql  # All references already scoped — nothing to do.
-
-    log.warning(
-        "Tenant isolation: injecting missing tenant_id filters",
-        tenant_id=tenant_id,
-        unscoped_aliases=[a for a, _, _ in unscoped],
-    )
-
-    # ── Step 1: Inject AND alias.tenant_id = '...' into each JOIN ON clause ──
-    # Process in reverse order so injections don't shift positions.
-    for alias, clause_type, match_end in sorted(unscoped, key=lambda x: x[2], reverse=True):
-        if clause_type != "JOIN":
-            continue
-        # Find the ON keyword after this JOIN match
-        on_re = re.compile(r'\bON\b', re.IGNORECASE)
-        on_m = on_re.search(sql, match_end)
-        if on_m:
-            # Find the end of the ON condition (before next JOIN/WHERE/GROUP/ORDER/LIMIT/HAVING)
-            end_re = re.compile(
-                r'\b(?:INNER\s+JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|CROSS\s+JOIN|JOIN|WHERE|GROUP\s+BY|ORDER\s+BY|HAVING|LIMIT)\b',
-                re.IGNORECASE,
-            )
-            end_m = end_re.search(sql, on_m.end())
-            insert_at = end_m.start() if end_m else len(sql)
-            # Find last non-whitespace before insert_at to place AND cleanly
-            inject = f" AND {alias}.tenant_id = {expected_literal}"
-            sql = sql[:insert_at].rstrip() + inject + " " + sql[insert_at:].lstrip()
-
-    # ── Step 2: Inject tenant_id into WHERE clause for FROM table (if unscoped) ──
-    from_unscoped = [a for a, ct, _ in unscoped if ct == "FROM"]
-    if from_unscoped:
-        alias = from_unscoped[0]
-        cond = f"{alias}.tenant_id = {expected_literal}"
-        where_re = re.compile(r'\bWHERE\b', re.IGNORECASE)
-        where_m = where_re.search(sql)
-        if where_m:
-            # Insert as first condition after WHERE
-            insert_at = where_m.end()
-            sql = sql[:insert_at] + f" {cond} AND " + sql[insert_at:].lstrip()
-        else:
-            # No WHERE clause — insert before GROUP BY / ORDER BY / LIMIT / HAVING
-            end_re = re.compile(
-                r'\b(?:GROUP\s+BY|ORDER\s+BY|HAVING|LIMIT)\b', re.IGNORECASE
-            )
-            end_m = end_re.search(sql)
-            if end_m:
-                sql = sql[:end_m.start()] + f"WHERE {cond} " + sql[end_m.start():]
-            else:
-                sql = sql.rstrip(';').rstrip() + f" WHERE {cond}"
-
-    return sql
+    return _safety.enforce_tenant_isolation(sql, tenant_id)
 
 
 def _enforce_date_filter(sql: str, history_months: int) -> str:
     """
     Enforce the plan's data-history window on every NL query for integration users.
 
-    Problem: follow-up questions ("what can I do to increase this?") let the LLM
-    generate SQL without a date filter, pulling ALL historical data even though
-    the user's plan only allows N months. The LLM prompt hint is advisory —
-    this function is mandatory server-side enforcement.
-
-    Strategy:
-      - Only applies when the query touches a transactional table (sp_receipts or
-        sp_receipt_line_items / ly_receipts or ly_receipt_line_items). Reference
-        tables (products, categories, shops, customers, payment_types) are catalogue
-        data that must never be date-filtered — their created_at reflects when the
-        record was created in the POS, not a transaction date, and for products it
-        is often NULL entirely.
-      - If the SQL already contains a created_at comparison, trust the LLM.
-      - Otherwise inject AND alias.created_at >= DATE_SUB(CURDATE(), INTERVAL N MONTH)
-        into the WHERE clause of the primary transactional table.
-
-    Only applied to integration users (sp_*/ly_* tables) where the date column
-    is always created_at. Not applied to own-DB users — unknown schema.
+    Logic now lives in mcp_server/safety.py (shared with the MCP business-data
+    tools) — see that module's docstring for the full strategy.
     """
-    if not history_months:
-        return sql
-
-    # Only enforce on transactional tables — never on reference/catalogue tables.
-    _TRANSACTIONAL = re.compile(
-        r'\b(sp_receipts|sp_receipt_line_items|ly_receipts|ly_receipt_line_items)\b',
-        re.IGNORECASE,
-    )
-    if not _TRANSACTIONAL.search(sql):
-        return sql
-
-    # If LLM already applied a date filter on created_at, trust it.
-    if re.search(r'\bcreated_at\s*[><=]', sql, re.IGNORECASE):
-        return sql
-
-    # Find the primary FROM sp_*/ly_* table with its alias.
-    table_re = re.compile(
-        r'\bFROM\s+(`?(?:sp|ly)_\w+`?)(?:\s+(?:AS\s+)?(`?\w+`?))?',
-        re.IGNORECASE,
-    )
-    m = table_re.search(sql)
-    if not m:
-        return sql  # no shared table found — nothing to inject
-
-    alias_candidate = m.group(2)
-    if alias_candidate and alias_candidate.strip('`').upper() in _SQL_KEYWORDS:
-        alias_candidate = None
-    alias = (alias_candidate or m.group(1)).strip('`')
-    date_cond = (
-        f"{alias}.created_at >= DATE_SUB(CURDATE(), INTERVAL {history_months} MONTH)"
-    )
-
-    log.debug("Date filter enforced", alias=alias, history_months=history_months)
-
-    where_re = re.compile(r'\bWHERE\b', re.IGNORECASE)
-    where_m = where_re.search(sql)
-    if where_m:
-        insert_at = where_m.end()
-        return sql[:insert_at] + f" {date_cond} AND " + sql[insert_at:].lstrip()
-
-    end_re = re.compile(
-        r'\b(?:GROUP\s+BY|ORDER\s+BY|HAVING|LIMIT)\b', re.IGNORECASE
-    )
-    end_m = end_re.search(sql)
-    if end_m:
-        return sql[:end_m.start()] + f"WHERE {date_cond} " + sql[end_m.start():]
-
-    return sql.rstrip(';').rstrip() + f" WHERE {date_cond}"
+    return _safety.enforce_date_filter(sql, history_months)
 
 
 if _FORCE_HTTPS:
@@ -528,20 +347,15 @@ def _base_query_response(**kwargs) -> dict:
     return base
 
 
-# SEC-04: block LLM-generated SQL from running mutating statements
-import re as _re
-_SQL_MUTATION_RE = _re.compile(
-    r'\b(DROP|DELETE|INSERT|UPDATE|TRUNCATE|ALTER|CREATE|REPLACE|GRANT|REVOKE|CALL|EXEC)\b',
-    _re.IGNORECASE
-)
-
+# SEC-04: block LLM-generated SQL from running mutating statements.
+# Logic lives in mcp_server/safety.py (shared with the MCP business-data
+# tools) — this wrapper just converts ValueError -> HTTPException, keeping
+# every existing call site in this file unchanged.
 def _guard_sql(sql: str):
-    m = _SQL_MUTATION_RE.search(sql)
-    if m:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Generated query contains a disallowed statement: {m.group(0).upper()}"
-        )
+    try:
+        _safety.block_mutations(sql)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Generated {e}")
 
 
 # SEC-06: encrypt DB passwords at rest using same Fernet key as integrations
@@ -696,19 +510,10 @@ _ID_COL_RE = re.compile(r'^id$|_id$', re.IGNORECASE)
 
 
 def _run_sql(conn, sql: str, title: str) -> dict:
-    cursor = conn.cursor()
     log.debug("Executing SQL", title=title, sql_preview=f"{sql[:60]}…" if len(sql) > 60 else sql)
-    cursor.execute(sql)
-    cols = [d[0] for d in cursor.description]
-    rows = cursor.fetchall()
-    # Strip raw DB surrogate ID columns — they are internal keys with no meaning
-    # to end users. Human-readable codes (customer_code, product_code) are used instead.
-    visible_cols = [c for c in cols if not _ID_COL_RE.search(c)]
-    if len(visible_cols) < len(cols):
-        log.debug("Stripped ID columns from result", stripped=[c for c in cols if _ID_COL_RE.search(c)])
-    data = [{c: _safe(v) for c, v in zip(cols, row) if not _ID_COL_RE.search(c)} for row in rows]
-    log.debug("SQL result", title=title, rows=len(data))
-    return {"title": title, "columns": visible_cols, "data": data, "row_count": len(data)}
+    result = run_select_and_format(conn, sql)
+    log.debug("SQL result", title=title, rows=len(result["data"]))
+    return {"title": title, "columns": result["columns"], "data": result["data"], "row_count": len(result["data"])}
 
 
 # Maps analytics template IDs to FEATURE_COST operation types.
@@ -1969,66 +1774,97 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                 )
 
         # ── Single data query ─────────────────────────────────────────────────
-        steps.append({"label": "Generating SQL query", "status": "running"})
-        sql = query_to_sql(
-            req.question, schemas, llm, fkeys, api_key=api_key,
-            user_email=user["email"], history_months=history["months"],
-            tenant_id=nl_tenant_id if is_integration else None,
-            row_limit=row_limit, conversation_history=conv_history,
-            extra_schema_hints=extra_hints, shop_timezone=nl_shop_timezone,
-        )
-        steps[-1]["status"] = "done"
-
-        # SEC-15: enforce tenant isolation for integration users.
-        if nl_tenant_id:
+        # MCP tool-calling path (feature-flagged, staged rollout — see
+        # docs/04_MCP_Architecture_And_Implementation_Guide.md). Lets the model
+        # look at real schema/sample data and self-correct before answering,
+        # instead of one blind SQL guess. Falls back to the legacy one-shot
+        # path below on ANY failure so this is never a single point of failure.
+        sql = columns = data = None
+        if _MCP_TOOL_CALLING_ENABLED and (
+            not _MCP_TOOL_CALLING_TEST_EMAILS or user["email"].lower() in _MCP_TOOL_CALLING_TEST_EMAILS
+        ):
             try:
-                sql = _enforce_tenant_isolation(sql, nl_tenant_id)
-            except ValueError as _te:
-                log.warning("Tenant isolation enforcement failed", user=user["email"], error=str(_te))
-                return _base_query_response(
-                    success=False, type="error", steps=steps, conversation_id=conv_id,
-                    message="I couldn't safely scope your query to your account. Please try rephrasing your question.",
+                tool_ctx = _MCPToolContext(
+                    conn=conn,
+                    schemas=_filter_sensitive_schema(schemas),
+                    fkeys=fkeys,
+                    tenant_id=nl_tenant_id if is_integration else None,
+                    row_limit=row_limit,
+                    history_months=history["months"],
+                    set_query_timeout=_set_query_timeout,
                 )
-            # Fail-closed: refuse to execute if tenant_id was not successfully injected.
-            if nl_tenant_id not in sql:
-                log.error("Tenant isolation enforcement failed — refusing to execute",
-                          user=user["email"], tenant_id=nl_tenant_id, sql=sql[:300])
-                return _base_query_response(
-                    success=False, type="error", steps=steps, conversation_id=conv_id,
-                    message="Could not generate a safely scoped query. Please rephrase your question.",
-                )
-            # Mandatory date-window enforcement (plan limit, not advisory).
-            sql = _enforce_date_filter(sql, history["months"])
+                sql, columns, data = asyncio.run(_mcp_answer_business_question(
+                    req.question, tool_ctx, llm, api_key, user["email"],
+                    conversation_history=conv_history, extra_hints=extra_hints,
+                    currency=nl_currency, shop_timezone=nl_shop_timezone,
+                ))
+                steps.append({"label": "Answered via MCP tool-calling", "status": "done"})
+            except Exception as _mcp_err:
+                log.warning("MCP tool-calling path failed, falling back to one-shot SQL",
+                            user=user["email"], error=str(_mcp_err))
+                sql = columns = data = None
 
-        # SEC-04: block LLM-generated mutations before execution.
-        try:
-            _guard_sql(sql)
-        except HTTPException:
-            log.warning("Mutation guard blocked query", user=user["email"], sql=sql[:200])
-            return _base_query_response(
-                success=False, type="error", steps=steps, conversation_id=conv_id,
-                message=(
-                    "I can only run read-only queries on your data. "
-                    "If you meant to ask about your data, try rephrasing — "
-                    "for example: 'Show me all orders' instead of 'Delete all orders'."
-                ),
+        if sql is None:
+            steps.append({"label": "Generating SQL query", "status": "running"})
+            sql = query_to_sql(
+                req.question, schemas, llm, fkeys, api_key=api_key,
+                user_email=user["email"], history_months=history["months"],
+                tenant_id=nl_tenant_id if is_integration else None,
+                row_limit=row_limit, conversation_history=conv_history,
+                extra_schema_hints=extra_hints, shop_timezone=nl_shop_timezone,
             )
+            steps[-1]["status"] = "done"
 
-        steps.append({"label": "Running your query", "status": "running"})
-        cursor = conn.cursor()
-        _set_query_timeout(cursor)
-        cursor.execute(sql)
-        raw_cols = [desc[0] for desc in cursor.description]
-        rows = cursor.fetchall()
-        # Strip surrogate ID columns — keep only business-meaningful columns.
-        columns = [c for c in raw_cols if not _ID_COL_RE.search(c)]
-        data = [{k: _safe(v) for k, v in dict(zip(raw_cols, row)).items() if not _ID_COL_RE.search(k)} for row in rows]
-        # Treat all-NULL results the same as 0 rows — no meaningful data found.
-        if data and all(all(v is None for v in row.values()) for row in data):
-            data = []
-        if len(data) > row_limit:
-            data = data[:row_limit]
-        steps[-1]["status"] = "done"
+            # SEC-15: enforce tenant isolation for integration users.
+            if nl_tenant_id:
+                try:
+                    sql = _enforce_tenant_isolation(sql, nl_tenant_id)
+                except ValueError as _te:
+                    log.warning("Tenant isolation enforcement failed", user=user["email"], error=str(_te))
+                    return _base_query_response(
+                        success=False, type="error", steps=steps, conversation_id=conv_id,
+                        message="I couldn't safely scope your query to your account. Please try rephrasing your question.",
+                    )
+                # Fail-closed: refuse to execute if tenant_id was not successfully injected.
+                if nl_tenant_id not in sql:
+                    log.error("Tenant isolation enforcement failed — refusing to execute",
+                              user=user["email"], tenant_id=nl_tenant_id, sql=sql[:300])
+                    return _base_query_response(
+                        success=False, type="error", steps=steps, conversation_id=conv_id,
+                        message="Could not generate a safely scoped query. Please rephrase your question.",
+                    )
+                # Mandatory date-window enforcement (plan limit, not advisory).
+                sql = _enforce_date_filter(sql, history["months"])
+
+            # SEC-04: block LLM-generated mutations before execution.
+            try:
+                _guard_sql(sql)
+            except HTTPException:
+                log.warning("Mutation guard blocked query", user=user["email"], sql=sql[:200])
+                return _base_query_response(
+                    success=False, type="error", steps=steps, conversation_id=conv_id,
+                    message=(
+                        "I can only run read-only queries on your data. "
+                        "If you meant to ask about your data, try rephrasing — "
+                        "for example: 'Show me all orders' instead of 'Delete all orders'."
+                    ),
+                )
+
+            steps.append({"label": "Running your query", "status": "running"})
+            cursor = conn.cursor()
+            _set_query_timeout(cursor)
+            cursor.execute(sql)
+            raw_cols = [desc[0] for desc in cursor.description]
+            rows = cursor.fetchall()
+            # Strip surrogate ID columns — keep only business-meaningful columns.
+            columns = [c for c in raw_cols if not _ID_COL_RE.search(c)]
+            data = [{k: _safe(v) for k, v in dict(zip(raw_cols, row)).items() if not _ID_COL_RE.search(k)} for row in rows]
+            # Treat all-NULL results the same as 0 rows — no meaningful data found.
+            if data and all(all(v is None for v in row.values()) for row in data):
+                data = []
+            if len(data) > row_limit:
+                data = data[:row_limit]
+            steps[-1]["status"] = "done"
         log.info("NL query complete", user=user["email"], rows=len(data), conv_id=conv_id or "stateless")
         _charge_op(user["email"], "nl_query_rows", len(data))
 
