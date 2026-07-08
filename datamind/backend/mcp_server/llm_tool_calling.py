@@ -33,7 +33,6 @@ provider's native wire format just before the HTTP call):
 """
 
 import json
-import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 

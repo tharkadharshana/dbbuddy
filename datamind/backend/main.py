@@ -1788,7 +1788,15 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                     conn=conn,
                     schemas=_filter_sensitive_schema(schemas),
                     fkeys=fkeys,
-                    tenant_id=nl_tenant_id if is_integration else None,
+                    # SEC-15: matches the legacy path's actual enforcement gate
+                    # (`if nl_tenant_id:`) exactly — NOT `is_integration`, which
+                    # is only correct for the advisory query_to_sql prompt hint.
+                    # `is_integration = s.get("db_configs") is None` is a strict
+                    # identity check that's wrongly False when db_configs is
+                    # present-but-empty ([]), which would silently disable
+                    # tenant scoping here (confirmed via a live trace — a
+                    # SalesPlay query ran with no tenant_id filter at all).
+                    tenant_id=nl_tenant_id,
                     row_limit=row_limit,
                     history_months=history["months"],
                     set_query_timeout=_set_query_timeout,

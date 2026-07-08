@@ -71,6 +71,17 @@ def block_mutations(sql: str) -> None:
         raise ValueError(f"Query contains a disallowed statement: {m.group(0).upper()}")
 
 
+def references_shared_tables(sql: str) -> bool:
+    """True if the SQL touches any sp_*/ly_* shared multi-tenant table.
+
+    Used as a fail-closed guard: a caller with no tenant_id must never be
+    allowed to run a query against these tables, no matter why tenant_id
+    ended up missing (e.g. an upstream bug in how the caller resolved it —
+    this guard turns that into a loud refusal instead of a silent
+    cross-tenant data leak)."""
+    return bool(_SHARED_TABLE_REF_RE.search(sql))
+
+
 def enforce_table_allowlist(sql: str, allowed_tables) -> None:
     """
     Defense-in-depth for the MCP tool-calling path: raise ValueError if the SQL

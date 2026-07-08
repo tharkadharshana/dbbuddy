@@ -110,10 +110,12 @@ async def answer_business_question(
 
     async with Client(mcp) as client:
         tools = await client.list_tools()
+
         for _ in range(max_iterations):
             turn = call_with_tools(llm, messages, tools, api_key, user_email)
             if not turn.tool_calls:
                 break
+
             messages.append({
                 "role": "assistant",
                 "content": turn.text,

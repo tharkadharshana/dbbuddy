@@ -114,6 +114,13 @@ def build_business_mcp(ctx: ToolContext) -> FastMCP:
             raise ValueError(f"Unknown table '{table}'. Call get_schema first to see available tables.")
         capped = max(1, min(int(limit), _MAX_SAMPLE_ROWS))
         sql = f"SELECT * FROM `{table}` LIMIT {capped}"
+        # Fail-closed: a shared sp_*/ly_* table must never be read without a
+        # tenant_id to scope it, no matter why tenant_id ended up missing —
+        # this refuses loudly instead of silently returning cross-tenant rows.
+        if safety.references_shared_tables(sql) and not ctx.tenant_id:
+            raise ValueError(
+                "Refusing to read this table without a tenant scope — this would expose other accounts' data."
+            )
         if ctx.tenant_id:
             sql = safety.enforce_tenant_isolation(sql, ctx.tenant_id)
             if ctx.tenant_id not in sql:
@@ -136,6 +143,14 @@ def build_business_mcp(ctx: ToolContext) -> FastMCP:
         first if a filter value might not match the real stored format."""
         safety.block_mutations(sql)
         safety.enforce_table_allowlist(sql, ctx.schemas.keys())
+        # Fail-closed: a query touching shared sp_*/ly_* tables must never
+        # run without a tenant_id to scope it, no matter why tenant_id
+        # ended up missing (e.g. an upstream caller bug) — refuse loudly
+        # instead of silently returning every tenant's data.
+        if safety.references_shared_tables(sql) and not ctx.tenant_id:
+            raise ValueError(
+                "Refusing to run this query without a tenant scope — this would expose other accounts' data."
+            )
         if ctx.tenant_id:
             sql = safety.enforce_tenant_isolation(sql, ctx.tenant_id)
             if ctx.tenant_id not in sql:
