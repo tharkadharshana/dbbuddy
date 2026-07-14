@@ -130,3 +130,35 @@ Also confirmed `db.get_connection()` was **not** used anywhere in this phase's n
 **Acceptance status:** all four acceptance criteria met — scalar ingest populates `report_daily_fact` (daily) + `report_sync_state`; dimensional ingest populates `report_dim_fact` (monthly); `coverage()` correctly reports hit/miss/open; all writes idempotent and window-enforced. Verified against both the in-memory fake (103 unit tests total, 45 new this phase) and the real dev database (manual verification above).
 
 **Next:** PLAN 04 — Jobs: Onboarding, Backfill, Rollover, Retention. Still needs to resolve the background-auth question flagged in PLAN 02 before scheduled ingestion jobs can call the report API unattended.
+
+---
+
+## PLAN 04 — Background Jobs: Onboarding, Backfill, Rollover, Retention, Re-finalization
+
+**Queue tech decision (documented per Preconditions):** no Redis / `arq` in this environment, but **APScheduler is already a dependency** — so PLAN 04's documented fallback was taken: a **DB-backed job table** (`report_cache_job`) drained by a worker + **APScheduler** for the cron lifecycle jobs. Zero new dependencies added.
+
+- [x] `scripts/migrations/2026_07_report_cache_jobs.sql` — `report_cache_job` (durable queue) + `report_cache_state` (per-tenant `onboarded_at` marker, kept out of `tenant_profile.profile_json` because that column is overwritten on every profile re-sync). Applied to dev DB and column-verified.
+- [x] `report_cache/jobs/guards.py` — in-process `CircuitBreaker` (per-tenant + a higher-threshold global key so one tenant can't halt everyone) and per-tenant `RateLimiter` (min-interval token bucket, reserves its slot then sleeps *outside* the lock so tenants aren't serialised). `ponytail:` noted — process-local state, correct for the single-worker fallback; upgrade path to Redis if horizontally scaled.
+- [x] `report_cache/jobs/enqueue.py` — the DB queue: `enqueue`, `request_backfill` (month-by-month, window-clipped — PLAN 05 calls this), plus worker-side `claim_next` (optimistic `WHERE status='queued'` claim), `complete`, `fail` (requeue-with-linear-backoff up to `JOB_MAX_ATTEMPTS`, else `error`), `pending_count`.
+- [x] `report_cache/jobs/tasks.py` — the seven task functions (sync, plain functions, no `ctx` — the APScheduler fallback, not arq): `job_sync_profile`, `job_onboard_tenant` (eager last-N-months × 8 reports, **inline** so one short-lived aat is used within a single job rather than fanned across queued rows), `job_ingest_period`, `job_rollover`, `job_refinalize` (re-fetch trailing 45d daily / 2mo dim then mark safely-past facts `finalized`), `job_retention_purge` (delete out-of-window, **skip `unlimited`**, pure DB), `job_sync_profile_all`. Plus `_finalize_past`, `_purge_tenant`, `storage_metrics`, and tenant/marker helpers.
+- [x] `report_cache/jobs/worker.py` — `run_worker()` entrypoint (`python -m report_cache.jobs.worker`): registers the queue drain (interval) + refinalize/retention/profile-sync (daily) + rollover (monthly + daily guard) on a `BlockingScheduler`; `TASKS` registry maps queueable task names; `run_job`/`drain_once` never propagate so the loop survives a bad job.
+- [x] Onboarding trigger wired into `embed.py:_sync_report_cache_profile` — first connect for a tenant enqueues `job_onboard_tenant` carrying **this request's fresh v2.0 `aat`** (see below), behind `REPORT_CACHE_ENABLED`, idempotent (`is_onboarded` gate), non-fatal.
+- [x] `.env.example` — 11 new `REPORT_CACHE_*` job/breaker/rate-limit knobs, all with safe defaults (no `.env` change needed to run).
+- [x] Tests: `tests/test_jobs.py` (9 tests) — onboarding ingests exactly the recent-N-month set; `_purge_tenant` deletes out-of-window & keeps in-window (real filtering fake); retention skips `unlimited`; `request_backfill` enqueues month-by-month; breaker opens after N failures / resets on success / is per-tenant. **Full suite: 112/112 passing.**
+
+### The background-auth wrinkle (PLAN 02's open item) — how PLAN 04 handles it
+
+The v2.0 `/app/*` report API needs the embed session's short-lived `aat`; the **stored** `api_token` is v1.0 and does **not** authenticate against it. PLAN 04 does not try to fix this (out of scope) — instead it **threads a token through job payloads**:
+- Jobs triggered from a live embed request (onboarding, lazy backfill) carry the fresh `aat` → **work end-to-end today**.
+- Unattended API-touching jobs (refinalize/rollover/profile-sync) fall back to `get_report_token()` and **fail safe** (error sync-state + breaker, never a crash) until the auth item is resolved.
+- **Retention purge is pure DB** → works fully unattended regardless.
+
+### Live verification (2026-07-14)
+
+- Migration applied; both tables column-verified against dev MySQL.
+- Full queue round-trip against real DB: `enqueue` → `claim_next` (attempts→1, status→`running`) → `drain_once` dispatched the payload → `complete` (status→`done`). Cleaned up after.
+- APScheduler wiring loads and registers all 6 jobs with the expected triggers (drain 5s; refinalize/retention/profile-sync daily; rollover monthly + daily guard).
+
+**Acceptance status:** worker drains the queue and dispatches tasks; scheduled jobs registered; retention respects tier (skips `unlimited`) and re-finalize marks trailing-window facts `finalized`; **no ingestion runs on a web-request thread** (the web app only enqueues); rate-limiter + breaker cap POS load. The only criterion not exercised against a *live* POS fetch is onboarding's actual HTTP ingest — blocked solely by the still-open PLAN 02 background-auth token gap, not by anything in this phase (the DB/queue/schedule/lifecycle machinery is all verified).
+
+**Next:** PLAN 05 — Answer layer, cache-first MCP tools, additivity aggregation, router/persona. `request_backfill()` is the exact cache-miss warm-up hook PLAN 05 calls.

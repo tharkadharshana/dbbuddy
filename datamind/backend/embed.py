@@ -441,6 +441,20 @@ def _sync_report_cache_profile(table_prefix: str, email: str, aat: str) -> None:
         log.warning("Report-cache profile sync skipped (non-fatal)",
                     tenant=table_prefix, email=email, error=str(exc))
 
+    # First connect for this tenant → enqueue eager-recent onboarding (PLAN 04),
+    # carrying THIS request's fresh v2.0 aat so the background job can call the
+    # report API (the stored api_token is v1.0 and can't — see tasks.py). Runs
+    # off the request thread in the worker; idempotent; non-fatal.
+    try:
+        from report_cache.jobs.enqueue import enqueue
+        from report_cache.jobs.tasks import is_onboarded
+        if not is_onboarded(table_prefix):
+            enqueue("job_onboard_tenant", tenant_id=table_prefix, token=aat)
+            log.info("Report-cache onboarding enqueued", tenant=table_prefix, email=email)
+    except Exception as exc:
+        log.warning("Report-cache onboarding enqueue skipped (non-fatal)",
+                    tenant=table_prefix, email=email, error=str(exc))
+
 
 def _salesplay_guard(partner_key: str, request: "Request"):
     """Validate partner key is active Salesplay, apply rate limit. Returns partner row."""

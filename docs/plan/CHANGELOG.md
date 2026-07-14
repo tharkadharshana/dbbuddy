@@ -261,3 +261,66 @@ ingest_period(conn, tenant_id, report_id, token, period)
 - **Confirmed clean:** none of this phase's new code used the wrong DB-connection helper (the bug found and fixed three times already in PLAN 01–02) — every write goes through `pool.get_internal_conn()` or a connection passed in by the caller.
 
 **Next:** PLAN 04 — Jobs: Onboarding, Backfill, Rollover, Retention. The background-auth gap flagged in PLAN 02 (no confirmed way for an unattended job to call the report API without a live browser session) is still open and now directly blocks this phase's scheduled ingestion.
+
+---
+
+## PLAN 04 — Background Jobs: Onboarding, Backfill, Rollover, Retention, Re-finalization
+
+### What this delivers
+
+Everything that keeps the cache **populated and pruned runs off the request thread now**. PLAN 03 gave us `ingest_period()` — a function you could call by hand. PLAN 04 is the machinery that decides *what* to ingest, *when*, and *how hard to push* the shared POS backend — plus the lifecycle jobs that keep last-month numbers final and storage inside the merchant's subscription window.
+
+### Previous flow (before this phase)
+
+- Ingestion existed only as a library function. Nothing called it automatically. A tenant connecting the AI got their profile synced (PLAN 02) and… that was it — the report cache stayed empty until someone ran a Python snippet.
+- No concept of "this month is now closed and final," no pruning of data older than the plan window, no protection if the POS report backend started timing out.
+
+### New flow
+
+```
+embed onboarding (first connect)
+    └─ enqueue job_onboard_tenant(tenant, aat)   ← fast INSERT, carries the fresh v2.0 token
+                                                   (request returns immediately)
+report_cache_job  (DB queue)  ◄─── request_backfill() from PLAN 05 on a cache miss
+    │
+    ▼
+worker process  (python -m report_cache.jobs.worker)
+    ├─ drains the queue every 5s  → job_onboard_tenant / job_ingest_period / job_sync_profile
+    │      each guarded by:  circuit breaker (POS down?)  +  per-tenant rate limiter
+    └─ APScheduler cron:
+         refinalize   daily  → re-fetch trailing 45d/2mo, mark safely-past facts 'finalized'
+         retention    daily  → delete facts older than the tier window (skip 'unlimited')
+         rollover     month-start (+ daily guard) → finalize last month, then purge
+         profile_sync daily  → refresh shops/currency/tier per active tenant
+```
+
+**Queue technology.** PLAN 04 recommends ARQ (Redis). This environment has no Redis and `arq` isn't installed — but **APScheduler already is** — so the plan's own documented fallback was taken: a **DB-backed job table** (`report_cache_job`) is the queue, and APScheduler runs the cron jobs. **No new dependency, no new infrastructure.** The worker is a single process with deliberately small concurrency so the rate limiter and breaker genuinely cap load — these reports are 90-second-class calls.
+
+**Onboarding is eager-but-shallow.** On first connect, the last 3 months (configurable) of all 8 reports are ingested at their native grain, `shop_id='all'`. Anything older is *lazy* — PLAN 05's answer layer calls `request_backfill()` on a cache miss, which enqueues the missing months month-by-month so they warm the cache for next time without blocking the question being asked now.
+
+**Re-finalization + rollover keep numbers honest.** POS data mutates after the fact (late refunds, voids, edits). A period stays `open` while it contains today, becomes `closed` when it doesn't, and only becomes `finalized` after the re-finalization job re-fetches a trailing window and confirms the day is safely in the past (default 2-day lag). Rollover is the same finalize step scoped to the just-closed month at month-start, followed by retention.
+
+**Retention respects the plan.** Facts and sync-state older than the tenant's tier window are deleted daily; `unlimited` (Pro) tenants are never purged. This is pure DB work — no POS calls — so it runs fully unattended.
+
+### The one honest caveat: background auth
+
+The v2.0 report API needs the embed session's short-lived `aat`. The **stored** `api_token` is the v1.0 data-sync token and does **not** authenticate against it (flagged in PLAN 02, still open). PLAN 04 does not fix this — it **threads a token through the job payload**, so:
+- Onboarding + lazy backfill (triggered from a live embed request that *has* a fresh `aat`) **work end-to-end today.**
+- Unattended API-touching jobs (refinalize/rollover/profile-sync) fall back to the stored token and **fail safe** (error sync-state + breaker, never a crash) until the auth gap is closed.
+- Retention (DB-only) is unaffected.
+
+This is deliberately surfaced rather than hidden: the queue/schedule/lifecycle machinery is all built and verified; only unattended *live fetching* waits on the PLAN 02 token resolution.
+
+### Impact
+
+- **Web request path: unchanged and unblocked.** The app only ever *enqueues* (a fast INSERT) or reads the cache — no 90-second report call ever touches a request thread. All of it is behind `REPORT_CACHE_ENABLED` (default OFF) and non-fatal on any error.
+- **For PLAN 05:** `request_backfill(tenant, report, start, end)` is the exact cache-miss warm-up hook to call, and `report_cache_state.onboarded_at` tells it whether a tenant's recent window is already warm.
+- **Operability:** one new process to run (`python -m report_cache.jobs.worker`); tune load entirely via `REPORT_CACHE_*` env knobs; `storage_metrics()` gives per-tenant row counts for cost monitoring.
+
+### Files added / changed
+
+- **added** `scripts/migrations/2026_07_report_cache_jobs.sql` — `report_cache_job`, `report_cache_state`.
+- **added** `report_cache/jobs/{__init__,guards,enqueue,tasks,worker}.py`.
+- **added** `tests/test_jobs.py` (9 tests; full suite 112/112).
+- **changed** `embed.py` — first-connect enqueues `job_onboard_tenant` with the fresh `aat` (non-fatal, flag-gated).
+- **changed** `.env.example` — 11 `REPORT_CACHE_*` job/breaker/rate-limit knobs (safe defaults).
