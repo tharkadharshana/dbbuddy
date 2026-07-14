@@ -142,4 +142,57 @@ Ran it against the local dev DB (XAMPP MySQL) — succeeded, all 6 tables create
 
 ---
 
-**Next:** PLAN 02 — Profile & Subscription Sync.
+## PLAN 02 — Profile & Subscription Sync
+
+**Status: Code-complete, unit-tested (58/58). Live end-to-end pending a real browser onboarding session (see "The live auth-gap discovery" below).**
+
+### What this delivers
+
+`tenant_profile`, `tenant_shop`, `tenant_cashier` populated from the POS's own `/app/profile` — the data every later phase needs for entity resolution (shop name → id), output formatting (currency, number format), authorization (is this shop_id really this tenant's?), and the AI's own data-history window (3/12/~unlimited months, by subscription plan).
+
+### Previous flow (before this phase)
+
+There wasn't one, for this specific data. `tenant_shop`/`tenant_cashier`/`tenant_profile` were empty tables created in PLAN 01 with nothing populating them. Anything that needed a tenant's shop list, currency, or AI plan tier had no single place to read it from report_cache's perspective.
+
+### New flow
+
+```
+SalesPlay embed widget opens (onboarding OR returning user)
+        │  widget already has a live, short-lived Salesplay session token (the "aat")
+        ▼
+embed.py:/embed/salesplay/onboard   (existing endpoint, unchanged core logic)
+        │
+        ├─ existing: fetch /app/profile with aat → create/reuse DataMind account,
+        │            connect the SalesPlay integration, start/continue sync
+        │
+        └─ NEW, additive, feature-flagged (REPORT_CACHE_ENABLED):
+                 report_cache.profile.sync_tenant_profile(tenant_id, access_token=aat)
+                         │
+                         ├─ map_profile(raw) → profile fields / shop list / cashier list
+                         │  (pure function — currency, number format, timezone, shops, cashiers)
+                         │
+                         ├─ report_cache.tiers.get_ai_tier(tenant_id)
+                         │  → reads DataMind's OWN billing.py (Starter/Growth/Pro),
+                         │    NEVER the POS profile's own subscription field
+                         │
+                         └─ upsert tenant_profile / tenant_shop / tenant_cashier
+```
+Later, `report_cache.lookups` gives the answer layer (PLAN 05) simple reads on top of this: `resolve_shop(tenant_id, "Colombo")` → `"1072"`, `is_shop_allowed(tenant_id, shop_id)` as a security guard before any model-suggested shop_id reaches a report call, `currency_symbol(tenant_id)` for display formatting.
+
+### The most important thing this phase got right (and had to fix along the way)
+
+**Two different "subscriptions" that must never be confused.** The POS `/app/profile` response does carry a subscription status — but that's the *merchant's SalesPlay POS plan*, completely unrelated to what DataMind charges for AI usage. The AI's own tier (which controls how many months of history get synced/cached) comes from DataMind's own `billing.py` — the same system that already meters tokens and rows. `report_cache/tiers.py` reads billing.py's real plan names (`"Starter"/"Growth"/"Pro"`, not the made-up "basic/standard/unlimited" names originally sketched in the plan doc) and reuses its existing `get_plan_history_limit()` function verbatim, rather than re-deriving the months/cutoff-date math a second time. That reuse matters: if report_cache computed its own, slightly-different cutoff date than the one `billing.py` already uses everywhere else to limit a user's visible history, the AI could end up showing/caching data the user's plan isn't actually supposed to include — a silent policy violation, not just a display bug.
+
+**The live auth-gap discovery.** Testing this for real against the one live SalesPlay test tenant failed with `404 "User not found"` — not the 401 you'd expect from a bad token. Tracing it down: the token DataMind stores per tenant (used for the *data-sync* API that pulls receipts/products/etc.) is a different, more narrowly-scoped credential than what the *report* API (`/app/profile` and all 8 report endpoints) actually needs. The report API is guarded end-to-end by SalesPlay's own login-session mechanism, and the credential DataMind currently persists was never validated against it — it just happens to also be a JWT, so the guard didn't reject it outright, it just couldn't resolve a real user from it.
+
+The fix: DataMind's existing embed onboarding flow *already* successfully calls `/app/profile` today, using a fresh, short-lived session token the browser widget hands over on each onboarding/widget-open (the "aat"). Rather than inventing a new auth mechanism, this phase hooks `sync_tenant_profile` into that exact same already-working call, reusing the same token. It runs automatically every time a user opens the embed widget (new user or returning), feature-flagged off by default, and never breaks onboarding if it fails — same fallback discipline as everywhere else in this project.
+
+**What's still open:** this only works when a live browser session is present. A true background job (no user watching) — which is exactly what PLAN 03's scheduled report ingestion is specced to be — hits the same wall. That's now an explicit, documented open question for PLAN 03 to resolve before it can call the report endpoints unattended.
+
+### Impact
+
+- **Right now: none**, unless `REPORT_CACHE_ENABLED=true` is set (default `false`). Even then, the new profile sync only ever adds a best-effort, non-fatal step to onboarding — every failure mode falls back to today's onboarding behavior with a logged warning, never a broken signup.
+- **Also found and fixed while starting this phase:** `report_cache/auth.py:get_report_token()` had the exact same wrong-DB-connection bug PLAN 01's migration runner had (`db.get_connection()` instead of `pool.get_internal_conn()`) — would have failed the same way the migration did, the first time it was actually called. Fixed before it ever shipped.
+- **For PLAN 05 (answer layer) later:** `resolve_shop`/`is_shop_allowed`/`currency_symbol`/`list_cashiers` are ready to use, fully unit-tested. One sharp edge documented for whoever wires cashier filtering: the report APIs' `cashier_id` query parameter is actually matched against a cashier's *name*, not a numeric id — `list_cashiers()` returns the right field for that (`cashier_name`), and it's called out prominently so this isn't rediscovered the hard way later.
+
+**Next:** PLAN 03 — Report Ingestion & Cache Store. Must resolve the background-auth question above before ingestion jobs can call the 8 report endpoints unattended.

@@ -405,6 +405,42 @@ def salesplay_auto_init(request: Request, req: SalesplayAutoInitRequest):
 _SALESPLAY_BASE = os.getenv("SALESPLAY_EMBED_PROXY_BASE", "https://api.salesplaypos.com/v2.0/public/app")
 _PROXY_TIMEOUT  = int(os.getenv("SALESPLAY_EMBED_PROXY_TIMEOUT", "10"))
 
+# Report-cache profile sync (docs/plan/PLAN_02_Profile_And_Subscription_Sync.md).
+# Mirrors the MCP_TOOL_CALLING_ENABLED/_TEST_EMAILS staged-rollout pattern in
+# main.py: empty _REPORT_CACHE_TEST_EMAILS = the master flag alone controls it
+# for everyone; non-empty = only those accounts get it even with the flag on.
+_REPORT_CACHE_ENABLED = os.getenv("REPORT_CACHE_ENABLED", "").lower() == "true"
+_REPORT_CACHE_TEST_EMAILS = {
+    e.strip().lower() for e in os.getenv("REPORT_CACHE_TEST_EMAILS", "").split(",") if e.strip()
+}
+log.info("Report-cache profile sync flag", enabled=_REPORT_CACHE_ENABLED,
+         test_emails_configured=bool(_REPORT_CACHE_TEST_EMAILS))
+
+
+def _report_cache_enabled_for(email: str) -> bool:
+    return _REPORT_CACHE_ENABLED and (
+        not _REPORT_CACHE_TEST_EMAILS or email.lower() in _REPORT_CACHE_TEST_EMAILS
+    )
+
+
+def _sync_report_cache_profile(table_prefix: str, email: str, aat: str) -> None:
+    """Best-effort report_cache profile sync using the SAME aat this request
+    already validated against Salesplay (step 1 above) — NOT the stored
+    api_token, which is scoped for the v1.0 data-sync API and does not
+    authenticate against the v2.0 /app/* report/profile routes (confirmed
+    live 2026-07-14 — see docs/plan/CHANGELOG.md PLAN 02 entry). Never raises:
+    this is purely additive to onboarding and must not affect the existing,
+    working create-account/connect/sync flow on any failure."""
+    if not _report_cache_enabled_for(email):
+        return
+    try:
+        from report_cache.profile import sync_tenant_profile
+        sync_tenant_profile(table_prefix, access_token=aat)
+        log.info("Report-cache profile synced", tenant=table_prefix, email=email)
+    except Exception as exc:
+        log.warning("Report-cache profile sync skipped (non-fatal)",
+                    tenant=table_prefix, email=email, error=str(exc))
+
 
 def _salesplay_guard(partner_key: str, request: "Request"):
     """Validate partner key is active Salesplay, apply rate limit. Returns partner row."""
@@ -667,7 +703,7 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
     sync = "skipped"
     if salesplay_api_token:
         try:
-            connect_integration(
+            connect_result = connect_integration(
                 user_email       = email,
                 provider_id      = "salesplay",
                 creds            = {"api_token": salesplay_api_token},
@@ -675,6 +711,9 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
             )
             sync = "started"
             log.info("Salesplay onboard: provider connected with new token", email=email)
+            # Report-cache profile sync — same already-validated aat, not the
+            # stored api_token (see _sync_report_cache_profile docstring).
+            _sync_report_cache_profile(connect_result["table_prefix"], email, aat)
         except Exception as e:
             log.error("Salesplay onboard: connect failed", email=email, error=str(e))
             raise HTTPException(status_code=500, detail="Failed to connect provider. Please try again.")
@@ -690,6 +729,17 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
             log.warning("Salesplay onboard: delta sync trigger failed (non-fatal)",
                         email=email, error=str(e))
             sync = "skipped"
+
+        # Report-cache profile sync — runs on every widget open for returning
+        # users too (same cadence as the delta sync above), using the fresh aat.
+        try:
+            from integrations import get_integration
+            existing = get_integration(email, "salesplay")
+            if existing:
+                _sync_report_cache_profile(existing["table_prefix"], email, aat)
+        except Exception as e:
+            log.warning("Salesplay onboard: report-cache profile sync lookup failed (non-fatal)",
+                        email=email, error=str(e))
 
     token = create_token(email)
     log.info("Salesplay onboard: complete", email=email, is_new_user=is_new_user, sync=sync)
