@@ -1,0 +1,72 @@
+{
+  "status": "success",
+  "message": "Sales summary retrieved successfully",
+  "pagination": {
+    "current_page": 1,
+    "total_pages": 1,
+    "per_page": 10,
+    "total_records": 3,
+    "has_next_page": false,
+    "has_prev_page": false,
+    "next_page": null,
+    "prev_page": null
+  },
+  "data": {
+    "summary": {
+      "gross_sales": "251,852.00",
+      "refunds": "500.00",
+      "discount": "1,250.50",
+      "net_sales": "250,101.50",
+      "taxes": "5,432.10",
+      "charges": "0.00",
+      "product_cost": "120,000.00",
+      "gross_profit": "130,101.50",
+      "tips": "225.25",
+      "surcharge": "25.00",
+      "operating_expenses": "1,000.00",
+      "operating_profit": "129,101.50",
+      "net_profit": "123,669.40"
+    },
+    "table_data": [
+      {
+        "date": "Apr 05,2026",
+        "gross_sales": "201,852.00",
+        "refunds": "0.00",
+        "discount": "1,250.50",
+        "net_sales": "200,601.50",
+        "taxes": "5,432.10",
+        "charges": "0.00",
+        "product_cost": "120,000.00",
+        "gross_profit": "80,601.50",
+        "tips_amount": "150.00",
+        "surcharge_amount": "-"
+      },
+      {
+        "date": "Apr 06,2026",
+        "gross_sales": "0.00",
+        "refunds": "500.00",
+        "discount": "0.00",
+        "net_sales": "-500.00",
+        "taxes": "0.00",
+        "charges": "0.00",
+        "product_cost": "0.00",
+        "gross_profit": "-500.00",
+        "tips_amount": "0.00",
+        "surcharge_amount": "0.00"
+      },
+      {
+        "date": "Apr 07,2026",
+        "gross_sales": "50,000.00",
+        "refunds": "0.00",
+        "discount": "0.00",
+        "net_sales": "50,000.00",
+        "taxes": "0.00",
+        "charges": "0.00",
+        "product_cost": "0.00",
+        "gross_profit": "50,000.00",
+        "tips_amount": "75.25",
+        "surcharge_amount": "25.00"
+      }
+    ]
+  }
+}
