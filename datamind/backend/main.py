@@ -67,6 +67,18 @@ import mcp_server.safety as _safety
 from mcp_server.business_tools import ToolContext as _MCPToolContext
 from mcp_server.orchestrator import answer_business_question as _mcp_answer_business_question
 
+# Report-cache answer layer (PLAN 05) — imported lazily-safe (no import-time side
+# effects); only exercised when _report_cache_enabled_for(user) and tenant is SalesPlay.
+from report_cache import router as _rc_router
+from report_cache import tiers as _rc_tiers
+from report_cache import lookups as _rc_lookups
+from report_cache.prompts import persona_answer as _rc_persona_answer
+from report_cache.auth import get_report_token as _rc_get_report_token
+from mcp_server.report_tools import (
+    ReportToolContext as _ReportToolContext,
+    answer_report_question as _rc_answer_report_question,
+)
+
 log = get_logger(__name__)
 
 # Bootstrap integration tables (create if not exist)
@@ -148,6 +160,21 @@ _MCP_TOOL_CALLING_ENABLED = os.getenv("MCP_TOOL_CALLING_ENABLED", "").lower() ==
 _MCP_TOOL_CALLING_TEST_EMAILS = {
     e.strip().lower() for e in os.getenv("MCP_TOOL_CALLING_TEST_EMAILS", "").split(",") if e.strip()
 }
+
+# Report-cache answer layer (PLAN 05). SalesPlay-only, staged-rollout, falls back
+# to the existing pipeline on ANY error — mirrors embed.py's flag reader.
+_REPORT_CACHE_ENABLED = os.getenv("REPORT_CACHE_ENABLED", "").lower() == "true"
+_REPORT_CACHE_TEST_EMAILS = {
+    e.strip().lower() for e in os.getenv("REPORT_CACHE_TEST_EMAILS", "").split(",") if e.strip()
+}
+log.info("Report-cache answer-layer flag", enabled=_REPORT_CACHE_ENABLED,
+         test_emails_configured=bool(_REPORT_CACHE_TEST_EMAILS))
+
+
+def _report_cache_enabled_for(email: str) -> bool:
+    return _REPORT_CACHE_ENABLED and (
+        not _REPORT_CACHE_TEST_EMAILS or email.lower() in _REPORT_CACHE_TEST_EMAILS
+    )
 
 # Cached name of the session timeout variable for this MySQL/MariaDB server.
 # "max_execution_time" (MySQL 5.7.8+, milliseconds)
@@ -1437,6 +1464,69 @@ class NLQueryRequest(BaseModel):
     conversation_id: str  = None  # optional — enables conversation memory
 
 
+def _rc_save_exchange(conv_id, question, answer, columns=None, data=None):
+    """Best-effort conversation persistence for the report-cache path — mirrors
+    the main pipeline's save, non-fatal."""
+    if not conv_id:
+        return
+    try:
+        _conv.save_message(conv_id, "user", question)
+        _conv.save_message(conv_id, "assistant", answer, row_count=len(data or []),
+                           columns=columns, data=data, analysis=answer)
+    except Exception as _ce:
+        log.warning("report-cache: failed to save conversation", conv_id=conv_id, error=str(_ce))
+
+
+def _try_report_cache_answer(*, user, req, conn, schemas, fkeys, nl_tenant_id, nl_currency,
+                             conv_id, conv_history, llm, api_key, history, steps):
+    """PLAN 05 answer layer for SalesPlay tenants. Returns a query response dict,
+    or None to fall through to the existing classify/SQL pipeline (for
+    conversational/clarification types it handles well). Raises on any hard
+    failure so the caller falls back to the legacy pipeline (fallback rule)."""
+    profile = _rc_lookups.get_profile(nl_tenant_id)
+    route = _rc_router.route(req.question, conv_history, profile, llm, api_key, user["email"])
+    rtype = route["type"]
+    log.info("report-cache route", user=user["email"], tenant_id=nl_tenant_id, type=rtype)
+
+    if rtype in ("conversational", "clarification"):
+        return None  # existing classifier handles greetings/vague follow-ups better
+
+    if rtype == "general_knowledge":
+        text = _rc_persona_answer(req.question, profile, nl_currency, llm, api_key,
+                                  user["email"], conversation_history=conv_history)
+        steps.append({"label": "Answered from general knowledge", "status": "done"})
+        _rc_save_exchange(conv_id, req.question, text)
+        return _base_query_response(success=True, type="conversational", message=text,
+                                    steps=steps, conversation_id=conv_id, think_mode=req.think_mode)
+
+    # business_data / forecast / insight → report-tool loop (cache-first).
+    business_ctx = _MCPToolContext(
+        conn=conn, schemas=_filter_sensitive_schema(schemas), fkeys=fkeys,
+        tenant_id=nl_tenant_id, row_limit=history["row_limit"],
+        history_months=history["months"], set_query_timeout=_set_query_timeout,
+    )
+    rctx = _ReportToolContext(
+        business=business_ctx, tenant_id=nl_tenant_id,
+        token=_rc_get_report_token(nl_tenant_id), tier=_rc_tiers.get_ai_tier(nl_tenant_id),
+        currency=nl_currency, shops=_rc_lookups.list_shops(nl_tenant_id),
+    )
+    result = asyncio.run(_rc_answer_report_question(
+        req.question, rctx, llm, api_key, user["email"], conversation_history=conv_history,
+    ))
+    steps.append({"label": "Answered via report tools", "status": "done"})
+
+    answer, columns, data = result["answer"], result["columns"], result["data"]
+    _charge_op(user["email"], "nl_query_rows", len(data))
+    _rc_save_exchange(conv_id, req.question, answer, columns=columns, data=data)
+
+    if result["refusal"] or not data:
+        return _base_query_response(success=True, type="conversational", message=answer,
+                                    steps=steps, conversation_id=conv_id, think_mode=req.think_mode)
+    return _base_query_response(success=True, type="data", analysis=answer,
+                                columns=columns, data=data, row_count=len(data), steps=steps,
+                                conversation_id=conv_id, think_mode=req.think_mode)
+
+
 @v1.post("/query")
 @_limiter.limit(RL_COMPUTE)
 def natural_language_query(request: Request, req: NLQueryRequest, user: dict = Depends(current_user)):
@@ -1573,6 +1663,25 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                     nl_shop_timezone = _tz_row[0] or "UTC"
             except Exception as _tze:
                 log.debug("Could not fetch shop timezone, defaulting to UTC", error=str(_tze))
+
+        # ── Report-cache answer layer (PLAN 05) ───────────────────────────────
+        # SalesPlay-only, flag-gated, cache-first. Runs BEFORE the legacy
+        # classify/SQL path; returns a finished response for business/forecast/
+        # insight/general-knowledge questions, or None to fall through for
+        # conversational/clarification. Any hard failure falls back to the
+        # existing pipeline below (PLAN_00 fallback rule) — never a 500.
+        if _report_cache_enabled_for(user["email"]) and nl_tenant_id:
+            try:
+                _rc_response = _try_report_cache_answer(
+                    user=user, req=req, conn=conn, schemas=schemas, fkeys=fkeys,
+                    nl_tenant_id=nl_tenant_id, nl_currency=nl_currency, conv_id=conv_id,
+                    conv_history=conv_history, llm=llm, api_key=api_key, history=history, steps=steps,
+                )
+                if _rc_response is not None:
+                    return _rc_response
+            except Exception as _rc_err:
+                log.warning("Report-cache path failed, falling back to existing pipeline",
+                            user=user["email"], error=str(_rc_err))
 
         # ── Question classification ───────────────────────────────────────────
         steps.append({"label": "Analyzing your question", "status": "done"})

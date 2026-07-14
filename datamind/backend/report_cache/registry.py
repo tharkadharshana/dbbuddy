@@ -70,6 +70,15 @@ class Report:
     metrics: tuple                  # tuple[Metric, ...]
     params: tuple                   # tuple[str, ...] — accepted API params
     answers: tuple                  # tuple[str, ...] — keyword hints for routing
+    daily_cacheable: bool = False   # True only when this report's table_data is genuinely
+                                     # GROUP-BY-DATE (per-day additive rows) so a closed range
+                                     # can be answered by SUMMING cached daily facts (PLAN 05
+                                     # aggregate_scalar). For scalar reports whose table_data is
+                                     # per-RECEIPT (receipts/refunds/taxes/…), the daily fact is
+                                     # NOT a valid per-day breakdown — those are always answered by
+                                     # a live exact-range summary fetch (still dashboard-correct,
+                                     # just not cached). Only sales_summary qualifies today
+                                     # (see report_cache/normalize.py:normalize_daily_rows).
 
 
 # Params common to every standard report (BaseReportRequest rules, all 8 controllers).
@@ -112,6 +121,7 @@ REPORTS: dict = {
         ),
         params=_COMMON_PARAMS,
         answers=("sales", "revenue", "gross sales", "net sales", "profit", "discount", "tax summary"),
+        daily_cacheable=True,  # table_data is GROUP BY DATE — the one report with valid daily facts
     ),
 
     # ReceiptsController@index — data.summary block (empty-payload shape + the

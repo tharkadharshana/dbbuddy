@@ -324,3 +324,59 @@ This is deliberately surfaced rather than hidden: the queue/schedule/lifecycle m
 - **added** `tests/test_jobs.py` (9 tests; full suite 112/112).
 - **changed** `embed.py` — first-connect enqueues `job_onboard_tenant` with the fresh `aat` (non-fatal, flag-gated).
 - **changed** `.env.example` — 11 `REPORT_CACHE_*` job/breaker/rate-limit knobs (safe defaults).
+
+---
+
+## PLAN 05 — Answer Layer: Router, Cache-First Report Tools, Additivity Aggregation
+
+### What this delivers
+
+This is the phase where the **user-visible behavior finally changes** for SalesPlay-embed tenants (behind the flag). The cache built in PLAN 01–04 gets wired into the chat: a lightweight router decides what kind of question it is, business questions are answered from **pre-built, known-correct reports** (cache-first) instead of blind SQL, and the numbers are **additivity-correct** so a quarter's average ticket is never the mean of three monthly averages.
+
+### Previous flow (what happens today)
+
+Every question → one giant `classify_question` prompt → `data_query` → the model writes one blind SQL query over the raw `sp_*` tables (or, with the MCP flag, a tool-loop that still writes SQL) → run it → narrate. Correctness (exclude VOIDs, right revenue column, timezone) rides along as prompt text the model *usually* follows. "The AI's number doesn't match my POS dashboard" is a structural risk because the AI re-derives the number instead of using the report the dashboard uses.
+
+### New flow (SalesPlay tenants, flag on)
+
+```
+question
+  └─ router (cheap LLM, JSON)  →  general_knowledge → persona answer (NO data tools)
+                               →  conversational/clarification → (existing classifier)
+                               →  business / forecast / insight
+                                     └─ report tool-loop:
+                                          list_reports → pick a known-correct report
+                                          get_report_metrics(report, dates, shop)
+                                              └─ answer_metric_query:
+                                                   tier window? → refuse + upsell
+                                                   covered+closed+additive? → SUM cached daily facts
+                                                   else → live exact-range summary fetch (dashboard number)
+                                          (run_select_query still available as fallback)
+                                     └─ model narrates the (already-correct) numbers
+```
+
+**The model's job shrinks from "write correct SQL" to "pick the right report and fill in dates"** — something LLMs do reliably. Correctness moved out of the prompt and into code: the report's own SQL/summary, the additivity rules, the tenant/mutation guards.
+
+### The three things that make numbers correct
+
+1. **Additivity aggregation (`aggregate.py`).** Base metrics are summed; ratios are recomputed from the summed numerator/denominator (avg_ticket = Σnet ÷ Σcount, gross_margin = Σprofit ÷ Σnet); distinct-counts and per-unit values are **refused** and force a live re-fetch. This is the single rule that prevents "wrong-but-plausible" quarterly/annual numbers (doc 09 C3).
+2. **Cache-first, live-on-miss (`answer.py`).** A closed, fully-covered, additive range is answered by summing cached daily facts (fast, no POS call). An open period, a cache miss, or a non-additive metric forces a live exact-range fetch whose **summary block is exactly the dashboard number** (doc 09 C4/C6).
+3. **`daily_cacheable` honesty.** Only `sales_summary` has a valid per-day additive breakdown today; every other scalar report answers from a live exact-range summary rather than trusting a per-day breakdown that isn't valid for it. Correct by construction, at the cost of some cache-hit rate — flip the flag per report when PLAN 03 grows per-report daily ingestion.
+
+### Prompt hygiene (doc 07 Part 3)
+
+The one giant prompt is split: a tiny **router** (type only, no rules), a short **persona** (who the assistant is + currency + profile, soft scope nudge, *no* correctness rules), and **correctness-as-code** (report tools + the existing AST/tenant safety). General-knowledge and insight questions can answer from the model's own reasoning with no data tools.
+
+### Impact
+
+- **Flag OFF (default): nothing changes.** The branch is skipped entirely; the legacy classify/SQL pipeline is byte-for-byte unchanged. Loyverse/BYODB/own-DB users are never affected (SalesPlay-tenant-only branch).
+- **Flag ON:** business questions answer from known-correct reports, matching the POS dashboard for covered ranges; general-knowledge answers without touching data; out-of-window questions get a tier-upsell refusal instead of a wrong or empty answer.
+- **Honest limitation (token wrinkle, PLAN 02/04):** live fetches need the v2.0 report token the chat path doesn't have yet — so today cache-hit historical `sales_summary` questions work fully, and live/uncovered questions **fall back to the existing SQL pipeline** rather than failing. General-knowledge + refusals work regardless.
+- **For PLAN 06/07:** forecast/insight already route to the report loop (their dedicated tools slot in next); the loop returns a ready-to-stream narrative + data table for the SSE endpoint.
+
+### Files added / changed
+
+- **added** `report_cache/aggregate.py`, `report_cache/answer.py`, `report_cache/router.py`, `report_cache/prompts.py`, `mcp_server/report_tools.py`.
+- **added** `tests/test_aggregate.py` (7), `tests/test_answer.py` (12) — full suite 124/124.
+- **changed** `report_cache/registry.py` — `daily_cacheable` flag (True only for `sales_summary`).
+- **changed** `main.py` — `_report_cache_enabled_for` flag + `_try_report_cache_answer` branch before the legacy path (fully fenced by the flag + fallback rule).
