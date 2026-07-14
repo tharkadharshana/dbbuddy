@@ -51,6 +51,7 @@ REPORT_API_BASE_URL = os.getenv("SALESPLAY_EMBED_PROXY_BASE", _DEFAULT_BASE_URL)
 _HTTP_TIMEOUT   = int(os.getenv("REPORT_API_HTTP_TIMEOUT", "90"))   # reports are heavy (set_time_limit(90) server-side) — deliberately separate from SALESPLAY_EMBED_PROXY_TIMEOUT (10s), which is tuned for light profile/token calls, not report fetches
 _RETRY_ATTEMPTS = int(os.getenv("REPORT_API_RETRY_ATTEMPTS", "3"))
 _VERIFY_SSL     = os.getenv("REPORT_API_VERIFY_SSL", "true").lower() not in ("false", "0", "no")
+_PAGE_SLEEP     = float(os.getenv("REPORT_API_PAGE_SLEEP", "0.5"))  # backpressure between paginated calls (doc 09 Part 7) — mirrors SALESPLAY_RATE_SLEEP
 _MAX_PAGE_CAP   = int(os.getenv("REPORT_API_MAX_PAGE_CAP", "50"))   # hard ceiling regardless of caller's max_pages
 
 if not _VERIFY_SSL:
@@ -154,7 +155,10 @@ class ReportAPIClient:
 
     def fetch_report_all_pages(self, report_id: str, *, max_pages: int = 20, **params: Any) -> dict:
         """Follow pagination.has_next_page, concatenating table_data, capped at
-        min(max_pages, REPORT_API_MAX_PAGE_CAP) (doc 09 C1/§3.5)."""
+        min(max_pages, REPORT_API_MAX_PAGE_CAP) (doc 09 C1/§3.5). A small sleep
+        between pages (not before the first) protects the shared POS backend
+        from back-to-back 90s-class calls (doc 09 Part 7) — same backpressure
+        idea as providers/salesplay/sync.py's SALESPLAY_RATE_SLEEP."""
         page_cap = min(max_pages, _MAX_PAGE_CAP)
         params.pop("page", None)
 
@@ -164,6 +168,8 @@ class ReportAPIClient:
         page = 1
 
         while page <= page_cap:
+            if page > 1:
+                time.sleep(_PAGE_SLEEP)
             data = self.fetch_report(report_id, page=page, **params)
             body = data.get("data", {})
             table_data = body.get("table_data", [])

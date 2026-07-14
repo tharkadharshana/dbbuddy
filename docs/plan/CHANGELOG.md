@@ -196,3 +196,68 @@ The fix: DataMind's existing embed onboarding flow *already* successfully calls 
 - **For PLAN 05 (answer layer) later:** `resolve_shop`/`is_shop_allowed`/`currency_symbol`/`list_cashiers` are ready to use, fully unit-tested. One sharp edge documented for whoever wires cashier filtering: the report APIs' `cashier_id` query parameter is actually matched against a cashier's *name*, not a numeric id — `list_cashiers()` returns the right field for that (`cashier_name`), and it's called out prominently so this isn't rediscovered the hard way later.
 
 **Next:** PLAN 03 — Report Ingestion & Cache Store. Must resolve the background-auth question above before ingestion jobs can call the 8 report endpoints unattended.
+
+---
+
+## PLAN 03 — Report Ingestion & Cache Store
+
+**Status: Complete. 103/103 tests passing (45 new). DB write/read path verified against the real dev database.**
+
+### What this delivers
+
+The actual read/write engine of the cache: given a tenant, a report, and a period, fetch it from the POS, normalize it, and store it correctly — daily rows for the 5 "scalar" reports (sales summary, receipts, refunds, credit notes, taxes, charges), monthly per-product/per-category rows for the 2 "dimensional" reports (sales by product, sales by category). This is the piece PLAN 01–02 built the plumbing for and PLAN 04–05 will schedule and read from. No answering logic yet — after this phase you can populate and query the cache programmatically, that's all.
+
+### Previous flow
+
+None, for this data. `report_daily_fact`/`report_dim_fact`/`report_sync_state` were empty tables since PLAN 01 with no code that wrote to them.
+
+### New flow
+
+```
+A job (PLAN 04) or a manual call decides: "ingest sales_summary for tenant T, month April 2026"
+        │
+        ▼
+ingest_period(conn, tenant_id, report_id, token, period)
+        │
+        ├─ scalar report? (sales_summary, receipts, refunds, credit_notes, taxes, charges)
+        │       │
+        │       ▼
+        │  ingest_scalar_report — one API call for the WHOLE month (the POS
+        │  API already returns every day's numbers pre-grouped in one
+        │  response — no need to call it 30 times) → one report_daily_fact
+        │  row per day, each tagged 'open' (still today) or 'closed' (done,
+        │  but not yet "finalized" — that only happens in PLAN 04)
+        │
+        └─ dimensional report? (sales_by_products, sales_by_category)
+                │
+                ▼
+           ingest_dimensional_report — one API call for the month → one
+           report_dim_fact row per product/category, capped to the top N by
+           sales size with everything else folded into one "Other" row (a
+           merchant with 3,000 SKUs doesn't get 3,000 rows/month/report)
+        │
+        ▼
+   Both paths: never fetch older than what the tenant's AI plan allows
+   (reuses PLAN 02's tiers.window_start — same cutoff the rest of the app
+   already enforces), record what happened in report_sync_state (including
+   failures — a fact table can't record "we tried and it failed", only a
+   sync-state row can), and are safe to re-run any time (upsert, not insert)
+```
+`report_cache/read.py` then answers the question PLAN 05 actually needs: "is this date range fully cached, and is any part of it still the live/mutating today-period?" (`coverage()`) — so the answer layer knows whether it can serve from cache or has to go live.
+
+### The interesting engineering decisions in this phase
+
+**Why `report_sync_state` tracks scalar reports by month, not by day.** `report_daily_fact` already carries its own per-day `status`/`fetched_at` — a second per-day tracking table would just be a duplicate. What `sync_state` is actually for: (a) recording an ingestion attempt as a unit that matches how ingestion is actually requested (one API call = one month, per the POS API's own behavior), and (b) being the *only* place a **failed** fetch can be recorded at all — if the API call fails, zero fact rows get written, so there's nothing in `report_daily_fact` to mark as errored. A month at the edge of a requested range that's only partially covered deliberately does *not* get a completeness row in `sync_state`, even though whatever days it did return are still saved — otherwise a later coverage check could wrongly believe that month is fully cached.
+
+**The top-N cap had to be generic, not hardcoded.** The two dimensional reports use *different field names* for what's conceptually "net sales" — `sales_by_products` calls it `net_sale`, `sales_by_category` calls it `net_sales` (confirmed from the actual POS backend source, not a typo). Ranking "top products by sales" had to work for both without hardcoding either name — solved by reusing the metric-additivity metadata PLAN 01 already tagged in the registry: every dimensional report's profit-margin ratio metric already names its own denominator, which is exactly "the sales-size metric" for that report. Ranking by that, generically, means this keeps working correctly if a ninth dimensional report gets added later with yet another field name. The same additivity tags also decide what's safe to fold into the "everything else" row when a merchant has thousands of products: only the metrics tagged as safely-summable get aggregated — a per-unit price or a profit-margin percentage correctly does *not* appear on the "Other" row at all, rather than being silently (and wrongly) summed or averaged.
+
+**Tests run without a database.** Rather than requiring a live MySQL connection to unit-test 45 new tests, this phase built a small in-memory stand-in for the three cache tables — just enough to handle the handful of fixed query shapes the store/read code actually issues, not a general SQL engine. Everything from that suite was then re-verified for real, once, against the actual dev MySQL database (with only the network call to the POS mocked, since the credential gap from PLAN 02 is still unresolved) — confirming the real upsert syntax, real idempotency, and real value round-tripping all work, not just the in-memory approximation of them.
+
+### Impact
+
+- **Right now: none.** Nothing wired into any request path — this phase is explicitly "plumbing you can call programmatically," same as PLAN 01. `main.py` untouched.
+- **For PLAN 04 (jobs):** `ingest_period()` is the exact function a scheduled job calls per (tenant, report, period) — it already handles idempotency, window enforcement, and error recording, so the job layer's job is purely "decide what to ingest and when," not "figure out how to ingest safely."
+- **For PLAN 05 (answer layer):** `coverage()` is the exact decision point for cache-hit-vs-go-live the whole point of this cache exists for.
+- **Confirmed clean:** none of this phase's new code used the wrong DB-connection helper (the bug found and fixed three times already in PLAN 01–02) — every write goes through `pool.get_internal_conn()` or a connection passed in by the caller.
+
+**Next:** PLAN 04 — Jobs: Onboarding, Backfill, Rollover, Retention. The background-auth gap flagged in PLAN 02 (no confirmed way for an unattended job to call the report API without a live browser session) is still open and now directly blocks this phase's scheduled ingestion.

@@ -1,0 +1,56 @@
+{
+  "status": "success",
+  "user": {
+    "id": 501,
+    "user_name": "merchant@example.com",
+    "email": "merchant@example.com",
+    "master_username": "merchant@example.com",
+    "access_role": "ADMIN",
+    "date_format": "DD/MM/YYYY",
+    "time_format": "HH:mm:ss",
+    "timezone": "Asia/Colombo",
+    "currency": "Rs.",
+    "php_date_format": "d/m/Y",
+    "php_time_format": "H:i:s",
+    "ui_language": "en_US",
+    "partner_id": "",
+    "number_format": {
+      "profile_currency": "Rs.",
+      "number_of_decimel": 2,
+      "decimal_separator": ".",
+      "thousond_separator": ","
+    }
+  },
+  "pages": [
+    { "page": "reports", "is_new": false, "is_view": true, "is_enabled": true }
+  ],
+  "shop_list": [
+    { "location_id": 1072, "name": "Colombo Fort", "is_enable": "1" },
+    { "location_id": 1088, "name": "Kandy Branch", "is_enable": "1" },
+    { "location_id": 1099, "name": "Colombo Nugegoda", "is_enable": "1" }
+  ],
+  "cashier_list": [
+    { "user_name": "cashier1", "name": "Nimal Perera", "user_id": "5" },
+    { "user_name": "cashier2", "name": "Kamal Silva", "user_id": "6" }
+  ],
+  "employee_list": [
+    { "id": 10, "employee_username": "cashier1", "employee_name": "Nimal Perera", "login_pin_number": "1234", "login_status": "enable" }
+  ],
+  "pos_employees": [
+    { "id": 5, "employee_username": "cashier1", "display_name": "cashier1 - Nimal Perera", "employee_name": "Nimal Perera" }
+  ],
+  "support_email": "support@salesplaypos.com",
+  "developer_doc_url": "https://developer.salesplaypos.com",
+  "access_info": {
+    "subscription_expired": false,
+    "country": "Sri Lanka",
+    "country_code": "LK",
+    "white_label_enable": false,
+    "inventory_access": true,
+    "receipt_sequence_status": "1",
+    "country_wise_enabled_features": {},
+    "chat_widget_status": true,
+    "credit_note_enable": true,
+    "foc_enable": false
+  }
+}
