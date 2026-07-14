@@ -380,3 +380,50 @@ The one giant prompt is split: a tiny **router** (type only, no rules), a short 
 - **added** `tests/test_aggregate.py` (7), `tests/test_answer.py` (12) — full suite 124/124.
 - **changed** `report_cache/registry.py` — `daily_cacheable` flag (True only for `sales_summary`).
 - **changed** `main.py` — `_report_cache_enabled_for` flag + `_try_report_cache_answer` branch before the legacy path (fully fenced by the flag + fallback rule).
+
+---
+
+## PLAN 06 — Forecasting, Predictions & Business Insights
+
+### What this delivers
+
+Three new capabilities for SalesPlay tenants (behind `INSIGHTS_ENABLED`): **forecasts** ("what will next month's sales look like?"), **trend/anomaly** answers ("how am I trending? any unusual days?"), and **grounded business advice** ("what should I improve this quarter?") that blends the merchant's real numbers with general business reasoning — without inventing figures.
+
+### Previous flow
+
+`forecast` and `insight` questions were routed by PLAN 05 into the report tool-loop, but the loop had no forecasting or advice tools — so the model answered from generic reasoning or fell back to SQL. There was no cached-series forecast and no provenance-checked suggestion synthesis.
+
+### New flow (flag on)
+
+```
+router → forecast  → report loop + forecast_sales / sales_anomalies / sales_growth tools
+                        (Prophet over the cached daily sales_summary series)
+       → insight   → generate_insight (orchestrated):
+                        build a grounded "insight pack" (growth + forecast + top products)
+                        → LLM advice: "what your DATA shows" (only pack numbers)
+                                    + "what I'd suggest" (general reasoning)
+                        → numeric-provenance check
+       → business  → report loop (forecast tools also available if useful)
+```
+
+### How correctness/honesty is kept
+
+- **Additive-only forecasting (doc 09 C3).** Only `sum` metrics on the daily-cacheable `sales_summary` series can be forecast; ratios/percentages (avg ticket, margin %) are **rejected** — they'd have to be derived from forecasted components, never modelled directly.
+- **Minimum-history guard.** Under ~6 weeks of non-zero days → a graceful "not enough history yet", never a garbage model.
+- **Reuses Prophet.** `analytics.run_forecast` is called as-is — no re-implementation of forecasting.
+- **Provenance guard on advice.** Every data figure in a suggestion is checked against the numbers the tools actually returned; an empty pack short-circuits to a "not enough data" message with **no LLM call at all** (so it can't invent a plausible answer). In production the check is a logged soft signal (general benchmarks legitimately add numbers); in tests it's a hard assertion.
+- **Disclaimers.** Forecasts carry "these are estimates based on your past sales."
+
+### Impact
+
+- **Flag OFF (default): nothing changes** — the loop has exactly the PLAN 05 tools, and `insight` routes to the loop as before. Non-SalesPlay users are never touched.
+- **Flag ON:** forecast/growth answers work **cache-only** (no live token needed), so they function in the chat path today despite the PLAN 02/04 token gap; the top-products enrichment in the insight pack is best-effort and skipped when no live token is available.
+- **Cost/latency bounded:** the insight pack is a small fixed set of cache reads, memoised per (tenant, day), so repeated "give me insights" is cheap.
+
+### Files added / changed
+
+- **added** `report_cache/insights/{__init__,forecast,trends,provenance,prompts,insight,tools}.py`.
+- **added** `tests/test_forecast.py` (7, Prophet runs for real), `tests/test_insight.py` (5) — full suite 136/136.
+- **changed** `mcp_server/report_tools.py` — registers the insight tools (no-op unless `INSIGHTS_ENABLED`).
+- **changed** `main.py` — `_INSIGHTS_ENABLED` flag; `insight` route → `generate_insight`.
+- **changed** `.env.example` — `INSIGHTS_ENABLED` + forecast/anomaly tuning knobs.

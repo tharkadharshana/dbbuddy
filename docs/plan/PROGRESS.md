@@ -187,3 +187,30 @@ Live fetches need the v2.0 report-API token; the chat path only has the stored v
 **Acceptance status:** aggregation is additivity-correct (unit-proven); flag-OFF path is byte-for-byte the old pipeline (branch skipped entirely); router sends general-knowledge to a no-tools persona; business questions answer cache-first with live+write-through on miss. Not exercised end-to-end against a live tenant this session (no LLM key + the token gap), same constraint as PLAN 02–04.
 
 **Next:** PLAN 06 — forecast + grounded insight tools (registered into the same report loop). PLAN 07 — SSE streaming of the report-loop narrative.
+
+---
+
+## PLAN 06 — Forecasting, Predictions & Business Insights
+
+All gated by `INSIGHTS_ENABLED` (default OFF); requires `REPORT_CACHE_ENABLED`. Off = the report loop and routes are exactly PLAN 05.
+
+- [x] `report_cache/insights/forecast.py` — `forecast_metric()` pulls the cached daily series (`read.get_daily_facts` over the tier window), guards **additive-only** (rejects ratio/non_additive), **daily-cacheable-only** (`sales_summary`), and **min ~6 weeks non-zero history** (graceful "not enough history" else), then reuses `analytics.run_forecast` (Prophet) — not re-implemented. Horizon capped (default 90). Returns history + forecast band + summary + disclaimer.
+- [x] `report_cache/insights/trends.py` — `detect_anomalies()` wraps `analytics.run_anomaly_detection` over the cached series; `growth_summary()` computes additive MoM totals/% from cached daily facts (never sums non-additive).
+- [x] `report_cache/insights/provenance.py` — pure numeric-provenance guard: `unsupported_numbers(text, allowed)` flags figures in generated advice not traceable to the fact pack (small ints 0–31 treated as dates/counts). Hard-asserted in tests; **soft signal (logged) in production** because general benchmarks legitimately introduce numbers.
+- [x] `report_cache/insights/prompts.py` — insight system prompt: two clearly separated parts (**what your data shows** = only supplied numbers; **what I'd suggest** = general reasoning), currency + merchant context, uncertainty reminder.
+- [x] `report_cache/insights/insight.py` — `generate_insight()` orchestration: builds a small **insight pack** (growth + forecast, both cache/token-free; top-products best-effort) memoised per (tenant, day); empty pack → graceful message with **no LLM call** (no fabrication risk); else LLM synthesis + provenance check. Returns the unified answer dict.
+- [x] `report_cache/insights/tools.py` — `register_insight_tools(mcp, rctx)` adds `forecast_sales` / `sales_anomalies` / `sales_growth` to the report loop, no-op unless `INSIGHTS_ENABLED`. Identity stays server-side; shop names resolved+authorized.
+- [x] `mcp_server/report_tools.py` — `build_report_mcp` now calls `register_insight_tools` (verified: 10 tools with the flag on, 7 with it off).
+- [x] `main.py` — `_INSIGHTS_ENABLED` flag; `insight` route → `generate_insight` (when flag on) else the loop; `forecast`/`business_data` → the loop (which now has the forecast tools). Unified result handling unchanged.
+- [x] `.env.example` — `INSIGHTS_ENABLED` + `INSIGHTS_FORECAST_MIN_DAYS` / `_MAX_HORIZON` / `_ANOMALY_LOOKBACK_DAYS` (safe defaults).
+- [x] Tests: `tests/test_forecast.py` (7 — rising series projects forward with ordered band, insufficient history graceful, ratio rejected, non-cacheable rejected, horizon cap, MoM growth, ratio-growth rejected; Prophet runs for real) + `tests/test_insight.py` (5 — provenance extract/flag, small-int exemption, pack walk, insight cites only pack numbers, empty pack → no LLM call). **Full suite: 136/136 passing.**
+
+### Design decisions worth noting
+
+- **Forecast/anomaly/growth are TOOLS in the loop** (tools-first, consistent with PLAN 05) so the model parses metric/horizon/shop from the question; **insight is an orchestrated synthesis** (deterministic grounded pack + provenance-guarded prompt) for higher-quality, honest advice — matching the plan's split (Steps 1–2 tools vs Step 3 orchestration).
+- **Cache/token-free by design.** Forecast + growth read only cached daily `sales_summary` facts, so they work in the chat path despite the PLAN 02/04 token gap. The top-products pack item needs a live token and is best-effort (skipped silently when unavailable).
+- **`business_data` proactive one-liner (plan Step 4, optional): skipped** — kept lazy; add later behind its own flag if wanted.
+
+**Acceptance status:** "forecast next month" returns a data-grounded forecast with a confidence range + disclaimer; "any suggestions?" returns advice separating real data findings from general recommendations with a provenance check; insufficient-history / out-of-window / ratio-metric cases handled gracefully; flag OFF = no change. Not exercised end-to-end against a live tenant this session (no LLM key + token gap), same constraint as PLAN 02–05; the deterministic pieces (forecast math, growth, provenance) are unit-proven with Prophet running for real.
+
+**Next:** PLAN 07 — SSE streaming of whatever this returns (`/v1/query/stream`).

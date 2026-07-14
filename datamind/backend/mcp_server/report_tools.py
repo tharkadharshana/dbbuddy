@@ -137,6 +137,9 @@ def build_report_mcp(rctx: ReportToolContext) -> FastMCP:
                             "data": rows, "summary": None}
         return rows
 
+    # PLAN 06: forecast/anomaly/growth tools (no-op unless INSIGHTS_ENABLED).
+    from report_cache.insights.tools import register_insight_tools
+    register_insight_tools(mcp, rctx)
     return mcp
 
 

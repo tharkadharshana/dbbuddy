@@ -74,6 +74,7 @@ from report_cache import tiers as _rc_tiers
 from report_cache import lookups as _rc_lookups
 from report_cache.prompts import persona_answer as _rc_persona_answer
 from report_cache.auth import get_report_token as _rc_get_report_token
+from report_cache.insights.insight import generate_insight as _rc_generate_insight
 from mcp_server.report_tools import (
     ReportToolContext as _ReportToolContext,
     answer_report_question as _rc_answer_report_question,
@@ -167,8 +168,9 @@ _REPORT_CACHE_ENABLED = os.getenv("REPORT_CACHE_ENABLED", "").lower() == "true"
 _REPORT_CACHE_TEST_EMAILS = {
     e.strip().lower() for e in os.getenv("REPORT_CACHE_TEST_EMAILS", "").split(",") if e.strip()
 }
+_INSIGHTS_ENABLED = os.getenv("INSIGHTS_ENABLED", "").lower() == "true"
 log.info("Report-cache answer-layer flag", enabled=_REPORT_CACHE_ENABLED,
-         test_emails_configured=bool(_REPORT_CACHE_TEST_EMAILS))
+         test_emails_configured=bool(_REPORT_CACHE_TEST_EMAILS), insights_enabled=_INSIGHTS_ENABLED)
 
 
 def _report_cache_enabled_for(email: str) -> bool:
@@ -1499,21 +1501,31 @@ def _try_report_cache_answer(*, user, req, conn, schemas, fkeys, nl_tenant_id, n
         return _base_query_response(success=True, type="conversational", message=text,
                                     steps=steps, conversation_id=conv_id, think_mode=req.think_mode)
 
-    # business_data / forecast / insight → report-tool loop (cache-first).
-    business_ctx = _MCPToolContext(
-        conn=conn, schemas=_filter_sensitive_schema(schemas), fkeys=fkeys,
-        tenant_id=nl_tenant_id, row_limit=history["row_limit"],
-        history_months=history["months"], set_query_timeout=_set_query_timeout,
-    )
-    rctx = _ReportToolContext(
-        business=business_ctx, tenant_id=nl_tenant_id,
-        token=_rc_get_report_token(nl_tenant_id), tier=_rc_tiers.get_ai_tier(nl_tenant_id),
-        currency=nl_currency, shops=_rc_lookups.list_shops(nl_tenant_id),
-    )
-    result = asyncio.run(_rc_answer_report_question(
-        req.question, rctx, llm, api_key, user["email"], conversation_history=conv_history,
-    ))
-    steps.append({"label": "Answered via report tools", "status": "done"})
+    token = _rc_get_report_token(nl_tenant_id)
+    tier = _rc_tiers.get_ai_tier(nl_tenant_id)
+
+    if rtype == "insight" and _INSIGHTS_ENABLED:
+        # PLAN 06: orchestrated data+knowledge advice (grounded, provenance-checked).
+        result = _rc_generate_insight(
+            conn, nl_tenant_id, req.question, token, tier, nl_currency, profile,
+            llm, api_key, user["email"], conversation_history=conv_history,
+        )
+        steps.append({"label": "Synthesized business insights", "status": "done"})
+    else:
+        # business_data / forecast / insight(flag off) → report-tool loop (cache-first).
+        business_ctx = _MCPToolContext(
+            conn=conn, schemas=_filter_sensitive_schema(schemas), fkeys=fkeys,
+            tenant_id=nl_tenant_id, row_limit=history["row_limit"],
+            history_months=history["months"], set_query_timeout=_set_query_timeout,
+        )
+        rctx = _ReportToolContext(
+            business=business_ctx, tenant_id=nl_tenant_id, token=token, tier=tier,
+            currency=nl_currency, shops=_rc_lookups.list_shops(nl_tenant_id),
+        )
+        result = asyncio.run(_rc_answer_report_question(
+            req.question, rctx, llm, api_key, user["email"], conversation_history=conv_history,
+        ))
+        steps.append({"label": "Answered via report tools", "status": "done"})
 
     answer, columns, data = result["answer"], result["columns"], result["data"]
     _charge_op(user["email"], "nl_query_rows", len(data))
