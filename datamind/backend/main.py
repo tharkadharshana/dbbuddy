@@ -18,7 +18,7 @@ import datetime
 import traceback
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, BackgroundTasks, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List, Any, Dict
 from dotenv import load_dotenv
@@ -75,10 +75,18 @@ from report_cache import lookups as _rc_lookups
 from report_cache.prompts import persona_answer as _rc_persona_answer
 from report_cache.auth import get_report_token as _rc_get_report_token
 from report_cache.insights.insight import generate_insight as _rc_generate_insight
+from report_cache import sse as _sse
 from mcp_server.report_tools import (
     ReportToolContext as _ReportToolContext,
     answer_report_question as _rc_answer_report_question,
 )
+
+# Shared SalesPlay table scope (used by both the sync /query path and the SSE
+# stream ctx) — the sp_* tables a SalesPlay tenant's fallback SQL may touch.
+_SALESPLAY_SHARED_TABLES = [
+    "sp_receipts", "sp_receipt_line_items", "sp_products",
+    "sp_customers", "sp_categories", "sp_shops", "sp_payment_types",
+]
 
 log = get_logger(__name__)
 
@@ -1542,6 +1550,13 @@ def _try_report_cache_answer(*, user, req, conn, schemas, fkeys, nl_tenant_id, n
 @v1.post("/query")
 @_limiter.limit(RL_COMPUTE)
 def natural_language_query(request: Request, req: NLQueryRequest, user: dict = Depends(current_user)):
+    # Thin wrapper: the body lives in _run_natural_language_query so the SSE
+    # stream endpoint can reuse it as a synchronous fallback (in a worker thread)
+    # without re-triggering the rate-limiter/auth dependency.
+    return _run_natural_language_query(request, req, user)
+
+
+def _run_natural_language_query(request: Request, req: NLQueryRequest, user: dict):
     log = get_logger(__name__)   # local — lets us rebind with log = log.bind(...) later without UnboundLocalError
     conn = None
     steps: list = []
@@ -1586,13 +1601,10 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                     message="No data source connected yet. Please connect a provider in Settings first.",
                 )
 
-            # SalesPlay uses shared sp_* tables scoped by tenant_id.
+            # SalesPlay uses shared sp_* tables scoped by tenant_id (module
+            # constant _SALESPLAY_SHARED_TABLES — also used by the SSE stream ctx).
             # Loyverse uses per-user views named {prefix}_* (tenant isolation
             # baked into each view's WHERE clause at creation time).
-            _SALESPLAY_SHARED_TABLES = [
-                "sp_receipts", "sp_receipt_line_items", "sp_products",
-                "sp_customers", "sp_categories", "sp_shops", "sp_payment_types",
-            ]
             _LOYVERSE_VIEW_SUFFIXES = [
                 "receipts", "receipt_line_items", "products",
                 "customers", "categories", "stores", "employees", "payment_line_items",
@@ -2141,6 +2153,198 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                 conn.close()
             except Exception:
                 pass
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SSE STREAMING  (PLAN 07 — POST /v1/query/stream)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _build_report_stream_ctx(user: dict, req: NLQueryRequest):
+    """Assemble the SalesPlay report-cache context the stream path needs, or None
+    if this request isn't report-cache-eligible (non-SalesPlay tenant or flag off).
+    Blocking (DB) — call via asyncio.to_thread. Caller owns closing ctx['conn']."""
+    if not _report_cache_enabled_for(user["email"]):
+        return None
+    user_conns = get_user_connections(user["email"])
+    tenant_id = next((c.get("table_prefix") for c in user_conns
+                      if c.get("provider_id") == "salesplay" and c.get("table_prefix")), None)
+    if not tenant_id:
+        return None
+    conn = _get_internal_conn()
+    try:
+        schemas = get_table_schemas(conn, _SALESPLAY_SHARED_TABLES)
+        scope = set(_SALESPLAY_SHARED_TABLES)
+        fkeys = [fk for fk in get_foreign_keys(conn)
+                 if fk["table"] in scope and fk["ref_table"] in scope]
+        history = get_plan_history_limit(user["email"])
+        locale = (user.get("settings", {}) or {}).get("locale") or {}
+        conv_id = req.conversation_id or None
+        conv_history = ""
+        if conv_id:
+            try:
+                conv_history = _conv.get_history_for_prompt(conv_id)
+            except Exception:
+                pass
+        return {"conn": conn, "tenant_id": tenant_id, "schemas": schemas, "fkeys": fkeys,
+                "history": history, "currency": locale.get("currency") or "$",
+                "conv_id": conv_id, "conv_history": conv_history}
+    except Exception:
+        conn.close()
+        raise
+
+
+async def _stream_tokens(emit, text: str):
+    for chunk in _sse.chunk_text(text):
+        emit(_sse.TOKEN, {"text": chunk})
+        if _sse.TOKEN_CHUNK_DELAY:
+            await asyncio.sleep(_sse.TOKEN_CHUNK_DELAY)
+
+
+async def _emit_oneshot_fallback(request, req, user, emit):
+    """Run the existing sync pipeline in a worker thread and emit its result as a
+    single (non-token-streamed) answer — used for non-report-cache routes and on
+    any streaming failure, so the client always gets a usable answer."""
+    resp = await asyncio.to_thread(_run_natural_language_query, request, req, user)
+    text = resp.get("analysis") or resp.get("message") or ""
+    if text:
+        await _stream_tokens(emit, text)
+    emit(_sse.DATA, {"columns": resp.get("columns", []), "rows": resp.get("data", []),
+                     "provenance": None})
+    emit(_sse.META, {"conversation_id": resp.get("conversation_id"),
+                     "data_as_of": resp.get("data_as_of"), "type": resp.get("type")})
+
+
+async def _produce_stream_answer(request, req, user, emit):
+    """The streaming producer: route → answer with live step/token/data events.
+    Blocking work is offloaded to threads (doc 06 F5). Falls back to the sync
+    pipeline for non-report-cache routes and on any error."""
+    email = user["email"]
+    ok, reason = await asyncio.to_thread(check_ai_limit, email)
+    if not ok:
+        emit(_sse.ERROR, {"message": reason, "recoverable": False})
+        return
+
+    ctx = None
+    try:
+        ctx = await asyncio.to_thread(_build_report_stream_ctx, user, req)
+    except Exception as e:
+        log.warning("SSE ctx build failed, falling back", user=email, error=str(e))
+    if ctx is None:
+        await _emit_oneshot_fallback(request, req, user, emit)
+        return
+
+    conn = ctx["conn"]
+    try:
+        llm = _effective_llm(user, req.llm)
+        api_key = _resolve_api_key(user, llm)
+        conv_id, conv_history, currency = ctx["conv_id"], ctx["conv_history"], ctx["currency"]
+        profile = await asyncio.to_thread(_rc_lookups.get_profile, ctx["tenant_id"])
+
+        emit(_sse.STEP, {"label": "Understanding your question", "status": "running"})
+        route = await asyncio.to_thread(_rc_router.route, req.question, conv_history,
+                                        profile, llm, api_key, email)
+        rtype = route["type"]
+        emit(_sse.STEP, {"label": "Understanding your question", "status": "done"})
+        emit(_sse.META, {"conversation_id": conv_id, "route": rtype})
+
+        if rtype in ("conversational", "clarification"):
+            await _emit_oneshot_fallback(request, req, user, emit)
+            return
+
+        if rtype == "general_knowledge":
+            text = await asyncio.to_thread(_rc_persona_answer, req.question, profile,
+                                           currency, llm, api_key, email, conv_history)
+            await _stream_tokens(emit, text)
+            emit(_sse.DATA, {"columns": [], "rows": [], "provenance": None})
+            await asyncio.to_thread(_rc_save_exchange, conv_id, req.question, text)
+            return
+
+        token = await asyncio.to_thread(_rc_get_report_token, ctx["tenant_id"])
+        tier = await asyncio.to_thread(_rc_tiers.get_ai_tier, ctx["tenant_id"])
+
+        if rtype == "insight" and _INSIGHTS_ENABLED:
+            emit(_sse.STEP, {"label": "Gathering insights", "status": "running"})
+            result = await asyncio.to_thread(
+                _rc_generate_insight, conn, ctx["tenant_id"], req.question, token, tier,
+                currency, profile, llm, api_key, email, conv_history)
+            emit(_sse.STEP, {"label": "Gathering insights", "status": "done"})
+        else:
+            business_ctx = _MCPToolContext(
+                conn=conn, schemas=_filter_sensitive_schema(ctx["schemas"]), fkeys=ctx["fkeys"],
+                tenant_id=ctx["tenant_id"], row_limit=ctx["history"]["row_limit"],
+                history_months=ctx["history"]["months"], set_query_timeout=_set_query_timeout)
+            shops = await asyncio.to_thread(_rc_lookups.list_shops, ctx["tenant_id"])
+            rctx = _ReportToolContext(business=business_ctx, tenant_id=ctx["tenant_id"],
+                                      token=token, tier=tier, currency=currency, shops=shops)
+            result = await _rc_answer_report_question(req.question, rctx, llm, api_key, email,
+                                                      conversation_history=conv_history, emit=emit)
+
+        answer, columns, data = result["answer"], result["columns"], result["data"]
+        await _stream_tokens(emit, answer)
+        emit(_sse.DATA, {"columns": columns, "rows": data, "provenance": result.get("provenance")})
+        await asyncio.to_thread(_charge_op, email, "nl_query_rows", len(data))
+        await asyncio.to_thread(_rc_save_exchange, conv_id, req.question, answer,
+                                columns=columns, data=data)
+    except Exception as e:
+        log.warning("SSE report-cache path failed, falling back to sync", user=email, error=str(e))
+        await _emit_oneshot_fallback(request, req, user, emit)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+@v1.post("/query/stream")
+@_limiter.limit(RL_COMPUTE)
+async def natural_language_query_stream(request: Request, req: NLQueryRequest,
+                                        user: dict = Depends(current_user)):
+    """SSE variant of /v1/query (PLAN 07). Streams step→token→data→done. Gated by
+    SSE_ENABLED — when off the endpoint 404s so clients transparently use /query."""
+    if not _sse.SSE_ENABLED:
+        raise HTTPException(status_code=404, detail="Streaming is not enabled.")
+
+    async def event_gen():
+        q: asyncio.Queue = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+        _DONE = object()
+
+        def emit(event, payload=None):
+            # Safe from the loop thread or a worker thread.
+            loop.call_soon_threadsafe(q.put_nowait, (event, payload))
+
+        async def producer():
+            try:
+                await asyncio.wait_for(_produce_stream_answer(request, req, user, emit),
+                                       timeout=_sse.DEADLINE_SECONDS)
+            except asyncio.TimeoutError:
+                emit(_sse.ERROR, {"message": "This is taking longer than usual. Please try again.",
+                                  "recoverable": True})
+            except Exception as e:
+                log.error("SSE stream failed", user=user["email"], error=str(e))
+                emit(_sse.ERROR, {"message": "Something went wrong. Please try again.",
+                                  "recoverable": True})
+            finally:
+                emit(_sse.DONE, {"ok": True})
+                loop.call_soon_threadsafe(q.put_nowait, (_DONE, None))
+
+        task = asyncio.create_task(producer())
+        try:
+            while True:
+                try:
+                    event, payload = await asyncio.wait_for(q.get(), timeout=_sse.KEEPALIVE_SECONDS)
+                except asyncio.TimeoutError:
+                    yield _sse.KEEPALIVE
+                    continue
+                if event is _DONE:
+                    break
+                yield _sse.sse_event(event, payload)
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream",
+                             headers=_sse.STREAM_HEADERS)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -8,7 +8,7 @@
  */
 import React, { useState, useRef, useEffect } from 'react'
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { embedRunQuery, embedGetSSOHandoff, embedCreateConversation, embedGetSubscription } from './embedApi'
+import { embedRunQuery, embedRunQueryStream, embedGetSSOHandoff, embedCreateConversation, embedGetSubscription } from './embedApi'
 import { getErrorMessage } from '../utils/api'
 import { formatCurrency } from '../utils/locale'
 import { notifyParent } from './EmbedApp'
@@ -384,12 +384,16 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
       ))
     }, 10000)
 
-    try {
-      const data = await embedRunQuery(q, 'default', thinkMode, currentConvId)
+    // Patch just the in-flight AI message.
+    const patchThink = (patch) =>
+      setMessages(m => m.map(msg => msg.id === thinkMsg.id ? { ...msg, ...patch } : msg))
+
+    // Build the final AI message from a /query-shaped response object. Shared by
+    // the non-streaming path and the streaming finalizer so rendering is identical.
+    const finalizeFromResponse = (data) => {
       const rowCount = data.row_count
       const type     = data.type
       let summary
-
       if (type === 'conversational' || type === 'clarification') {
         summary = data.message || 'How can I help you with your data?'
       } else if (!data.success || type === 'error') {
@@ -403,12 +407,52 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
         }
         if (rowCount === 0) summary = "I couldn't find anything matching that. Try rephrasing or broadening your question."
       }
-
       setMessages(m => m.map(msg =>
         msg.id === thinkMsg.id
           ? { role:'ai', content: summary, data, analysis: data.analysis || null, id: thinkMsg.id }
           : msg
       ))
+    }
+
+    const runNonStreaming = async () => {
+      const data = await embedRunQuery(q, 'default', thinkMode, currentConvId)
+      finalizeFromResponse(data)
+    }
+
+    try {
+      // Prefer SSE streaming (live steps + tokens); fall back transparently to the
+      // plain request if streaming is disabled (endpoint 404s) or fails to connect.
+      const acc = { text: '', columns: [], rows: [], provenance: null, error: null }
+      let rendered = false
+      try {
+        await embedRunQueryStream(
+          q, { thinkMode, conversationId: currentConvId },
+          {
+            onStep:  (s) => { if (s.status !== 'done') patchThink({ loadingText: s.label }) },
+            onToken: (t) => { rendered = true; acc.text += t; patchThink({ loading: false, analysis: acc.text }) },
+            onData:  (d) => { rendered = true; acc.columns = d.columns || []; acc.rows = d.rows || []; acc.provenance = d.provenance },
+            onError: (e) => { acc.error = e.message || 'Something went wrong. Please try again.' },
+          },
+        )
+      } catch (streamErr) {
+        if (!rendered) { await runNonStreaming(); embedGetSubscription().then(setSub).catch(() => {}); return }
+        throw streamErr
+      }
+
+      if (acc.error && !rendered) {
+        await runNonStreaming()
+      } else if (acc.error) {
+        finalizeFromResponse({ success: true, type: 'conversational', message: acc.error })
+      } else {
+        const hasTable = acc.rows.length > 0
+        finalizeFromResponse({
+          success: true,
+          type: hasTable ? 'data' : 'conversational',
+          message: hasTable ? null : (acc.text || 'Done.'),
+          columns: acc.columns, data: acc.rows, row_count: acc.rows.length,
+          analysis: hasTable ? (acc.text || null) : null,
+        })
+      }
       embedGetSubscription().then(setSub).catch(() => {})
     } catch (e) {
       if (e.response?.status === 401) {

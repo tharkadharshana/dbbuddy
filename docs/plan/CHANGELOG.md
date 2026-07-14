@@ -427,3 +427,56 @@ router → forecast  → report loop + forecast_sales / sales_anomalies / sales_
 - **changed** `mcp_server/report_tools.py` — registers the insight tools (no-op unless `INSIGHTS_ENABLED`).
 - **changed** `main.py` — `_INSIGHTS_ENABLED` flag; `insight` route → `generate_insight`.
 - **changed** `.env.example` — `INSIGHTS_ENABLED` + forecast/anomaly tuning knobs.
+
+---
+
+## PLAN 07 — SSE Streaming
+
+### What this delivers
+
+A new `POST /v1/query/stream` endpoint that streams the assistant's work and answer to the embed chat in real time via Server-Sent Events: live progress steps ("Understanding your question", "Getting your figures", "Fetched the latest from your POS"), then the answer text token-by-token, then the data table. Multi-second (sometimes multi-minute, on a POS miss) waits become a responsive, "it's working" experience.
+
+### Previous flow
+
+`/v1/query` is synchronous: the embed chat fires one request and stares at a spinner until the whole thing (routing + tool loop + possible 90-second POS fetch + narrative) finishes, then the full answer appears at once. No visibility into what's happening.
+
+### New flow (flag on)
+
+```
+POST /v1/query/stream  (async, StreamingResponse: text/event-stream)
+  producer task ── router ─┬─ general_knowledge → persona → token stream
+                           ├─ insight           → generate_insight → token stream + data
+                           ├─ business/forecast → report loop (emit=…) → step events + token stream + data
+                           └─ conversational/clarification/ineligible/error → one-shot fallback (/query in a thread)
+        │  every blocking call offloaded to asyncio.to_thread
+        ▼
+  asyncio.Queue ──► response generator: yields  step / token / data / meta / done
+                    (: keep-alive ping on idle, 90s wall-clock deadline)
+```
+
+The report-cache loop got one small, non-invasive change: an optional `emit(event, payload)` callback (Step 3 Option A). Where it runs a tool it now emits a `step`, and the blocking LLM turn runs in a thread so those events flush to the browser immediately — including the "Fetching from POS…" step that appears *before* a cache-miss fetch, which is the whole point of streaming.
+
+### How it stays safe and non-breaking
+
+- **Flag off = the endpoint doesn't exist** (404), and the frontend transparently falls back to the plain `/v1/query`. Nothing about the existing path changes.
+- **Always a usable answer.** Non-SalesPlay requests, conversational/clarification routes, and *any* streaming failure fall back to running the existing sync pipeline in a worker thread and emitting its result as a single answer over the same stream. The sync endpoint body was extracted into `_run_natural_language_query` so both paths share it exactly (no divergence).
+- **The event loop never stalls** (doc 06 F5): router, persona, insight, LLM turns, DB, billing, and conversation save all run via `asyncio.to_thread`; a producer task feeds an `asyncio.Queue` that the response generator drains, so concurrent users stream independently.
+- **Bounded:** a 90-second wall-clock deadline degrades to a graceful `error`+`done`; a keep-alive comment every 15s keeps idle streams alive through proxies.
+
+### Frontend
+
+`embedRunQueryStream` (fetch + ReadableStream — EventSource can't POST) parses the SSE blocks and dispatches step/token/data events. The embed chat prefers it: steps drive the live status line, tokens append to the answer as they arrive, the table renders on `data` — and any failure (including a 404 when the flag is off) falls back to the original request with identical final rendering.
+
+### Impact
+
+- **Perceived latency drops sharply** for the report-cache path: users see progress within ~1s instead of waiting for the full answer, and a slow POS fetch is now explained ("Fetching…") instead of looking frozen.
+- **Zero risk to the existing endpoint:** `/v1/query` is byte-for-byte the same (now a one-line wrapper over the extracted impl); streaming is additive and flag-gated.
+- **For PLAN 08:** the event contract (`report_cache/sse.py`) is the seam tracing/evals can tap.
+
+### Files added / changed
+
+- **added** `report_cache/sse.py`; `tests/test_sse.py` (8, incl. a real-endpoint `TestClient` stream) — full suite 144/144.
+- **changed** `mcp_server/report_tools.py` — optional `emit` callback + threaded LLM turn.
+- **changed** `main.py` — extracted `_run_natural_language_query`; added `POST /v1/query/stream`, the streaming producer, and the report-cache stream ctx; `_SALESPLAY_SHARED_TABLES` promoted to a module constant.
+- **changed** `.env.example` — `SSE_ENABLED` + streaming tunables.
+- **changed** `frontend/src/embed/embedApi.js` (`embedRunQueryStream`) + `EmbedChat.jsx` (streaming with fallback).

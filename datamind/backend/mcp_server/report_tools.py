@@ -14,6 +14,7 @@ A `shop` name the model passes is resolved AND authorized against the tenant's
 own shops before any fetch (report_cache.lookups.resolve_shop / is_shop_allowed).
 """
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, List, Optional
@@ -157,14 +158,41 @@ def _system_prompt(rctx: ReportToolContext) -> str:
     )
 
 
+# Friendly, user-facing progress labels per tool (PLAN 07 Step 4). Kept generic
+# so we never leak an internal tool/table name into the embed chat.
+_STEP_LABELS = {
+    "list_reports": "Choosing the right report",
+    "get_report_metrics": "Getting your figures",
+    "get_report_detail": "Fetching the details",
+    "forecast_sales": "Forecasting",
+    "sales_anomalies": "Checking for unusual days",
+    "sales_growth": "Calculating your trend",
+    "run_select_query": "Querying your data",
+    "get_schema": "Checking your data structure",
+    "get_sample_rows": "Checking your data structure",
+    "get_date_range": "Checking your data structure",
+}
+
+
+def _noop_emit(event, payload=None):
+    pass
+
+
 async def answer_report_question(question: str, rctx: ReportToolContext, llm: str,
                                  api_key: str, user_email: Optional[str],
-                                 conversation_history: str = "", max_iterations: int = 5) -> dict:
+                                 conversation_history: str = "", max_iterations: int = 5,
+                                 emit=None) -> dict:
     """Run the report-tool loop. Returns {answer, columns, data, provenance,
     source, refusal}. Raises NoReportAnswer if no report tool ever produced a
     result (caller falls back). Mirrors orchestrator.answer_business_question but
     keeps the model's OWN final narrative (report numbers are already correct —
-    no separate Think-Mode regeneration needed) plus the last tool's data table."""
+    no separate Think-Mode regeneration needed) plus the last tool's data table.
+
+    `emit(event, payload)` (PLAN 07): optional progress callback. When provided,
+    a `step` event is emitted around each tool call and the blocking LLM turn is
+    offloaded to a thread (asyncio.to_thread) so the caller's event loop stays
+    free to flush those events to the client in real time (doc 06 F5)."""
+    emit = emit or _noop_emit
     mcp = build_report_mcp(rctx)
     messages = [
         {"role": "system", "content": _system_prompt(rctx)},
@@ -177,7 +205,8 @@ async def answer_report_question(question: str, rctx: ReportToolContext, llm: st
     async with Client(mcp) as client:
         tools = await client.list_tools()
         for _ in range(max_iterations):
-            turn = call_with_tools(llm, messages, tools, api_key, user_email)
+            # Blocking LLM call off the event loop so queued step/token events flush.
+            turn = await asyncio.to_thread(call_with_tools, llm, messages, tools, api_key, user_email)
             if not turn.tool_calls:
                 final_text = turn.text or final_text
                 break
@@ -187,7 +216,12 @@ async def answer_report_question(question: str, rctx: ReportToolContext, llm: st
                                for tc in turn.tool_calls],
             })
             for tc in turn.tool_calls:
+                label = _STEP_LABELS.get(tc.name, "Working on it")
+                emit("step", {"label": label, "status": "running"})
                 res = await client.call_tool(tc.name, tc.arguments, raise_on_error=False)
+                emit("step", {"label": label, "status": "done"})
+                if rctx.last_result and rctx.last_result.get("provenance") == "from_live":
+                    emit("step", {"label": "Fetched the latest from your POS", "status": "done"})
                 if res.is_error:
                     content = " ".join(getattr(c, "text", "") for c in (res.content or [])).strip() \
                         or "Tool call failed."

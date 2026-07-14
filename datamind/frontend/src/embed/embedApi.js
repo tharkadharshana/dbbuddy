@@ -63,6 +63,68 @@ export const embedGetProviderStatus = (connection_id) =>
 export const embedRunQuery = (question, llm = 'default', thinkMode = false, conversationId = null) =>
   api.post('/query', { question, llm, think_mode: thinkMode, conversation_id: conversationId }).then(r => r.data)
 
+// SSE streaming variant of the query (PLAN 07). Uses fetch (EventSource can't POST)
+// to read the text/event-stream and dispatch step/token/data/meta/error events to
+// `handlers`. Resolves when the stream ends; rejects if the connection can't be
+// established (e.g. streaming disabled → 404) so the caller can fall back to
+// embedRunQuery. Same URL rewrite as the axios client: /api/* → backend /v1/*.
+export const embedRunQueryStream = async (
+  question,
+  { llm = 'default', thinkMode = false, conversationId = null } = {},
+  handlers = {},
+) => {
+  const token = localStorage.getItem('dm_embed_token')
+  const resp = await fetch(BASE_URL + '/api/query/stream', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ question, llm, think_mode: thinkMode, conversation_id: conversationId }),
+  })
+  if (!resp.ok || !resp.body) {
+    const err = new Error(`stream unavailable: ${resp.status}`)
+    err.status = resp.status
+    throw err
+  }
+
+  const reader = resp.body.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+
+  const dispatch = (block) => {
+    let event = 'message'
+    let data = ''
+    for (const line of block.split('\n')) {
+      if (line.startsWith(':')) return            // keep-alive comment
+      if (line.startsWith('event:')) event = line.slice(6).trim()
+      else if (line.startsWith('data:')) data += line.slice(5).trim()
+    }
+    let payload = {}
+    try { payload = JSON.parse(data || '{}') } catch { return }
+    switch (event) {
+      case 'step':  handlers.onStep?.(payload); break
+      case 'token': handlers.onToken?.(payload.text || ''); break
+      case 'data':  handlers.onData?.(payload); break
+      case 'meta':  handlers.onMeta?.(payload); break
+      case 'error': handlers.onError?.(payload); break
+      case 'done':  handlers.onDone?.(payload); break
+    }
+  }
+
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+    let idx
+    while ((idx = buf.indexOf('\n\n')) !== -1) {
+      const block = buf.slice(0, idx)
+      buf = buf.slice(idx + 2)
+      if (block.trim()) dispatch(block)
+    }
+  }
+}
+
 // Conversation history — same endpoints/data as the main app, so history
 // created in the embed shows up in the main app's sidebar and vice versa.
 export const embedCreateConversation = (id) =>
