@@ -40,10 +40,12 @@ _REPORT_CACHE_ENABLED = os.getenv("REPORT_CACHE_ENABLED", "false").strip().lower
 
 
 def _sync_report_profile(table_prefix: Optional[str], email: str, aat: str) -> None:
-    """Sync the tenant's SalesPlay profile (shops/cashiers/currency) and stash
-    the live session token for chat-time report fetches. Runs on every widget
+    """Sync the tenant's SalesPlay profile (shops/cashiers/currency), stash
+    the live session token for chat-time report fetches, and kick the
+    plan-window report backfill on a background thread. Runs on every widget
     open — the only moment a working /app/* token exists. Never fatal:
-    onboarding proceeds unchanged on any failure."""
+    onboarding proceeds unchanged on any failure. Backfill is idempotent, so
+    repeat widget opens only fetch months that aren't cached yet."""
     if not _REPORT_CACHE_ENABLED or not table_prefix:
         return
     try:
@@ -51,6 +53,14 @@ def _sync_report_profile(table_prefix: Optional[str], email: str, aat: str) -> N
         sync_tenant_profile(table_prefix, aat)
     except Exception as e:
         log.warning("Report cache: profile sync skipped", email=email, error=str(e))
+        return
+    try:
+        from billing import get_plan_history_limit
+        from report_cache.ingest import start_backfill_async
+        months = get_plan_history_limit(email).get("months") or 3
+        start_backfill_async(table_prefix, aat, months)
+    except Exception as e:
+        log.warning("Report cache: backfill kick skipped", email=email, error=str(e))
 
 # ── Simple in-memory rate limiter (no external deps) ─────────────────────────
 # Tracks per-IP request timestamps for /embed/init (5 requests/minute max).
