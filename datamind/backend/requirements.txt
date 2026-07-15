@@ -16,3 +16,4 @@ slowapi==0.1.9
 pyyaml==6.0.1
 mcp==1.28.1
 fastmcp==3.4.3
+sqlglot==25.34.1    # AST SQL safety guards (mcp_server/safety.py)
