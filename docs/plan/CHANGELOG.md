@@ -480,3 +480,41 @@ The report-cache loop got one small, non-invasive change: an optional `emit(even
 - **changed** `main.py` — extracted `_run_natural_language_query`; added `POST /v1/query/stream`, the streaming producer, and the report-cache stream ctx; `_SALESPLAY_SHARED_TABLES` promoted to a module constant.
 - **changed** `.env.example` — `SSE_ENABLED` + streaming tunables.
 - **changed** `frontend/src/embed/embedApi.js` (`embedRunQueryStream`) + `EmbedChat.jsx` (streaming with fallback).
+
+---
+
+## PLAN 08 — Evals, Tracing, Safety Hardening & CI
+
+### What this delivers
+
+The phase that turns "works on my machine" into engineering: the doc-06 safety holes closed with a real SQL parser, LLM/cache observability, and an eval harness wired into CI so a prompt/registry/safety change that breaks a report number or re-opens a security hole **fails the build** instead of shipping.
+
+### Previous flow
+
+SQL safety was regex-only. That's fine for the common case but has two known gaps (doc 06): a `UNION` can append a second query the regex tenant-scoping doesn't reach (cross-tenant read, F1), and a "SELECT" can smuggle `INTO OUTFILE`/`LOAD_FILE` to exfiltrate data (F2). There was no eval suite, no tracing, and no CI gate — a subtly wrong prompt change could silently break a KPI.
+
+### New flow
+
+**Safety — two layers now.**
+- Regex guard (`safety.py`): extended to block file/lock primitives (F2) and to reject `UNION`/multi-statement on the legacy one-shot path (F1).
+- **AST guard (`sql_guard.py`, sqlglot)** for the model-authored `run_select_query` fallback: it actually parses the SQL, so it scopes a tenant predicate onto **every** shared-table reference in **every** branch (UNION, CTE, subquery), allowlists every real table (a UNION can't smuggle an unknown table past it), and rejects anything that isn't a single read-only SELECT (INTO OUTFILE doesn't even parse). The F1 UNION case is now *correctly scoped*, not just rejected.
+
+**Observability (`observability.py`).** Every LLM call and every cache decision emits a structured trace event (operation, model, tokens, latency, tenant, provenance, POS-API ms) and updates in-process counters (cache-hit rate, POS calls per tenant). It's always-on and useful via logs alone; an optional, fully-defensive Langfuse export lights up when `LANGFUSE_*` is set and can never break a request.
+
+**Eval harness (`evals/`).** `dataset.jsonl` holds red-team safety cases (every doc-06 finding), tenant-scoping assertions, and cache-vs-live parity specs. `runner.py` scores them and, with `--ci`, fails on any safety failure or a score below threshold. Safety cases run everywhere (no LLM/DB needed); parity/number/judge cases need a live token + fixture and skip gracefully otherwise — so the gate is meaningful in every environment and richer where secrets exist.
+
+**CI (`.github/workflows/ci.yml`).** MySQL service → install → migrate → lint → `pytest` → `evals/runner.py --ci`. Path-filtered to the backend. This is the regression gate: green on a no-op PR, red when a metric or safety case breaks (demonstrated).
+
+### Impact
+
+- **Cross-tenant `UNION` bypass and OUTFILE exfiltration are closed**, with regression tests that fail if either regresses.
+- **The fallback SQL path is now parser-validated**, not regex-hoped — a materially stronger tenant-isolation guarantee for the one surface where the model types arbitrary SQL.
+- **The system is measurable**: cache-hit rate, POS-API cost per tenant, and per-operation LLM spend are now emitted continuously.
+- **Regressions are caught before merge**: the eval + safety gate is a required check.
+- **Zero behaviour change to users**: safety is stricter on the fallback path, everything else is additive (tracing) or tooling (evals/CI). The legacy `/v1/query` path only gained the F1/F2 rejections.
+
+### Files added / changed
+
+- **added** `mcp_server/sql_guard.py`, `observability.py`, `evals/{dataset.jsonl,runner.py,__init__.py}`, `.github/workflows/ci.yml`, `docs/db-least-privilege.md`.
+- **added** tests: `test_sql_guard.py`, `test_safety_patches.py`, `test_observability.py`, `test_evals_safety.py` (32 new).
+- **changed** `mcp_server/safety.py` (F1/F2), `mcp_server/business_tools.py` (AST guard on run_select_query), `main.py` (`_guard_sql` F1), `llm.py` + `report_cache/answer.py` (trace hooks), `requirements.txt` (`sqlglot`, `langfuse`).

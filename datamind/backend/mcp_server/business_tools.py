@@ -33,6 +33,7 @@ from fastmcp import FastMCP
 import db as _db
 from llm import _SENSITIVE_COL_RE, _SP_INTERNAL_COLS, _filter_sensitive_schema
 from . import safety
+from . import sql_guard
 
 # Hard ceilings independent of whatever the model asks for — keep tool
 # responses small (cost/latency) regardless of model behavior.
@@ -141,8 +142,11 @@ def build_business_mcp(ctx: ToolContext) -> FastMCP:
         should have data, you may call this again with a corrected query
         before giving your final answer — for example, check get_sample_rows
         first if a filter value might not match the real stored format."""
-        safety.block_mutations(sql)
-        safety.enforce_table_allowlist(sql, ctx.schemas.keys())
+        safety.block_mutations(sql)   # cheap first line (+ doc 06 F2 file/lock funcs)
+        # doc 06 F4: AST guard replaces the regex table-allowlist — single
+        # read-only query, every table (incl. CTE/UNION/subquery branches)
+        # allowlisted, INTO OUTFILE/mutations rejected.
+        sql_guard.assert_safe_select(sql, ctx.schemas.keys())
         # Fail-closed: a query touching shared sp_*/ly_* tables must never
         # run without a tenant_id to scope it, no matter why tenant_id
         # ended up missing (e.g. an upstream caller bug) — refuse loudly
@@ -152,7 +156,9 @@ def build_business_mcp(ctx: ToolContext) -> FastMCP:
                 "Refusing to run this query without a tenant scope — this would expose other accounts' data."
             )
         if ctx.tenant_id:
-            sql = safety.enforce_tenant_isolation(sql, ctx.tenant_id)
+            # doc 06 F1/F4: AST tenant scoping — a tenant predicate on EVERY
+            # shared-table ref in EVERY branch (regex missed UNION branches).
+            sql = sql_guard.enforce_tenant_ast(sql, ctx.tenant_id)
             if ctx.tenant_id not in sql:
                 raise ValueError("Could not safely scope this query to your account.")
             sql = safety.enforce_date_filter(sql, ctx.history_months)

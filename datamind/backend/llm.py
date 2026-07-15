@@ -427,6 +427,12 @@ def call_llm(prompt: str, system: str = "", llm: str = "openai",
                         invalidate_sub_cache(user_email)
                     except Exception as _ce:
                         log.warning("charge_ai_usage failed silently", error=str(_ce))
+                # PLAN 08: trace the call (structured log + counters; optional Langfuse).
+                try:
+                    from observability import record_llm_call
+                    record_llm_call(operation, model=model_id, tokens=tokens or 0, user=user_email)
+                except Exception:
+                    pass
                 return result
 
             except LLMTransientError as e:

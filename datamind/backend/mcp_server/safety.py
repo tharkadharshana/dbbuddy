@@ -46,6 +46,20 @@ _SQL_MUTATION_RE = re.compile(
     re.IGNORECASE,
 )
 
+# doc 06 F2: file/lock primitives that can exfiltrate data or lock the DB even
+# from within a "SELECT" (e.g. SELECT ... INTO OUTFILE, LOAD_FILE(), HANDLER).
+# Never legitimate for an analytics read, so blocked outright.
+_SQL_DANGEROUS_RE = re.compile(
+    r'\b(OUTFILE|DUMPFILE|LOAD_FILE|INFILE|HANDLER|LOCK|UNLOCK)\b',
+    re.IGNORECASE,
+)
+
+# doc 06 F1: UNION lets a query append a second SELECT whose tables the regex
+# tenant-isolation pass cannot reliably scope per-branch (it only finds the
+# first WHERE) — a cross-tenant bypass. Rejected on the regex path; the AST
+# guard (mcp_server/sql_guard.py) instead scopes every UNION branch correctly.
+_UNION_RE = re.compile(r'\bUNION\b', re.IGNORECASE)
+
 # Matches any FROM/JOIN reference to a table, capturing its (optional) alias.
 _TABLE_REF_RE = re.compile(
     r'\b(FROM|(?:INNER|LEFT|RIGHT|CROSS|FULL)?\s*JOIN)\s+'
@@ -65,10 +79,27 @@ _SHARED_TABLE_REF_RE = re.compile(
 
 
 def block_mutations(sql: str) -> None:
-    """SEC-04: raise ValueError if the SQL contains anything other than a read-only SELECT."""
+    """SEC-04 + doc 06 F2: raise ValueError if the SQL contains anything other
+    than a read-only SELECT, including file/lock exfiltration primitives that a
+    plain SELECT can smuggle (INTO OUTFILE, LOAD_FILE, HANDLER, LOCK, …)."""
     m = _SQL_MUTATION_RE.search(sql)
     if m:
         raise ValueError(f"Query contains a disallowed statement: {m.group(0).upper()}")
+    d = _SQL_DANGEROUS_RE.search(sql)
+    if d:
+        raise ValueError(f"Query contains a disallowed operation: {d.group(0).upper()}")
+
+
+def block_unsafe_constructs(sql: str) -> None:
+    """doc 06 F1: reject UNION and multi-statement SQL on the regex-guarded
+    (legacy one-shot) path, where per-branch tenant scoping can't be guaranteed.
+    The AST guard supersedes this for the tool path (it scopes UNION correctly),
+    so run_select_query does NOT call this — only the legacy _guard_sql does."""
+    stripped = sql.strip().rstrip(";").strip()
+    if ";" in stripped:
+        raise ValueError("Multiple SQL statements are not allowed.")
+    if _UNION_RE.search(stripped):
+        raise ValueError("UNION queries are not allowed.")
 
 
 def references_shared_tables(sql: str) -> bool:

@@ -391,6 +391,7 @@ def _base_query_response(**kwargs) -> dict:
 def _guard_sql(sql: str):
     try:
         _safety.block_mutations(sql)
+        _safety.block_unsafe_constructs(sql)   # doc 06 F1: no UNION / multi-statement on the regex path
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Generated {e}")
 

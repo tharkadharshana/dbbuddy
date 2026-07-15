@@ -214,3 +214,54 @@ All gated by `INSIGHTS_ENABLED` (default OFF); requires `REPORT_CACHE_ENABLED`. 
 **Acceptance status:** "forecast next month" returns a data-grounded forecast with a confidence range + disclaimer; "any suggestions?" returns advice separating real data findings from general recommendations with a provenance check; insufficient-history / out-of-window / ratio-metric cases handled gracefully; flag OFF = no change. Not exercised end-to-end against a live tenant this session (no LLM key + token gap), same constraint as PLAN 02–05; the deterministic pieces (forecast math, growth, provenance) are unit-proven with Prophet running for real.
 
 **Next:** PLAN 07 — SSE streaming of whatever this returns (`/v1/query/stream`).
+
+---
+
+## PLAN 07 — SSE Streaming (`POST /v1/query/stream`)
+
+All gated by `SSE_ENABLED` (default OFF). Off = the endpoint 404s and clients transparently use `/v1/query` (unchanged).
+
+- [x] `report_cache/sse.py` — the event contract in one place: `sse_event(event, payload) -> bytes`, event-name constants (step/token/data/meta/error/done), `chunk_text` (Option-A narrative chunking), `KEEPALIVE` ping bytes, `STREAM_HEADERS` (incl. `X-Accel-Buffering: no`), and the flag + tunables (`SSE_KEEPALIVE_SECONDS`, `SSE_DEADLINE_SECONDS`, chunk size/delay).
+- [x] `mcp_server/report_tools.py` — `answer_report_question` now takes an optional `emit(event, payload)` callback (PLAN 07 Step 3 Option A): emits a `step` around each tool call (+ a "Fetched the latest from your POS" step when a tool returns `from_live`), and offloads the blocking `call_with_tools` LLM turn to `asyncio.to_thread` so queued events flush live. `emit=None` → unchanged behaviour (the sync path).
+- [x] `main.py` — extracted the sync endpoint body into `_run_natural_language_query` (the `@v1.post("/query")` handler is now a thin wrapper) so the stream path can reuse it as a one-shot fallback without re-triggering the limiter/auth. Added `_SALESPLAY_SHARED_TABLES` as a module constant.
+- [x] `main.py` — `POST /v1/query/stream` (async, `StreamingResponse`): a producer task runs `_produce_stream_answer` (router → persona / insight / report-loop, all blocking work in `asyncio.to_thread`), pushing events onto an `asyncio.Queue` via `loop.call_soon_threadsafe`; the response generator drains the queue, emitting a `: keep-alive` on idle and honouring an overall wall-clock deadline (`asyncio.wait_for`). Report-cache path streams live steps + token chunks; non-eligible/conversational/clarification/error → one-shot fallback so the client always gets a usable answer.
+- [x] `.env.example` — `SSE_ENABLED` + keep-alive/deadline/chunk tunables.
+- [x] Frontend: `embedApi.js` `embedRunQueryStream(question, opts, handlers)` — fetch-based SSE reader (EventSource can't POST), parses `event:`/`data:` blocks, ignores keep-alive comments, dispatches step/token/data/meta/error/done; rejects on connect failure so the caller falls back. `EmbedChat.jsx` prefers streaming (live `loadingText` from steps, live `analysis` from tokens, table from `data`) with transparent fallback to `embedRunQuery` on any stream failure (incl. 404 when the flag is off). Frontend `npm run build` passes.
+- [x] Tests: `tests/test_sse.py` (8) — `sse_event` format + JSON round-trip + non-JSON/`None` payloads, `chunk_text` reassembly, a fake loop parsed back to step→token→data→done, **the real endpoint end-to-end** via `TestClient` (queue + producer task + `StreamingResponse`, producer mocked), and 404-when-flag-off. **Full suite: 144/144 (137 fast + 7 Prophet).**
+
+### Async-safety design (doc 06 F5)
+
+- No blocking `requests`/DB call runs directly in the async generator — router, persona, `generate_insight`, the LLM turns, conversation save, and billing all go through `asyncio.to_thread`; the report-cache ctx (DB) is built in a thread and its connection closed in a `finally`.
+- Producer/consumer are decoupled through an `asyncio.Queue`, so concurrent requests stream independently and a slow POS fetch never stalls the event loop (the step emitted *before* it flushes while it runs in a worker thread — this is the "Fetching…" visibility the acceptance criteria wants).
+- Overall wall-clock deadline (default 90s) → graceful `error`+`done`. Billing/token charging still happens inside the loop as before.
+
+**Acceptance status:** `/v1/query/stream` streams `step→token→data→done`; a live POS fetch surfaces a running step before the answer; the endpoint 404s when the flag is off (clients fall back); errors degrade to `error`+`done` with a one-shot fallback answer where possible. Verified via unit tests + a real-endpoint `TestClient` stream; not curl'd against a live tenant this session (no LLM key / token gap), same constraint as PLAN 02–06.
+
+**Next:** PLAN 08 — evals/parity, tracing, safety patches, CI.
+
+---
+
+## PLAN 08 — Evals, Tracing, Safety Hardening & CI
+
+- [x] **F1/F2 safety patches** (`mcp_server/safety.py`): `block_mutations` now also blocks file/lock primitives — `OUTFILE|DUMPFILE|LOAD_FILE|INFILE|HANDLER|LOCK|UNLOCK` (F2). New `block_unsafe_constructs` rejects `UNION` + multi-statement on the regex path (F1); wired into `main.py:_guard_sql` (legacy one-shot path). **F9**: `fastmcp` already pinned (PLAN 01); added `sqlglot`/`langfuse` pins.
+- [x] **AST SQL guard** (`mcp_server/sql_guard.py`, sqlglot): `assert_safe_select` (single read-only query; every table incl. CTE/UNION/subquery branches allowlisted; INTO OUTFILE/mutations rejected) + `enforce_tenant_ast` (tenant predicate on EVERY shared-table ref in EVERY scope — the F1 UNION bypass fixed *correctly*, idempotent, rejects a foreign tenant literal). Wired into `business_tools.run_select_query`, replacing the regex `enforce_table_allowlist`/`enforce_tenant_isolation` on the tool path (regex kept as cheap first line + legacy path).
+- [x] **Observability** (`observability.py`): vendor-agnostic structured trace events + in-process counters (cache-hit rate, POS-API calls/tenant, LLM calls/tokens by operation) — always on. Optional, fully-defensive Langfuse export (no-op unless `LANGFUSE_*` set). Instrumented `report_cache/answer.py` (cache hit vs live) and `llm.call_llm` (next to billing).
+- [x] **Eval harness** (`evals/`): `dataset.jsonl` (11 runnable safety/red-team cases covering F1/F2/F4 + tenant scoping + cross-tenant refusal, plus 5 secret-gated parity/data/general specs), `runner.py` (scores; `--report` scorecard, `--ci` gate that fails on any safety failure or score < threshold; secret-gated cases SKIP gracefully), `README`-level docstrings.
+- [x] **CI** (`.github/workflows/ci.yml`): MySQL service → install → migrations → `compileall`/`ruff` → `pytest tests/` → `python evals/runner.py --ci`. Path-filtered to `datamind/backend/**`.
+- [x] **DB least-privilege** (`docs/db-least-privilege.md`): the read-only / no-FILE / no-auth-tables end state + `SHOW GRANTS` verification + a dedicated `datamind_ro` user recipe.
+- [x] Tests: `test_sql_guard.py` (15), `test_safety_patches.py` (10), `test_observability.py` (4), `test_evals_safety.py` (2 — wires the safety evals into pytest). **32 new; full suite green.**
+
+### Demonstrated (acceptance)
+
+- F1/F2 blocked with tests; AST guard scopes UNION/subquery correctly and rejects OUTFILE/unknown-table/multi-statement (green).
+- `evals/runner.py --ci` → exit 0, scorecard `11/11` runnable, safety 11/11, parity/data/general skipped (no secrets). **Gate turns red on a re-opened hole** (demonstrated: a red-team case the guard fails to block → `safety_failures` non-empty → exit 1).
+- DB least-privilege check documented.
+
+### Honest scope notes (what needs resources this session lacks)
+
+- **Live parity evals** (cache==live for quarterly/avg-ticket/unique-customers) are implemented as dataset specs that SKIP without `REPORT_API_EVAL_TOKEN` + a fixture tenant — the additivity correctness itself is already unit-proven in `test_aggregate.py`/`test_answer.py`.
+- **Number-match + LLM-as-judge evals** SKIP without an LLM key + seeded fixture tenant.
+- **Langfuse dashboard** can't be verified without an account; the export is defensive/no-op-safe, and the same trace data is emitted as structured logs regardless (verifiable).
+- **Least-privilege DB user** is documented (end state + recipe) rather than provisioned; wiring a second read-only pooled connection for the `run_select_query` surface is the noted follow-up.
+
+**This completes PLAN 01–08.**

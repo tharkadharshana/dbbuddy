@@ -68,10 +68,20 @@ def answer_metric_query(conn, tenant_id: str, report_id: str, metrics: Optional[
                 "window_start": win_start.isoformat()}
 
     if report.kind == "scalar":
-        return _answer_scalar(conn, tenant_id, report, metrics, start, end, shop_id, token)
-    if report.kind == "dimensional":
-        return _answer_dim(conn, tenant_id, report, start, end, shop_id, token, top_n)
-    raise ValueError(f"Unknown report kind: {report.kind!r}")
+        result = _answer_scalar(conn, tenant_id, report, metrics, start, end, shop_id, token)
+    elif report.kind == "dimensional":
+        result = _answer_dim(conn, tenant_id, report, start, end, shop_id, token, top_n)
+    else:
+        raise ValueError(f"Unknown report kind: {report.kind!r}")
+
+    # PLAN 08: trace the cache decision (hit vs live + POS-API count).
+    try:
+        from observability import record_cache_event
+        record_cache_event(result.get("provenance"), tenant=tenant_id,
+                           report=report_id, source=result.get("source"))
+    except Exception:
+        pass
+    return result
 
 
 # ── scalar ──────────────────────────────────────────────────────────────────

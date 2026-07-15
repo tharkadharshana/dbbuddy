@@ -16,3 +16,5 @@ slowapi==0.1.9
 pyyaml==6.0.1
 mcp==1.28.1
 fastmcp==3.4.3
+sqlglot==25.34.1        # PLAN 08: AST SQL safety guard (mcp_server/sql_guard.py)
+langfuse==2.60.10       # PLAN 08: optional LLM/cache tracing (observability.py) — no-op unless LANGFUSE_* set
