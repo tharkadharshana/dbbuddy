@@ -99,8 +99,18 @@ def _pick(row: dict, metric) -> Any:
 def normalize_metrics(report: Report, row: dict, decimal_sep: str = ".",
                       thousand_sep: str = ",") -> dict:
     """{metric_key: float|None} for every declared metric present in `row`.
-    Ratio metrics are never stored — they're recomputed at read time."""
+    Ratio metrics are never stored — they're recomputed at read time.
+
+    Reports with NO declared metrics (registry long-tail) store every
+    numeric-parseable key of the row as-is; those values are treated as
+    non-additive downstream."""
     out = {}
+    if not report.metrics:
+        for key, raw in row.items():
+            value = parse_number(raw, decimal_sep, thousand_sep)
+            if value is not None:
+                out[key] = value
+        return out
     for m in report.metrics:
         if m.agg == "ratio":
             continue

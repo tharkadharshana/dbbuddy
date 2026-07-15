@@ -1801,10 +1801,23 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                     history_months=history["months"],
                     set_query_timeout=_set_query_timeout,
                 )
+                # Report tools (cache-first SalesPlay report APIs): offered when
+                # the tenant has a synced profile (only SalesPlay onboarding
+                # creates one) and the report cache is enabled. Never fatal —
+                # on any failure the plain SQL tools run as before.
+                report_ctx = None
+                if nl_tenant_id and os.getenv("REPORT_CACHE_ENABLED", "").lower() in ("1", "true", "yes"):
+                    try:
+                        from mcp_server.report_tools import load_report_context
+                        report_ctx = load_report_context(conn, nl_tenant_id, tool_ctx)
+                    except Exception as _rc_err:
+                        log.warning("Report tool context unavailable",
+                                    user=user["email"], error=str(_rc_err))
                 sql, columns, data = asyncio.run(_mcp_answer_business_question(
                     req.question, tool_ctx, llm, api_key, user["email"],
                     conversation_history=conv_history, extra_hints=extra_hints,
                     currency=nl_currency, shop_timezone=nl_shop_timezone,
+                    report_ctx=report_ctx,
                 ))
                 steps.append({"label": "Answered via MCP tool-calling", "status": "done"})
             except Exception as _mcp_err:

@@ -59,6 +59,9 @@ class Report:
     answers: tuple              # keyword hints for tool routing
     dim_fields: tuple = ()      # dimensional: table_data field(s) forming the key
     extra_params: tuple = ()    # accepted params beyond the common set
+    cacheable: bool = True      # False for point-in-time reports (stock levels,
+                                # inventory valuation) where a "June summary"
+                                # is meaningless — always fetched live
 
     def metric(self, key: str) -> Optional[Metric]:
         for m in self.metrics:
@@ -246,3 +249,124 @@ REPORTS: dict = {
         extra_params=("category_id", "subcategory_id"),
     ),
 }
+
+
+def _simple(id: str, title: str, description: str, answers: tuple,
+            cacheable: bool = True) -> Report:
+    """Long-tail report: no per-metric declarations yet. Its whole data.summary
+    block is cached per closed month (every value parsed as a number where
+    possible) and treated as NON-additive — multi-month questions fetch the
+    exact range live, single cached months read from cache. Row detail is
+    always available via the live detail tool. Promote a report to a full
+    declaration (like the core 8 above) when it earns real usage."""
+    return Report(id=id, title=title, description=description,
+                  endpoint=f"/{id}", kind="scalar", grain="month",
+                  metrics=(), answers=answers, cacheable=cacheable)
+
+
+# The remaining report APIs (routes/app.php index routes). Endpoint == /<id>.
+for _r in (
+    _simple("voucher_receipts", "Voucher Receipts",
+            "Gift/voucher sales and redemption receipts",
+            ("voucher", "gift card")),
+    _simple("sales_by_discounts", "Sales by Discounts",
+            "Sales grouped by discount type and value",
+            ("discounts given", "discount breakdown", "promo")),
+    _simple("sales_by_payment_types", "Sales by Payment Types",
+            "Sales totals per payment method (cash, card, credit, ...)",
+            ("payment type", "cash vs card", "payment method")),
+    _simple("shifts", "Shifts",
+            "Cashier shift openings, closings and totals",
+            ("shift", "cash drawer", "opening", "closing")),
+    _simple("digital_orders", "Digital Orders",
+            "Online/digital channel orders",
+            ("online orders", "digital orders", "web orders")),
+    _simple("grn_tax_wise", "GRN Taxes",
+            "Taxes on goods received notes (purchases)",
+            ("grn", "purchase tax", "goods received")),
+    _simple("purchase_tax_vs_sales_tax", "Purchase vs Sales Tax",
+            "Comparison of tax paid on purchases vs tax collected on sales",
+            ("purchase tax", "input output tax", "tax comparison")),
+    _simple("alternative_currency_receipts", "Alternative Currency Receipts",
+            "Receipts settled in a non-default currency",
+            ("foreign currency", "alternative currency")),
+    _simple("inventory_valuation", "Inventory Valuation",
+            "Current stock valuation by cost and retail value",
+            ("inventory value", "stock value", "valuation"), cacheable=False),
+    _simple("stock_summary", "Stock Summary",
+            "Current stock levels per product",
+            ("stock level", "in stock", "inventory summary"), cacheable=False),
+    _simple("backdate_stock", "Backdated Stock",
+            "Stock levels as of a past date",
+            ("stock on date", "historical stock"), cacheable=False),
+    _simple("product_wise_receipts", "Product-wise Receipts",
+            "Receipts that contain a given product",
+            ("receipts with product", "who bought")),
+    _simple("sales_by_trend", "Sales by Trend",
+            "Sales trend buckets (hour/day/week patterns)",
+            ("trend", "peak hours", "busiest")),
+    _simple("deleted_receipts", "Deleted Receipts",
+            "Deleted receipts audit trail",
+            ("deleted receipts", "voided")),
+    _simple("hold_receipts", "Hold Receipts",
+            "Currently held/parked receipts",
+            ("held receipts", "parked", "on hold"), cacheable=False),
+    _simple("order_type_wise_sales", "Sales by Order Type",
+            "Sales per order type (dine-in, takeaway, delivery, ...)",
+            ("order type", "dine-in", "takeaway", "delivery")),
+    _simple("sales_by_modifiers", "Sales by Modifiers",
+            "Sales of modifiers/add-ons attached to products",
+            ("modifiers", "add-ons", "extras")),
+    _simple("modifier_sales", "Modifier Sales",
+            "Detailed modifier sales report",
+            ("modifier sales",)),
+    _simple("sales_by_orders", "Sales by Orders",
+            "Sales grouped at order level",
+            ("orders", "order sales")),
+    _simple("staff_sales", "Staff Sales",
+            "Sales per staff member / employee",
+            ("staff sales", "employee sales", "who sold")),
+    _simple("ecommerce_sales", "E-commerce Sales",
+            "Sales through the e-commerce channel",
+            ("ecommerce", "online store")),
+    _simple("pickme_sales", "PickMe Sales",
+            "Sales through the PickMe delivery platform",
+            ("pickme",)),
+    _simple("service_area_usage", "Service Area Usage",
+            "Table/service area usage and turnover",
+            ("tables", "service area", "seating")),
+    _simple("product_wise_tax_charge", "Product-wise Taxes & Charges",
+            "Taxes and charges broken down per product",
+            ("product tax", "product charges")),
+    _simple("product_wise_taxes", "Product-wise Taxes",
+            "Taxes broken down per product",
+            ("tax per product",)),
+    _simple("manual_receipts", "Manual Receipts",
+            "Manually entered receipts",
+            ("manual receipts",)),
+    _simple("product_wise_orders", "Product-wise Orders",
+            "Orders broken down per product",
+            ("orders per product",)),
+    _simple("product_sales_other_staff", "Product Sales by Other Staff",
+            "Products sold by non-cashier staff",
+            ("other staff sales",)),
+    _simple("products_consumed_other_staff", "Products Consumed by Staff",
+            "Products consumed internally by staff",
+            ("staff consumption", "internal use")),
+    _simple("product_wise_deleted_receipts", "Product-wise Deleted Receipts",
+            "Deleted receipts per product (suspicious activity)",
+            ("deleted per product",)),
+    _simple("product_wise_cash_refunds", "Product-wise Cash Refunds",
+            "Cash refunds per product (suspicious activity)",
+            ("refunds per product",)),
+    _simple("suspicious_refunds_credit_notes", "Suspicious Refunds & Credit Notes",
+            "Potentially suspicious refund/credit-note activity",
+            ("suspicious refunds", "fraud")),
+    _simple("removed_products_in_hold", "Removed Products in Hold Receipts",
+            "Products removed from held receipts (suspicious activity)",
+            ("removed from hold",)),
+    _simple("tip_transactions", "Tip Transactions",
+            "Tip transactions (suspicious activity report)",
+            ("tips detail", "tip transactions")),
+):
+    REPORTS[_r.id] = _r

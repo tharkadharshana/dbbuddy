@@ -86,14 +86,25 @@ async def answer_business_question(
     currency: str = "$",
     shop_timezone: str = "UTC",
     max_iterations: Optional[int] = None,
+    report_ctx=None,
 ) -> Tuple[str, List[str], list]:
     """Run the tool-calling loop and return (sql, columns, data) from the last
-    successful run_select_query call. Raises NoQueryExecuted if the model
-    never ran one — callers should fall back to the legacy one-shot path."""
+    successful tool call (run_select_query, or a report tool — report tools
+    populate the same last_result slot). Raises NoQueryExecuted if the model
+    never produced a result — callers should fall back to the legacy path.
+
+    `report_ctx` (a report_tools.ReportToolContext) additionally registers the
+    cache-first SalesPlay report tools; the SQL tools stay available as the
+    long-tail fallback."""
     if max_iterations is None:
         max_iterations = int(os.getenv("MCP_MAX_TOOL_ITERATIONS", "5"))
 
-    mcp = build_business_mcp(ctx)
+    if report_ctx is not None:
+        from .report_tools import build_report_mcp, report_system_prompt
+        mcp = build_report_mcp(report_ctx)
+        extra_hints = f"{report_system_prompt(report_ctx)} {extra_hints}".strip()
+    else:
+        mcp = build_business_mcp(ctx)
     system_prompt = _build_system_prompt(ctx.tenant_id, currency, extra_hints, shop_timezone)
 
     user_content = question
