@@ -8,7 +8,7 @@
  */
 import React, { useState, useRef, useEffect } from 'react'
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { embedRunQuery, embedGetSSOHandoff, embedCreateConversation, embedGetSubscription } from './embedApi'
+import { embedRunQuery, embedStreamQuery, embedGetSSOHandoff, embedCreateConversation, embedGetSubscription } from './embedApi'
 import { getErrorMessage } from '../utils/api'
 import { formatCurrency } from '../utils/locale'
 import { notifyParent } from './EmbedApp'
@@ -385,7 +385,37 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
     }, 10000)
 
     try {
-      const data = await embedRunQuery(q, 'default', thinkMode, currentConvId)
+      // Streaming first: live progress steps, model thinking, and the answer
+      // text as it arrives. Falls back to the plain endpoint when streaming is
+      // disabled server-side (404) or the stream dies before producing output.
+      const patchMsg = (patch) => setMessages(m => m.map(msg =>
+        msg.id === thinkMsg.id ? { ...msg, ...patch } : msg
+      ))
+      let sawOutput = false
+      let data = null
+      try {
+        data = await embedStreamQuery(q, 'default', thinkMode, currentConvId, {
+          onStep:     p => { if (p.label) patchMsg({ loadingText: p.label }) },
+          onThinking: p => { if (p.text) patchMsg({ loadingText: p.text.slice(0, 140) }) },
+          onToken:    t => {
+            sawOutput = true
+            setMessages(m => m.map(msg => {
+              if (msg.id !== thinkMsg.id) return msg
+              const acc = (msg.streamText || '') + t
+              // Render the growing answer in the Think Mode box; the data
+              // table/summary replace this when the final payload lands.
+              return { role:'ai', id: thinkMsg.id, content:'', analysis: acc, streamText: acc }
+            }))
+          },
+        })
+      } catch (se) {
+        if (se.status === 401) { onExpired(); return }
+        data = null   // stream failed
+      }
+      // Re-run via the plain endpoint only if the stream produced nothing —
+      // never after tokens were shown (that would double-charge the question).
+      if (!data && !sawOutput) data = await embedRunQuery(q, 'default', thinkMode, currentConvId)
+      if (!data) data = { success: false, type: 'error', message: 'The connection dropped mid-answer. Please try again.' }
       const rowCount = data.row_count
       const type     = data.type
       let summary

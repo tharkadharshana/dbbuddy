@@ -25,8 +25,30 @@ from typing import List, Optional, Tuple
 
 from fastmcp import Client
 
+from progress import emit as _progress_emit
+
 from .business_tools import ToolContext, build_business_mcp
 from .llm_tool_calling import call_with_tools
+
+# Human-readable progress labels per tool (SSE 'step' events). Args worth
+# surfacing are formatted in; anything else falls back to the generic label.
+_TOOL_LABELS = {
+    "get_schema": "Reviewing your data structure",
+    "get_sample_rows": "Looking at sample data",
+    "run_select_query": "Running a data query",
+    "get_date_range": "Checking your plan's data window",
+    "list_reports": "Finding the right report",
+    "get_report_metrics": "Reading the {report_id} report ({start_date} to {end_date})",
+    "get_report_detail": "Fetching {report_id} details ({start_date} to {end_date})",
+}
+
+
+def _tool_step_label(name: str, arguments: dict) -> str:
+    template = _TOOL_LABELS.get(name, f"Using {name}")
+    try:
+        return template.format(**(arguments or {}))
+    except (KeyError, IndexError):
+        return template.split("{")[0].strip() or f"Using {name}"
 
 
 class NoQueryExecuted(Exception):
@@ -124,6 +146,9 @@ async def answer_business_question(
 
         for _ in range(max_iterations):
             turn = call_with_tools(llm, messages, tools, api_key, user_email)
+            if turn.text and turn.tool_calls:
+                # Model reasoning between tool calls — streamed as 'thinking'.
+                _progress_emit("thinking", {"text": turn.text.strip()})
             if not turn.tool_calls:
                 break
 
@@ -136,6 +161,8 @@ async def answer_business_question(
                 ],
             })
             for tc in turn.tool_calls:
+                _progress_emit("step", {"label": _tool_step_label(tc.name, tc.arguments),
+                                        "status": "running"})
                 result = await client.call_tool(tc.name, tc.arguments, raise_on_error=False)
                 if result.is_error:
                     error_text = " ".join(

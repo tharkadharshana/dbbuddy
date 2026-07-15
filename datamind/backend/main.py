@@ -11,6 +11,7 @@ Three fixes in this version:
 
 import os
 import re
+import json
 import asyncio
 import hashlib
 import decimal
@@ -18,7 +19,7 @@ import datetime
 import traceback
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, BackgroundTasks, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List, Any, Dict
 from dotenv import load_dotenv
@@ -66,6 +67,7 @@ from pool import get_pool
 import mcp_server.safety as _safety
 from mcp_server.business_tools import ToolContext as _MCPToolContext
 from mcp_server.orchestrator import answer_business_question as _mcp_answer_business_question
+import progress as _progress
 
 log = get_logger(__name__)
 
@@ -1437,12 +1439,13 @@ class NLQueryRequest(BaseModel):
     conversation_id: str  = None  # optional — enables conversation memory
 
 
-@v1.post("/query")
-@_limiter.limit(RL_COMPUTE)
-def natural_language_query(request: Request, req: NLQueryRequest, user: dict = Depends(current_user)):
+def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: dict) -> dict:
+    """The full NL-query pipeline. Called by both POST /v1/query (plain JSON)
+    and POST /v1/query/stream (SSE) — the latter runs it on a worker thread
+    with a progress emitter installed, so steps.append() streams live."""
     log = get_logger(__name__)   # local — lets us rebind with log = log.bind(...) later without UnboundLocalError
     conn = None
-    steps: list = []
+    steps: list = _progress.Steps()
     conv_id = req.conversation_id or None
 
     # ── AI limit check ────────────────────────────────────────────────────────
@@ -2033,6 +2036,89 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                 conn.close()
             except Exception:
                 pass
+
+
+@v1.post("/query")
+@_limiter.limit(RL_COMPUTE)
+def natural_language_query(request: Request, req: NLQueryRequest, user: dict = Depends(current_user)):
+    return _natural_language_query_impl(request, req, user)
+
+
+# ── SSE streaming variant ─────────────────────────────────────────────────────
+# Streams: step (pipeline progress) → thinking (model reasoning between tool
+# calls) → token (answer text chunks) → data (the full JSON payload the plain
+# endpoint would have returned) → done. Errors degrade to error + done.
+# Flag-gated: clients treat a 404 as "not enabled" and fall back to POST /v1/query.
+
+_SSE_STREAMING_ENABLED = os.getenv("SSE_STREAMING_ENABLED", "").lower() in ("1", "true", "yes")
+
+
+def _sse_event(event: str, payload: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(payload, default=str)}\n\n"
+
+
+def _answer_chunks(text: str, words_per_chunk: int = 8):
+    words = (text or "").split(" ")
+    for i in range(0, len(words), words_per_chunk):
+        yield " ".join(words[i:i + words_per_chunk]) + (" " if i + words_per_chunk < len(words) else "")
+
+
+async def _stream_query_events(request: Request, req: NLQueryRequest, user: dict):
+    import queue as _queue
+    import threading as _threading
+
+    q: "_queue.Queue" = _queue.Queue()
+    _DONE = object()
+
+    def worker():
+        # The emitter lives in this thread's context; asyncio.run() inside the
+        # pipeline (MCP tool loop) inherits it, so tool events stream too.
+        token = _progress.set_emitter(lambda ev, payload: q.put((ev, payload)))
+        try:
+            result = _natural_language_query_impl(request, req, user)
+            q.put(("result", result))
+        except HTTPException as e:
+            q.put(("error", {"message": str(e.detail)}))
+        except Exception as e:
+            get_logger(__name__).error("Stream query failed", user=user["email"], error=str(e))
+            q.put(("error", {"message": "Something went wrong while processing your question. "
+                                        "Please try rephrasing it or try again shortly."}))
+        finally:
+            _progress.reset_emitter(token)
+            q.put(_DONE)
+
+    _threading.Thread(target=worker, daemon=True, name="sse-query").start()
+    loop = asyncio.get_running_loop()
+    while True:
+        item = await loop.run_in_executor(None, q.get)
+        if item is _DONE:
+            break
+        event, payload = item
+        if event == "result":
+            # ponytail: the answer text is chunked after generation, not true
+            # LLM token streaming — the tool loop dominates latency and already
+            # streams real progress. Upgrade path: stream=True in llm.call_llm
+            # for the final analysis call, emitting deltas through progress.emit.
+            text = payload.get("analysis") or payload.get("message") or ""
+            for chunk in _answer_chunks(text):
+                yield _sse_event("token", {"text": chunk})
+            yield _sse_event("data", payload)
+        else:
+            yield _sse_event(event, payload)
+    yield _sse_event("done", {})
+
+
+@v1.post("/query/stream")
+@_limiter.limit(RL_COMPUTE)
+async def natural_language_query_stream(request: Request, req: NLQueryRequest,
+                                        user: dict = Depends(current_user)):
+    if not _SSE_STREAMING_ENABLED:
+        raise HTTPException(status_code=404, detail="Streaming is not enabled.")
+    return StreamingResponse(
+        _stream_query_events(request, req, user),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
