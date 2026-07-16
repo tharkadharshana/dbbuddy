@@ -70,6 +70,32 @@ def test_upsell_line_only_when_over_range(monkeypatch):
     assert "higher tier" in cap["prompt"]
 
 
+# ── _derive_period (Phase 3) ─────────────────────────────────────────────────
+
+H90 = {"months": 3, "plan_name": "Starter"}   # 90-day window
+
+def test_period_label_has_window_and_dates():
+    label, tier, over = main._derive_period("how much tax did I pay?", H90)
+    assert "90 days" in label and "–" in label
+    assert tier == "Starter" and over is False
+
+def test_over_range_when_asking_more_years():
+    _, _, over = main._derive_period("tax over the last 2 years", H90)
+    assert over is True
+
+def test_over_range_all_time_phrase():
+    _, _, over = main._derive_period("show me all-time revenue", H90)
+    assert over is True
+
+def test_not_over_range_within_window():
+    _, _, over = main._derive_period("sales in the last 30 days", H90)
+    assert over is False
+
+def test_no_label_when_no_window():
+    label, _, over = main._derive_period("anything", {"months": 0, "plan_name": "X"})
+    assert label == "" and over is False
+
+
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))

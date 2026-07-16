@@ -1469,6 +1469,38 @@ def _run_think_analysis(question: str, columns: list, data: list,
     )
 
 
+# Matches an explicit lookback range the user typed ("last 2 years", "past 6 months").
+_LOOKBACK_RE = re.compile(r'\b(?:last|past|previous)\s+(\d+)\s+(day|week|month|year)s?\b', re.IGNORECASE)
+# Phrases that imply "everything / more than the plan window".
+_ALL_TIME_RE = re.compile(r'\b(all[\s-]?time|life[\s-]?time|since\s+(?:the\s+)?(?:start|beginning)|ever\s+since)\b', re.IGNORECASE)
+_DAYS_PER = {"day": 1, "week": 7, "month": 30, "year": 365}
+
+
+def _derive_period(question: str, history: dict):
+    """Turn the plan's history window into a human coverage label and decide
+    whether the user asked for more than the plan allows (upsell trigger).
+    Returns (period_label, plan_tier, over_range). ponytail: keyword heuristic
+    for over_range — a full NL date-range parser isn't worth it here."""
+    from datetime import date, timedelta
+    months = history.get("months") or 0
+    plan_tier = history.get("plan_name") or ""
+    window_days = months * 30
+    end = date.today()
+    start = end - timedelta(days=window_days)
+    period_label = (
+        f"the last {window_days} days ({start:%b %d} – {end:%b %d, %Y})" if window_days else ""
+    )
+    over_range = False
+    if window_days:
+        if _ALL_TIME_RE.search(question):
+            over_range = True
+        else:
+            m = _LOOKBACK_RE.search(question)
+            if m and int(m.group(1)) * _DAYS_PER[m.group(2).lower()] > window_days:
+                over_range = True
+    return period_label, plan_tier, over_range
+
+
 def _run_answer(question: str, columns: list, data: list,
                 llm: str, api_key: str, user_email: str,
                 currency: str = "$", period_label: str = "",
@@ -2010,9 +2042,18 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
             steps.append({"label": "Analyzing results", "status": "running"})
             try:
                 if _SMART_ANSWERS_ENABLED:
+                    # Coverage/upsell only where the date window is actually
+                    # enforced (integration tenants) — otherwise a "covers last
+                    # N days" claim could overstate an all-time own-DB result.
+                    if nl_tenant_id:
+                        _period_label, _plan_tier, _over_range = _derive_period(req.question, history)
+                    else:
+                        _period_label, _plan_tier, _over_range = "", "", False
                     analysis = _run_answer(
                         req.question, columns, data, llm, api_key, user["email"],
-                        currency=nl_currency, history_months=history["months"],
+                        currency=nl_currency, period_label=_period_label,
+                        plan_tier=_plan_tier, history_months=history["months"],
+                        over_range=_over_range,
                     )
                 else:
                     analysis = _run_think_analysis(req.question, columns, data, llm, api_key, user["email"], currency=nl_currency)
