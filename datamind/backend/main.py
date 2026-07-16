@@ -347,6 +347,8 @@ def _base_query_response(**kwargs) -> dict:
         "think_mode":      kwargs.get("think_mode", False),
         "conversation_id": kwargs.get("conversation_id", None),
         "data_as_of":      kwargs.get("data_as_of", None),
+        # False = prose-only answer (advice); frontend hides chart/table/summary.
+        "show_data":       kwargs.get("show_data", True),
     }
     if "sql" in kwargs:
         base["sql"] = kwargs["sql"]
@@ -2107,9 +2109,7 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
             answer_summary = analysis
         if conv_id:
             try:
-                stat_col = next(
-                    (c for c in columns if isinstance(data[0].get(c), (int, float))), None
-                ) if data else None
+                stat_col = _pick_summary_column(columns, data[0]) if data else None
                 _conv.save_message(conv_id, "user", req.question)
                 _conv.save_message(
                     conv_id, "assistant", answer_summary,
@@ -2170,12 +2170,19 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
                 except Exception as _age_err:
                     log.debug("Staleness note skipped", error=str(_age_err))
 
+        # Advisory answers ("how do I grow", marketing strategy) are prose-only:
+        # a generic query still ran for context, but the chart/table/summary would
+        # be unrelated to the question, so tell the frontend to hide them. Intent
+        # is only emitted under smart answers; default to showing data otherwise.
+        _intent = (classification.get("intent") or "lookup") if _SMART_ANSWERS_ENABLED else "lookup"
+        _show_data = _intent != "advice"
         response = _base_query_response(
             success=True, type="data",
             steps=steps,
             columns=columns, data=data, row_count=len(data),
             analysis=analysis, think_mode=req.think_mode,
             conversation_id=conv_id, data_as_of=nl_last_sync_at,
+            show_data=_show_data,
         )
         # Only own-DB users get the generated SQL back (used by QueryPage's
         # "Show SQL" debugging view). Integration users query shared internal

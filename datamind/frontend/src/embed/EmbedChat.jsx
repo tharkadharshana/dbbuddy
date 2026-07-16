@@ -195,8 +195,12 @@ function Message({ msg, theme }) {
               </div>
             )}
 
-            <div style={{ fontSize:13, color:'var(--text)', lineHeight:1.6 }}>{msg.content}</div>
-            {msg.data?.data?.length > 0 && (
+            {/* Advisory (prose-only) answers set show_data=false — hide the
+                "Found N results" summary and the unrelated chart/table. */}
+            {msg.content && msg.data?.show_data !== false && (
+              <div style={{ fontSize:13, color:'var(--text)', lineHeight:1.6 }}>{msg.content}</div>
+            )}
+            {msg.data?.data?.length > 0 && msg.data?.show_data !== false && (
               <>
                 <ResultChart columns={msg.data.columns} data={msg.data.data} theme={theme} />
                 <ResultTable columns={msg.data.columns} data={msg.data.data} rowCount={msg.data.row_count} />

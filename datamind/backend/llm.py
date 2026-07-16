@@ -714,13 +714,26 @@ def classify_question(
             "ask ONE specific clarifying question. "
         )
 
+    if smart_answers:
+        data_query_block = (
+            '{"type":"data_query","intent":"lookup|advice|forecast|trend"} — question about data that exists '
+            "in the database. Set intent: "
+            '"advice" when the user asks what to DO / how to grow / a strategy (marketing, pricing, promotions) — '
+            "the data is background context, not the answer; "
+            '"forecast" for a prediction / what happens next; '
+            '"trend" for how a metric is moving over time; '
+            '"lookup" otherwise (a specific number, list, or ranking).\n'
+        )
+    else:
+        data_query_block = '{"type":"data_query"} — question about data that exists in the database\n'
+
     system = (
         "You are a data assistant classifier. Respond ONLY with valid JSON — no markdown, no explanation.\n"
         "Classify the question into exactly one type:\n"
 
-        '{"type":"data_query"} — question about data that exists in the database\n'
+        + data_query_block
 
-        '{"type":"multi_step","sub_questions":["q1","q2"]} — clearly contains 2+ separate data queries; '
+        + '{"type":"multi_step","sub_questions":["q1","q2"]} — clearly contains 2+ separate data queries; '
         "only use this when two or more genuinely distinct SQL queries are needed\n"
 
         + out_of_scope_block
