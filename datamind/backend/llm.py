@@ -657,6 +657,20 @@ OUT_OF_SCOPE_DEFLECTION = (
     "but ask me anything about your sales, products, customers, or trends and I'm all yours."
 )
 
+# Curated reply for "what can you do / what can I do / what is this" — a branded,
+# concrete overview beats a re-generated LLM one-liner. .format(app=…, provider=…).
+CAPABILITIES_MESSAGE = (
+    "I'm {app}, your business analyst. I read your own {provider} data and answer in plain language. "
+    "I can:\n"
+    "- **Track performance** — sales, revenue, taxes, and profit for any period\n"
+    "- **Rank things** — best/worst products, top customers, busiest days or hours\n"
+    "- **Spot trends** — how sales are moving and what's driving the change\n"
+    "- **Forecast** — a simple estimate of where a metric is heading\n"
+    "- **Advise** — grounded suggestions to grow sales, based on your actual numbers\n\n"
+    "Try: *\"top 5 products last month\"*, *\"how are sales trending?\"*, "
+    "*\"what should I do to increase revenue?\"*"
+)
+
 
 def classify_question(
     question: str, table_names: str,
@@ -714,6 +728,12 @@ def classify_question(
             "ask ONE specific clarifying question. "
         )
 
+    capabilities_block = (
+        'If the user asks what you can do / how you can help / what this tool is / "what can I do" — '
+        'return {"type":"conversational","subtype":"capabilities"} (leave "response" out; a curated '
+        "answer is filled in).\n"
+    ) if smart_answers else ""
+
     if smart_answers:
         data_query_block = (
             '{"type":"data_query","intent":"lookup|advice|forecast|trend"} — question about data that exists '
@@ -749,6 +769,7 @@ def classify_question(
         "context provided in these instructions, do NOT deflect or say 'I'm a data assistant'; "
         f"for all other conversational cases respond as {app_name}, a friendly AI data assistant.\n"
 
+        + capabilities_block
         + clarification_block
         + "IMPORTANT RULE: if the conversation history shows the last assistant message was already a clarification "
         "question and the user has now given ANY response (even a single word like 'sales', 'any', a category name, "

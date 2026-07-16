@@ -1594,6 +1594,7 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
     nl_tenant_id = None
     nl_shop_timezone = "UTC"
     nl_last_sync_at = None
+    nl_provider_label = "business"   # display name for the capabilities reply
     _locale         = s.get("locale") or {}
     nl_currency     = _locale.get("currency") or "$"
     nl_country      = _locale.get("country") or ""
@@ -1635,12 +1636,14 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
                 prefix = conn_info.get("table_prefix", "")
                 if pid == "salesplay":
                     tables_filter.extend(_SALESPLAY_SHARED_TABLES)
+                    nl_provider_label = "SalesPlay"
                     if not nl_tenant_id:
                         nl_tenant_id = prefix
                         _raw_sync = conn_info.get("last_sync_at")
                         if _raw_sync:
                             nl_last_sync_at = str(_raw_sync)
                 elif pid == "loyverse" and prefix:
+                    nl_provider_label = "Loyverse"
                     tables_filter.extend([f"{prefix}_{_sfx}" for _sfx in _LOYVERSE_VIEW_SUFFIXES])
                     loyverse_hints.append(
                         f"The {prefix}_customers table has pre-aggregated total_spent and "
@@ -1770,12 +1773,16 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
 
         # ── Conversational / greeting ─────────────────────────────────────────
         if q_type == "conversational":
-            response_text = classification.get(
-                "response",
-                f"Hello! I'm {_APP_NAME}, your AI data assistant. "
-                "Ask me anything about your data — for example: "
-                "'Show me sales from last month' or 'Who are my top customers?'"
-            )
+            if _SMART_ANSWERS_ENABLED and classification.get("subtype") == "capabilities":
+                from llm import CAPABILITIES_MESSAGE
+                response_text = CAPABILITIES_MESSAGE.format(app=_APP_NAME, provider=nl_provider_label)
+            else:
+                response_text = classification.get(
+                    "response",
+                    f"Hello! I'm {_APP_NAME}, your AI data assistant. "
+                    "Ask me anything about your data — for example: "
+                    "'Show me sales from last month' or 'Who are my top customers?'"
+                )
             if conv_id:
                 try:
                     _conv.save_message(conv_id, "user", req.question)

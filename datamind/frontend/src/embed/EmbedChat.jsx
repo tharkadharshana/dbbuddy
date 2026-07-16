@@ -198,7 +198,9 @@ function Message({ msg, theme }) {
             {/* Advisory (prose-only) answers set show_data=false — hide the
                 "Found N results" summary and the unrelated chart/table. */}
             {msg.content && msg.data?.show_data !== false && (
-              <div style={{ fontSize:13, color:'var(--text)', lineHeight:1.6 }}>{msg.content}</div>
+              <div style={{ fontSize:13, color:'var(--text)', lineHeight:1.6 }}>
+                <Markdown text={msg.content} />
+              </div>
             )}
             {msg.data?.data?.length > 0 && msg.data?.show_data !== false && (
               <>

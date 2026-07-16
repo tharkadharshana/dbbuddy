@@ -120,7 +120,7 @@ function Message({ msg, llm }) {
                 "Found N results" summary and the unrelated chart/table. */}
             {msg.content && msg.data?.show_data !== false && (
               <div style={{ fontSize:14, color:'var(--text)', lineHeight:1.7, marginBottom: msg.data ? 4 : 0 }}>
-                {msg.content}
+                <Markdown text={msg.content} />
               </div>
             )}
             {msg.data && msg.data?.show_data !== false && (
