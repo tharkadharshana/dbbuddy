@@ -1406,37 +1406,36 @@ def _pick_summary_column(columns: list, first_row: dict) -> str | None:
     )
 
 
+def _format_result_context(columns: list, data: list, currency: str):
+    """Shared prep for the answer LLM calls: strip ID columns, tag MONEY vs
+    VALUE, and render the sampled rows as CSV. Returns
+    (col_type_hint, header, rows_text, truncation_note)."""
+    visible_cols = [c for c in columns if not _ID_COLUMN_RE.search(c)]
+    if not visible_cols:
+        visible_cols = columns  # safety: if everything was IDs keep all
+    col_hints = [
+        f"{c}={'MONEY' if _is_money_column(c) else 'VALUE'}" for c in visible_cols
+    ]
+    col_type_hint = (
+        f"Column types (MONEY = use '{currency}' symbol; VALUE = plain number, NO currency symbol): "
+        + ", ".join(col_hints)
+    )
+    sample = data[:50]
+    header = ", ".join(visible_cols)
+    rows_text = "\n".join(
+        ", ".join(str(row.get(c, "")) for c in visible_cols) for row in sample
+    )
+    truncation_note = f"\n(Showing first 50 of {len(data)} rows)" if len(data) > 50 else ""
+    return col_type_hint, header, rows_text, truncation_note
+
+
 def _run_think_analysis(question: str, columns: list, data: list,
                         llm: str, api_key: str, user_email: str,
                         currency: str = "$") -> str:
     """Second LLM call for Think Mode: analyse SQL results and answer the question.
     call_llm() handles token charging via charge_ai_usage() automatically."""
-    # Strip internal ID columns — they are opaque keys, meaningless to users.
-    visible_cols = [c for c in columns if not _ID_COLUMN_RE.search(c)]
-    if not visible_cols:
-        visible_cols = columns  # safety: if everything was IDs keep all
-
-    # Build column type hints so LLM knows which columns are monetary vs counts.
-    col_hints = []
-    for c in visible_cols:
-        if _is_money_column(c):
-            col_hints.append(f"{c}=MONEY")
-        else:
-            col_hints.append(f"{c}=VALUE")
-    col_type_hint = (
-        f"Column types (MONEY = use '{currency}' symbol; VALUE = plain number, NO currency symbol): "
-        + ", ".join(col_hints)
-    )
-
-    sample = data[:50]
-    header = ", ".join(visible_cols)
-    rows_text = "\n".join(
-        ", ".join(str(row.get(c, "")) for c in visible_cols)
-        for row in sample
-    )
-    truncation_note = (
-        f"\n(Showing first 50 of {len(data)} rows)" if len(data) > 50 else ""
-    )
+    col_type_hint, header, rows_text, truncation_note = _format_result_context(
+        columns, data, currency)
     prompt = (
         f"The user asked: \"{question}\"\n\n"
         f"{col_type_hint}\n\n"
@@ -1464,6 +1463,63 @@ def _run_think_analysis(question: str, columns: list, data: list,
         ),
         llm=llm,
         max_tokens=200,
+        api_key=api_key,
+        user_email=user_email,
+        operation="think",
+    )
+
+
+def _run_answer(question: str, columns: list, data: list,
+                llm: str, api_key: str, user_email: str,
+                currency: str = "$", period_label: str = "",
+                plan_tier: str = "", history_months: int = 0,
+                over_range: bool = False) -> str:
+    """Smart-answers analyst pass (SMART_ANSWERS_ENABLED). Unlike the legacy
+    narrator, this reasons over the merchant's own rows like a business analyst:
+    interprets, gives grounded advice, does light labelled forecasting, and may
+    use markdown. period_label/plan_tier/history_months/over_range are populated
+    by Phase 3; empty defaults simply omit the coverage/upsell instructions."""
+    col_type_hint, header, rows_text, truncation_note = _format_result_context(
+        columns, data, currency)
+
+    coverage = ""
+    if period_label:
+        coverage = f"\nThis data covers: {period_label}. State this period in your answer.\n"
+        if over_range and history_months:
+            coverage += (
+                f"The user asked for a longer range than their plan covers. Add ONE short sentence: "
+                f"their current plan includes {history_months} months of history and a higher tier unlocks more.\n"
+            )
+
+    prompt = (
+        f"The user asked: \"{question}\"\n\n"
+        f"{col_type_hint}\n"
+        f"{coverage}\n"
+        f"Here is the query result ({len(data)} rows total):{truncation_note}\n"
+        f"{header}\n{rows_text}\n\n"
+        "Answer as an expert retail/business analyst using THIS data plus your own business reasoning. "
+        "Ground every number in the rows above — never invent figures. "
+        "If the user asks how to improve/grow/fix something, give specific suggestions that reference the "
+        "actual numbers you just saw. If they ask what's next or a trend, you may give a simple run-rate or "
+        "trend estimate from the history shown — clearly label it an estimate. "
+        "Match length to the question: one sentence for a factual lookup; a short structured answer "
+        "(a few sentences or a small bullet list) for how/why/what-should-I-do questions. "
+        "Light markdown is allowed (short **bold** labels, small bullet lists) where it genuinely helps — "
+        "don't over-format simple answers."
+    )
+    return call_llm(
+        prompt,
+        system=(
+            "You are DataMind, an expert retail/business data analyst. You answer using the merchant's own "
+            "data plus general business reasoning — interpret it, surface what's notable, and give grounded, "
+            "specific advice when asked. Be as concise as the question allows. "
+            "Never mention database ID values — they are internal system keys, not business data. "
+            "Only apply a currency symbol to columns marked MONEY; VALUE columns are plain counts — never "
+            "prefix them with a currency symbol. "
+            "Answer in the same language the user used to write their question."
+        ),
+        llm=llm,
+        max_tokens=700,
         api_key=api_key,
         user_email=user_email,
         operation="think",
@@ -1946,17 +2002,25 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
         log.info("NL query complete", user=user["email"], rows=len(data), conv_id=conv_id or "stateless")
         _charge_op(user["email"], "nl_query_rows", len(data))
 
-        # ── Think mode ────────────────────────────────────────────────────────
+        # ── Answer narrative ──────────────────────────────────────────────────
+        # Smart-answers: always generate an analyst answer for a data query.
+        # Legacy: only the restricted Think-Mode narrator, and only if requested.
         analysis = None
-        if req.think_mode and data:
+        if data and (_SMART_ANSWERS_ENABLED or req.think_mode):
             steps.append({"label": "Analyzing results", "status": "running"})
             try:
-                analysis = _run_think_analysis(req.question, columns, data, llm, api_key, user["email"], currency=nl_currency)
+                if _SMART_ANSWERS_ENABLED:
+                    analysis = _run_answer(
+                        req.question, columns, data, llm, api_key, user["email"],
+                        currency=nl_currency, history_months=history["months"],
+                    )
+                else:
+                    analysis = _run_think_analysis(req.question, columns, data, llm, api_key, user["email"], currency=nl_currency)
                 analysis = fix_currency_symbol(analysis, nl_currency)
-                log.info("Think mode analysis complete", user=user["email"])
+                log.info("Answer analysis complete", user=user["email"])
                 steps[-1]["status"] = "done"
             except Exception as _te:
-                log.warning("Think mode analysis failed", user=user["email"], error=str(_te))
+                log.warning("Answer analysis failed", user=user["email"], error=str(_te))
                 steps[-1]["status"] = "failed"
 
         # ── Build conversation summary & persist ──────────────────────────────
@@ -1991,6 +2055,11 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
                         answer_summary += f" {num_col.replace('_', ' ')} = {total:,.2f}"
                 except Exception:
                     pass
+        # Smart answers: the analyst prose IS the answer — store it as the
+        # assistant turn so conversation memory and follow-ups have real content,
+        # not "Found N results."
+        if _SMART_ANSWERS_ENABLED and analysis:
+            answer_summary = analysis
         if conv_id:
             try:
                 stat_col = next(
