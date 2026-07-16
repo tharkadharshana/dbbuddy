@@ -25,6 +25,12 @@ def reset_emitter(token) -> None:
     _emitter.reset(token)
 
 
+def has_listener() -> bool:
+    """True if an SSE emitter is installed for this request — lets callers pick
+    a streaming code path (real token deltas) only when someone is listening."""
+    return _emitter.get() is not None
+
+
 def emit(event: str, payload: dict) -> None:
     """Fire an event to the current request's listener, if any. Never raises."""
     cb = _emitter.get()

@@ -367,6 +367,124 @@ def call_deepseek(prompt: str, system: str = "", max_tokens: int = 2000,
             time.sleep(2 ** (attempt + 1))
 
 
+# ── Streaming provider calls (real token deltas) ──────────────────────────────
+# Same (text, tokens, model) return contract as the non-streaming calls above,
+# so call_llm's fallback + charging loop is reused unchanged. on_delta(text) is
+# fired per content chunk. Failure BEFORE any output raises (transient/auth) so
+# the key pool can retry; failure AFTER output returns the partial answer so we
+# never re-stream and double-charge / duplicate visible text.
+
+def _estimate_tokens(*parts: str) -> int:
+    # ponytail: ~4 chars/token — only used when the provider omits stream usage.
+    return sum(len(p or "") for p in parts) // 4
+
+
+def _stream_chat_completions(provider, url, model, prompt, system, max_tokens,
+                             key, on_delta, user_email):
+    """Stream an OpenAI-compatible Chat Completions response (OpenAI + DeepSeek)."""
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    body = {"model": model, "messages": messages, "temperature": 0.2,
+            "max_tokens": max_tokens, "stream": True,
+            "stream_options": {"include_usage": True}}
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    resp = requests.post(url, json=body, headers=headers, timeout=90, stream=True)
+    if not resp.ok:
+        err = resp.text[:300]
+        if resp.status_code in (401, 403):
+            raise ValueError(f"{provider} API key is invalid or has no credits. "
+                             f"Status {resp.status_code}: {err}")
+        if resp.status_code in _TRANSIENT_STATUS:
+            raise LLMTransientError(f"{provider} is busy. Please try again in a moment.")
+        resp.raise_for_status()
+
+    full, tokens, model_used = [], 0, model
+    try:
+        for line in resp.iter_lines(decode_unicode=True):
+            if not line or not line.startswith("data: "):
+                continue
+            data = line[6:].strip()
+            if data == "[DONE]":
+                break
+            try:
+                chunk = json.loads(data)
+            except Exception:
+                continue
+            choices = chunk.get("choices") or []
+            if choices:
+                delta = (choices[0].get("delta") or {}).get("content")
+                if delta:
+                    full.append(delta)
+                    on_delta(delta)
+            if chunk.get("usage"):
+                tokens = chunk["usage"].get("total_tokens", tokens)
+            if chunk.get("model"):
+                model_used = chunk["model"]
+    except Exception as e:
+        if not full:
+            raise LLMTransientError(f"{provider} stream failed before any output.")
+        log.warning("Stream broke mid-answer, returning partial",
+                    provider=provider, error=str(e), user=user_email)
+
+    text = "".join(full).strip()
+    if not text:
+        raise LLMTransientError(f"{provider} stream produced no output.")
+    return text, tokens or _estimate_tokens(prompt, system, text), model_used
+
+
+def _stream_gemini(prompt, system, max_tokens, key, on_delta, user_email):
+    """Stream a Gemini streamGenerateContent (SSE) response."""
+    MODELS = ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash-latest",
+              "gemini-1.5-flash", "gemini-1.5-pro-latest", "gemini-pro"]
+    BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+    body = {"contents": [{"parts": [{"text": f"{system}\n\n{prompt}" if system else prompt}]}],
+            "generationConfig": {"temperature": 0.2, "maxOutputTokens": max_tokens}}
+    for model in MODELS:
+        url = f"{BASE}/{model}:streamGenerateContent?alt=sse&key={key}"
+        try:
+            resp = requests.post(url, json=body, timeout=90, stream=True)
+            if resp.status_code == 404:
+                continue
+            if not resp.ok:
+                err = resp.text[:400]
+                if resp.status_code in (400, 401, 403):
+                    raise ValueError(f"Gemini API key error (status {resp.status_code}): {err}")
+                if resp.status_code in _TRANSIENT_STATUS:
+                    continue
+                resp.raise_for_status()
+
+            full, tokens = [], 0
+            for line in resp.iter_lines(decode_unicode=True):
+                if not line or not line.startswith("data: "):
+                    continue
+                try:
+                    chunk = json.loads(line[6:].strip())
+                except Exception:
+                    continue
+                cands = chunk.get("candidates") or []
+                if cands:
+                    for p in (cands[0].get("content") or {}).get("parts", []):
+                        if p.get("text"):
+                            full.append(p["text"])
+                            on_delta(p["text"])
+                if chunk.get("usageMetadata"):
+                    tokens = chunk["usageMetadata"].get("totalTokenCount", tokens)
+            text = "".join(full).strip()
+            if not text:
+                continue  # empty from this model — try the next
+            return text, tokens or _estimate_tokens(prompt, system, text), model
+        except requests.exceptions.Timeout:
+            continue
+        except ValueError:
+            raise
+        except Exception as e:
+            log.error("Gemini stream exception", model=model, error=str(e), user=user_email)
+            continue
+    raise LLMTransientError("Gemini is temporarily unavailable. Please try again in a moment.")
+
+
 _PLACEHOLDER_KEYS = {"", "your_gemini_api_key_here", "your_deepseek_api_key_here", "your_openai_api_key_here"}
 
 def _is_real_key(key: str) -> bool:
@@ -400,7 +518,7 @@ def get_llm_priority() -> list:
 
 def call_llm(prompt: str, system: str = "", llm: str = "openai",
              max_tokens: int = 2000, api_key: str = "", user_email: str = None,
-             operation: str = "llm_call") -> str:
+             operation: str = "llm_call", on_delta=None) -> str:
     """
     Main dispatcher with per-provider key pool + cross-provider fallback.
 
@@ -418,6 +536,16 @@ def call_llm(prompt: str, system: str = "", llm: str = "openai",
     requested = (llm or "openai").lower().strip()
 
     def _call_one(name: str, key: str):
+        if on_delta is not None:   # real token streaming — same return contract
+            if name == "openai":
+                return _stream_chat_completions("openai", "https://api.openai.com/v1/chat/completions",
+                                                "gpt-4o-mini", prompt, system, max_tokens, key, on_delta, user_email)
+            elif name == "deepseek":
+                return _stream_chat_completions("deepseek", "https://api.deepseek.com/v1/chat/completions",
+                                                "deepseek-chat", prompt, system, max_tokens, key, on_delta, user_email)
+            elif name == "gemini":
+                return _stream_gemini(prompt, system, max_tokens, key, on_delta, user_email)
+            raise ValueError(f"Unknown LLM provider: '{name}'")
         if name == "openai":
             return call_openai(prompt, system, max_tokens, key, user_email=user_email)
         elif name == "deepseek":

@@ -1505,7 +1505,7 @@ def _run_answer(question: str, columns: list, data: list,
                 llm: str, api_key: str, user_email: str,
                 currency: str = "$", period_label: str = "",
                 plan_tier: str = "", history_months: int = 0,
-                over_range: bool = False) -> str:
+                over_range: bool = False, on_delta=None) -> str:
     """Smart-answers analyst pass (SMART_ANSWERS_ENABLED). Unlike the legacy
     narrator, this reasons over the merchant's own rows like a business analyst:
     interprets, gives grounded advice, does light labelled forecasting, and may
@@ -1555,6 +1555,7 @@ def _run_answer(question: str, columns: list, data: list,
         api_key=api_key,
         user_email=user_email,
         operation="think",
+        on_delta=on_delta,
     )
 
 
@@ -2049,11 +2050,14 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
                         _period_label, _plan_tier, _over_range = _derive_period(req.question, history)
                     else:
                         _period_label, _plan_tier, _over_range = "", "", False
+                    # Real token streaming only when someone's listening (SSE);
+                    # on the plain endpoint on_delta stays None → one-shot call.
+                    _delta = (lambda t: _progress.emit("token", {"text": t})) if _progress.has_listener() else None
                     analysis = _run_answer(
                         req.question, columns, data, llm, api_key, user["email"],
                         currency=nl_currency, period_label=_period_label,
                         plan_tier=_plan_tier, history_months=history["months"],
-                        over_range=_over_range,
+                        over_range=_over_range, on_delta=_delta,
                     )
                 else:
                     analysis = _run_think_analysis(req.question, columns, data, llm, api_key, user["email"], currency=nl_currency)
@@ -2277,19 +2281,24 @@ async def _stream_query_events(request: Request, req: NLQueryRequest, user: dict
 
     _threading.Thread(target=worker, daemon=True, name="sse-query").start()
     loop = asyncio.get_running_loop()
+    streamed_tokens = False
     while True:
         item = await loop.run_in_executor(None, q.get)
         if item is _DONE:
             break
         event, payload = item
-        if event == "result":
-            # ponytail: the answer text is chunked after generation, not true
-            # LLM token streaming — the tool loop dominates latency and already
-            # streams real progress. Upgrade path: stream=True in llm.call_llm
-            # for the final analysis call, emitting deltas through progress.emit.
-            text = payload.get("analysis") or payload.get("message") or ""
-            for chunk in _answer_chunks(text):
-                yield _sse_event("token", {"text": chunk})
+        if event == "token":
+            streamed_tokens = True
+            yield _sse_event("token", payload)
+        elif event == "result":
+            # If _run_answer already streamed real LLM token deltas, don't
+            # re-chunk the same text. Otherwise (conversational/clarification/
+            # legacy message, or no listener) fall back to post-hoc chunking so
+            # the client still gets a streamed answer.
+            if not streamed_tokens:
+                text = payload.get("analysis") or payload.get("message") or ""
+                for chunk in _answer_chunks(text):
+                    yield _sse_event("token", {"text": chunk})
             yield _sse_event("data", payload)
         elif event == "step":
             friendly = _friendly_step(payload)
