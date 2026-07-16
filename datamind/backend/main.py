@@ -2057,6 +2057,32 @@ def _sse_event(event: str, payload: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(payload, default=str)}\n\n"
 
 
+# What the user sees while we work. Internal pipeline labels (SQL, queries,
+# reports, tool names) are never streamed — the widget should feel like an AI
+# assistant thinking, not a query tool executing. The sync endpoint's steps
+# array keeps the internal labels (used by the main app's debug view).
+_FRIENDLY_STEP_LABELS = {
+    "Analyzing your question": "Understanding your question",
+    "Loading your data schema": "Looking at your business data",
+    "Generating SQL query": "Thinking through your question",
+    "Running your query": "Analyzing your data",
+    "Analyzing results": "Putting your answer together",
+    "Combining results": "Putting your answer together",
+    "Answered via MCP tool-calling": None,          # internal — never shown
+}
+
+
+def _friendly_step(payload: dict):
+    """Map an internal step event to user-facing copy; None = don't stream it."""
+    label = (payload or {}).get("label") or ""
+    if label in _FRIENDLY_STEP_LABELS:
+        friendly = _FRIENDLY_STEP_LABELS[label]
+        return {"label": friendly, "status": "running"} if friendly else None
+    if label.startswith("Running query"):           # multi-step sub-queries
+        return {"label": "Analyzing your data", "status": "running"}
+    return {"label": label, "status": "running"}    # already user-facing (tool labels)
+
+
 def _answer_chunks(text: str, words_per_chunk: int = 8):
     words = (text or "").split(" ")
     for i in range(0, len(words), words_per_chunk):
@@ -2103,6 +2129,10 @@ async def _stream_query_events(request: Request, req: NLQueryRequest, user: dict
             for chunk in _answer_chunks(text):
                 yield _sse_event("token", {"text": chunk})
             yield _sse_event("data", payload)
+        elif event == "step":
+            friendly = _friendly_step(payload)
+            if friendly:
+                yield _sse_event("step", friendly)
         else:
             yield _sse_event(event, payload)
     yield _sse_event("done", {})

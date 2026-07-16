@@ -106,6 +106,19 @@ def _window_start(history_months: int) -> date:
     return date.today() - timedelta(days=(history_months or 3) * 30)
 
 
+def _plan_limit_error(history_months: int) -> ValueError:
+    """The refusal the model relays when a question needs data older than the
+    plan window — always an upgrade prompt, never a technical limit message."""
+    months = history_months or 3
+    return ValueError(
+        f"The user's current subscription includes the last {months} months of "
+        f"data (from {_window_start(history_months).isoformat()}). Tell the user, "
+        f"in a friendly tone: their current plan covers the last {months} months "
+        "of insights, and to unlock insights beyond that they can upgrade to a "
+        "higher subscription plan. If part of the asked range IS within the "
+        f"{months}-month window, offer to answer for that part.")
+
+
 def _set_last_result(rctx: ReportToolContext, label: str, rows: list, metrics: dict):
     """Expose the report answer through the SAME slot business_tools uses, so
     the orchestrator's existing (sql, columns, data) recovery needs no change."""
@@ -142,12 +155,8 @@ def build_report_mcp(rctx: ReportToolContext) -> FastMCP:
         if report_id not in REPORTS:
             raise ValueError(f"Unknown report '{report_id}'. Call list_reports first.")
         start, end = date.fromisoformat(start_date), date.fromisoformat(end_date)
-        window = _window_start(ctx.history_months)
-        if start < window:
-            raise ValueError(
-                f"This account's plan allows data from {window.isoformat()} onward "
-                f"({ctx.history_months} months). Use a start_date within that window, "
-                "and tell the user about the plan limit.")
+        if start < _window_start(ctx.history_months):
+            raise _plan_limit_error(ctx.history_months)
         result = answer_metric_query(
             ctx.conn, rctx.tenant_id, report_id, start, end,
             shop_id=_resolve_shop(rctx, shop), cashier=cashier,
@@ -171,8 +180,7 @@ def build_report_mcp(rctx: ReportToolContext) -> FastMCP:
                              "available right now — offer the cached totals instead.")
         start, end = date.fromisoformat(start_date), date.fromisoformat(end_date)
         if start < _window_start(ctx.history_months):
-            raise ValueError(f"This account's plan allows data from "
-                             f"{_window_start(ctx.history_months).isoformat()} onward.")
+            raise _plan_limit_error(ctx.history_months)
         client = ReportAPIClient(rctx.token)
         report = REPORTS[report_id]
         rows, page = [], 1
@@ -202,6 +210,7 @@ def report_system_prompt(rctx: ReportToolContext) -> str:
             if rctx.token else
             "No live POS session right now — only cached past months are "
             "available; say so if asked about today/this month.")
+    months = rctx.business.history_months or 3
     return (
         f"Today's date is {date.today().isoformat()}. "
         "PREFER the report tools (list_reports -> get_report_metrics) over SQL for "
@@ -209,4 +218,11 @@ def report_system_prompt(rctx: ReportToolContext) -> str:
         "numbers exactly match the merchant's POS dashboard, which raw SQL does not. "
         "Use SQL tools only for questions no report covers (e.g. specific record "
         "lookups). Never mix numbers from reports and SQL in one answer. "
-        f"The merchant's shops are: {shops}. {live}")
+        f"The merchant's shops are: {shops}. {live} "
+        f"The user's subscription covers the last {months} months of data. If they "
+        "ask about anything older, do not just say the data is unavailable — tell "
+        f"them their current plan includes {months} months of insights and that "
+        "upgrading to a higher subscription plan unlocks more history, then answer "
+        "for the part of the range their plan covers if any. "
+        "Never mention tools, reports, SQL, queries, databases, or caching to the "
+        "user — you are their business analyst, not a query system.")

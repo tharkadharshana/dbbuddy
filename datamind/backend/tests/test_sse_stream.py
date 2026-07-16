@@ -121,6 +121,26 @@ def test_stream_event_order_and_content(client):
     assert data["data"] == [{"net_sales": 2700}]
 
 
+def test_stream_hides_internal_mechanics(client, monkeypatch):
+    """The user must never see query-tool mechanics — internal pipeline labels
+    are rewritten to AI-feel copy, and purely internal steps are suppressed."""
+    import main
+
+    def impl(request, req, user):
+        progress.emit("step", {"label": "Generating SQL query", "status": "running"})
+        progress.emit("step", {"label": "Answered via MCP tool-calling", "status": "done"})
+        progress.emit("step", {"label": "Running query 2: SELECT net_sales FROM sp_receipts", "status": "running"})
+        return {"success": True, "type": "data", "message": "Done.", "analysis": None,
+                "columns": [], "data": [], "row_count": 0, "steps": [], "conversation_id": None}
+
+    monkeypatch.setattr(main, "_natural_language_query_impl", impl)
+    r = client.post("/v1/query/stream", json={"question": "x"})
+    steps = [p["label"] for e, p in _parse_sse(r.text) if e == "step"]
+    assert steps == ["Thinking through your question", "Analyzing your data"]
+    for word in ("SQL", "query", "MCP", "SELECT", "sp_receipts"):
+        assert word not in " ".join(steps)
+
+
 def test_stream_error_degrades_gracefully(client, monkeypatch):
     import main
 

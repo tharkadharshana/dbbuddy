@@ -379,7 +379,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
     const slowTimer = setTimeout(() => {
       setMessages(m => m.map(msg =>
         msg.id === thinkMsg.id && msg.loading
-          ? { ...msg, loadingText: 'Complex queries can take a moment...' }
+          ? { ...msg, loadingText: 'Still thinking — going deeper into your data…' }
           : msg
       ))
     }, 10000)
@@ -395,9 +395,8 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
       let data = null
       try {
         data = await embedStreamQuery(q, 'default', thinkMode, currentConvId, {
-          onStep:     p => { if (p.label) patchMsg({ loadingText: p.label }) },
-          onThinking: p => { if (p.text) patchMsg({ loadingText: p.text.slice(0, 140) }) },
-          onToken:    t => {
+          onStep:  p => { if (p.label) patchMsg({ loadingText: p.label }) },
+          onToken: t => {
             sawOutput = true
             setMessages(m => m.map(msg => {
               if (msg.id !== thinkMsg.id) return msg

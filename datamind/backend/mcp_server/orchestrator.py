@@ -30,25 +30,22 @@ from progress import emit as _progress_emit
 from .business_tools import ToolContext, build_business_mcp
 from .llm_tool_calling import call_with_tools
 
-# Human-readable progress labels per tool (SSE 'step' events). Args worth
-# surfacing are formatted in; anything else falls back to the generic label.
+# User-facing progress labels per tool (SSE 'step' events). Deliberately
+# vague and AI-flavored: the user should feel an assistant thinking, never
+# see the mechanics (tool names, report ids, SQL, date params).
 _TOOL_LABELS = {
-    "get_schema": "Reviewing your data structure",
-    "get_sample_rows": "Looking at sample data",
-    "run_select_query": "Running a data query",
-    "get_date_range": "Checking your plan's data window",
-    "list_reports": "Finding the right report",
-    "get_report_metrics": "Reading the {report_id} report ({start_date} to {end_date})",
-    "get_report_detail": "Fetching {report_id} details ({start_date} to {end_date})",
+    "get_schema": "Looking at your business data",
+    "get_sample_rows": "Looking closer at your data",
+    "run_select_query": "Analyzing your data",
+    "get_date_range": "Checking your data coverage",
+    "list_reports": "Thinking about the best way to answer",
+    "get_report_metrics": "Analyzing your business performance",
+    "get_report_detail": "Gathering the details",
 }
 
 
 def _tool_step_label(name: str, arguments: dict) -> str:
-    template = _TOOL_LABELS.get(name, f"Using {name}")
-    try:
-        return template.format(**(arguments or {}))
-    except (KeyError, IndexError):
-        return template.split("{")[0].strip() or f"Using {name}"
+    return _TOOL_LABELS.get(name, "Working on your answer")
 
 
 class NoQueryExecuted(Exception):
@@ -146,9 +143,10 @@ async def answer_business_question(
 
         for _ in range(max_iterations):
             turn = call_with_tools(llm, messages, tools, api_key, user_email)
-            if turn.text and turn.tool_calls:
-                # Model reasoning between tool calls — streamed as 'thinking'.
-                _progress_emit("thinking", {"text": turn.text.strip()})
+            # NOTE: the model's between-tool-call reasoning (turn.text) is
+            # deliberately NOT streamed — it narrates tool mechanics ("I'll
+            # check the sales_summary report...") which the user must never
+            # see. The curated step labels below are the visible narrative.
             if not turn.tool_calls:
                 break
 
