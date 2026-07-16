@@ -4,7 +4,7 @@ import { Spinner, UsageMeter } from '../components/UI'
 import Logo from '../components/Logo'
 import Markdown from '../components/Markdown'
 import ResultChart from '../components/ResultChart'
-import { formatCurrency, formatNumber } from '../utils/locale'
+import { formatCurrency, formatNumber, isMoneyColumn, summarySuffix } from '../utils/locale'
 
 
 const SUGGESTIONS = [
@@ -28,15 +28,14 @@ function TypingDots() {
 }
 
 
-function ResultTable({ columns, data, rowCount }) {
+function ResultTable({ columns, data, rowCount, moneyCols }) {
   const [expanded, setExpanded] = useState(false)
   const visible = expanded ? data : data.slice(0,5)
   const isNum = v => typeof v === 'number'
   const fmt = (col, v) => {
     if (v === null || v === undefined) return <span style={{color:'var(--text3)'}}>—</span>
     if (isNum(v)) {
-      const isCount = col.includes('visit')||col.includes('count')||col.includes('qty')||col.includes('quantity')||col.includes('num_')
-      if (!isCount && (col.includes('revenue')||col.includes('total')||col.includes('amount')||col.includes('price')||col.includes('value')||col.includes('spent')))
+      if (isMoneyColumn(col, moneyCols))
         return <span style={{color:'var(--blue)',fontFamily:'var(--mono)'}}>{formatCurrency(v)}</span>
       if (col.includes('pct')||col.includes('rate')||col.includes('percent'))
         return <span style={{color:v>0?'var(--green)':'var(--red)',fontFamily:'var(--mono)'}}>{v > 0 ? '+' : ''}{v}%</span>
@@ -141,7 +140,7 @@ function Message({ msg, llm }) {
                 */}
                 {msg.data.data?.length > 0 && <>
                   <ResultChart columns={msg.data.columns} data={msg.data.data} />
-                  <ResultTable columns={msg.data.columns} data={msg.data.data} rowCount={msg.data.row_count} />
+                  <ResultTable columns={msg.data.columns} data={msg.data.data} rowCount={msg.data.row_count} moneyCols={msg.data.money_cols} />
                 </>}
               </>
             )}
@@ -285,12 +284,7 @@ export default function ChatPage({
       } else if (!data.success || type === 'error') {
         summary = data.message || 'Something went wrong. Please try again.'
       } else {
-        const numCol = data.columns?.find(c => typeof data.data?.[0]?.[c] === 'number')
-        summary = `Found ${rowCount} result${rowCount !== 1 ? 's' : ''}`
-        if (numCol && data.data?.[0]) {
-          const total = data.data.reduce((s, r) => s + (r[numCol] || 0), 0)
-          summary += ` · Total ${numCol.replace(/_/g, ' ')}: ${formatNumber(total)}`
-        }
+        summary = `Found ${rowCount} result${rowCount !== 1 ? 's' : ''}` + summarySuffix(data)
         if (rowCount === 0) summary = "I couldn't find anything matching that. Try rephrasing or broadening your question."
       }
 

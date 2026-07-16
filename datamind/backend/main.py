@@ -349,6 +349,13 @@ def _base_query_response(**kwargs) -> dict:
         "data_as_of":      kwargs.get("data_as_of", None),
         # False = prose-only answer (advice); frontend hides chart/table/summary.
         "show_data":       kwargs.get("show_data", True),
+        # Column the frontend should total in its "· X" summary suffix (or None),
+        # and whether it's money — so the FE doesn't re-derive column heuristics.
+        "summary_col":     kwargs.get("summary_col", None),
+        "summary_is_money": kwargs.get("summary_is_money", False),
+        # Columns that are monetary (backend _is_money_column) — the frontend
+        # table uses this instead of its own divergent regex.
+        "money_cols":      kwargs.get("money_cols", []),
     }
     if "sql" in kwargs:
         base["sql"] = kwargs["sql"]
@@ -2045,10 +2052,19 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
         _charge_op(user["email"], "nl_query_rows", len(data))
 
         # ── Answer narrative ──────────────────────────────────────────────────
-        # Smart-answers: always generate an analyst answer for a data query.
-        # Legacy: only the restricted Think-Mode narrator, and only if requested.
+        # Advisory answers ("how do I grow") route to data_query and a generic SQL
+        # runs for context — but that query may return 0 rows, and an advice answer
+        # must NOT depend on whether it did. So advice/forecast/trend always get the
+        # analyst pass (data is context, possibly empty); lookups only when rows
+        # came back. This fixes the "Found 0 results." inconsistency on advice.
+        _intent = (classification.get("intent") or "lookup") if _SMART_ANSWERS_ENABLED else "lookup"
+        _show_data = _intent != "advice"
         analysis = None
-        if data and (_SMART_ANSWERS_ENABLED or req.think_mode):
+        _want_analysis = (
+            (_SMART_ANSWERS_ENABLED and (bool(data) or _intent in ("advice", "forecast", "trend")))
+            or (req.think_mode and bool(data))
+        )
+        if _want_analysis:
             steps.append({"label": "Analyzing results", "status": "running"})
             try:
                 if _SMART_ANSWERS_ENABLED:
@@ -2177,12 +2193,12 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
                 except Exception as _age_err:
                     log.debug("Staleness note skipped", error=str(_age_err))
 
-        # Advisory answers ("how do I grow", marketing strategy) are prose-only:
-        # a generic query still ran for context, but the chart/table/summary would
-        # be unrelated to the question, so tell the frontend to hide them. Intent
-        # is only emitted under smart answers; default to showing data otherwise.
-        _intent = (classification.get("intent") or "lookup") if _SMART_ANSWERS_ENABLED else "lookup"
-        _show_data = _intent != "advice"
+        # Backend picks the column to total in the "· X" summary (money → count →
+        # none) and whether it's money, so the frontend renders one consistent
+        # suffix instead of re-deriving its own (divergent) first-numeric logic.
+        _sum_col = _pick_summary_column(columns, data[0]) if data else None
+        # _show_data (computed above with _intent): advice answers are prose-only,
+        # so the frontend hides the unrelated chart/table/summary.
         response = _base_query_response(
             success=True, type="data",
             steps=steps,
@@ -2190,6 +2206,9 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
             analysis=analysis, think_mode=req.think_mode,
             conversation_id=conv_id, data_as_of=nl_last_sync_at,
             show_data=_show_data,
+            summary_col=_sum_col,
+            summary_is_money=bool(_sum_col and _is_money_column(_sum_col)),
+            money_cols=[c for c in columns if _is_money_column(c)],
         )
         # Only own-DB users get the generated SQL back (used by QueryPage's
         # "Show SQL" debugging view). Integration users query shared internal

@@ -23,6 +23,14 @@ def test_show_data_defaults_true():
 def test_show_data_can_be_false():
     assert main._base_query_response(type="data", show_data=False)["show_data"] is False
 
+def test_summary_and_money_cols_fields_present():
+    r = main._base_query_response(type="data")
+    assert r["summary_col"] is None and r["summary_is_money"] is False and r["money_cols"] == []
+    r2 = main._base_query_response(type="data", summary_col="net_sales",
+                                   summary_is_money=True, money_cols=["net_sales"])
+    assert r2["summary_col"] == "net_sales" and r2["summary_is_money"] is True
+    assert r2["money_cols"] == ["net_sales"]
+
 
 # ── classifier preserves the intent field ────────────────────────────────────
 
