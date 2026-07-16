@@ -96,6 +96,34 @@ _SENSITIVE_COL_RE = re.compile(
 # ID columns are stripped from results in _run_sql instead (main.py).
 _SP_INTERNAL_COLS = frozenset({"tenant_id", "synced_at"})
 
+# Result-row hygiene shared by every path that returns rows to the user (SQL
+# results, MCP SQL tools, MCP report tools): surrogate keys and raw POS
+# internal fields are meaningless to a business user and must never surface,
+# whether they came from our own DB schema or straight off the report API's
+# JSON (which carries fields like 'key'/'app_key'/terminal ids that have no
+# equivalent in our sp_* schema, so _ID_COL_RE below is the only guard on them).
+_ID_COL_RE = re.compile(r'^id$|_id$', re.IGNORECASE)
+_REPORT_API_INTERNAL_COLS = frozenset({
+    "key", "app_key", "terminal_key", "device_id", "invoice_key",
+    "master_username", "user_name", "tenant_id", "synced_at",
+})
+
+
+def strip_internal_fields(rows: list) -> list:
+    """Remove surrogate-id, sensitive, and internal-plumbing columns from a
+    list of result dicts — used for both DB query results and raw report-API
+    rows before they reach the user or the model's final answer."""
+    if not rows:
+        return rows
+    hidden = _REPORT_API_INTERNAL_COLS
+    out = []
+    for row in rows:
+        out.append({
+            k: v for k, v in row.items()
+            if k not in hidden and not _ID_COL_RE.search(k) and not _SENSITIVE_COL_RE.search(k)
+        })
+    return out
+
 def _filter_sensitive_schema(schemas: Dict[str, Any]) -> Dict[str, Any]:
     """
     Strip columns before the schema is sent to an external LLM provider:

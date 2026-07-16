@@ -67,6 +67,34 @@ def test_ratio_none_when_denominator_zero():
     assert out["avg_receipt_value"] is None
 
 
+# ── _is_empty_row / dimensional row hygiene ──────────────────────────────────
+
+def test_empty_row_all_zero_dropped():
+    assert answer._is_empty_row({"name": "Ghost Product", "qty": 0, "net_sale": 0.0})
+
+
+def test_empty_row_all_none_dropped():
+    assert answer._is_empty_row({"name": "Ghost Product", "qty": None, "net_sale": None})
+
+
+def test_empty_row_no_metrics_dropped():
+    assert answer._is_empty_row({"name": "Ghost Product"})
+
+
+def test_nonempty_row_kept():
+    assert not answer._is_empty_row({"name": "Real Product", "qty": 3, "net_sale": 0.0})
+
+
+def test_merge_dim_rows_drops_zero_activity_products():
+    report = REPORTS["sales_by_products"]
+    facts = [
+        ("2026-06", "coffee", "Coffee", {"qty": 10, "net_sale": 500.0}),
+        ("2026-06", "ghost", "Ghost Product", {"qty": 0, "net_sale": 0.0}),
+    ]
+    rows = answer._merge_dim_rows(report, facts)
+    assert [r["name"] for r in rows] == ["Coffee"]
+
+
 def test_undeclared_metrics_never_combined():
     voucher = REPORTS["voucher_receipts"]          # long-tail: no declarations
     assert not answer._requested_all_combinable(voucher, None, 2)

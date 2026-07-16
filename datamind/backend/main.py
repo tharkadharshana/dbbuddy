@@ -1357,15 +1357,47 @@ def discover(request: Request, user: dict = Depends(current_user)):
 _ID_COLUMN_RE = re.compile(r'^id$|_id$', re.IGNORECASE)
 
 # Column name fragments that indicate a monetary value deserving a currency symbol.
+# NOTE: "total" is deliberately excluded — it appears in count columns too
+# (e.g. total_quantity_sold, total_customers) and caused counts to be rendered
+# as money. Real money words below are unambiguous.
 _MONEY_FRAGMENTS = frozenset({
-    "money", "revenue", "spent", "price", "cost", "total", "amount",
+    "money", "revenue", "spent", "price", "cost", "amount",
     "paid", "discount", "tax", "charge", "value", "sales", "profit",
+})
+
+# Whole tokens that mark a column as a count/quantity — never money, even if it
+# also contains a money word (e.g. "total_sales_qty"). Matched per underscore/
+# camelCase token (not substring) so "discount" isn't mistaken for "count".
+_COUNT_TOKENS = frozenset({
+    "quantity", "qty", "count", "cnt", "units", "unit",
+    "number", "num", "rows", "row",
 })
 
 
 def _is_money_column(col: str) -> bool:
     lower = col.lower()
+    tokens = re.split(r'[^a-z]+', lower)
+    if any(t in _COUNT_TOKENS for t in tokens):
+        return False
     return any(frag in lower for frag in _MONEY_FRAGMENTS)
+
+
+def _pick_summary_column(columns: list, first_row: dict) -> str | None:
+    """Choose the column to total in the "…= X" answer summary suffix.
+    Prefer a money column, then an explicit quantity/count column, else None
+    (skip the suffix rather than summing an arbitrary/ID column). ID columns
+    are already filtered upstream but we never sum them here either."""
+    def _numeric(c):
+        return isinstance(first_row.get(c), (int, float)) and not _ID_COLUMN_RE.search(c)
+    numeric = [c for c in columns if _numeric(c)]
+    money = next((c for c in numeric if _is_money_column(c)), None)
+    if money:
+        return money
+    return next(
+        (c for c in numeric
+         if any(t in _COUNT_TOKENS for t in re.split(r'[^a-z]+', c.lower()))),
+        None,
+    )
 
 
 def _run_think_analysis(question: str, columns: list, data: list,
@@ -1927,9 +1959,7 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
                     "progress — check your integration status, or try again in a few minutes."
                 )
         if columns and data:
-            num_col = next(
-                (c for c in columns if isinstance(data[0].get(c), (int, float))), None
-            )
+            num_col = _pick_summary_column(columns, data[0])
             if num_col:
                 try:
                     total = sum(float(r.get(num_col, 0) or 0) for r in data)

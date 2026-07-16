@@ -23,6 +23,7 @@ from typing import Any, List, Optional
 
 from fastmcp import FastMCP
 
+from llm import strip_internal_fields
 from logger import get_logger
 from report_cache.answer import answer_metric_query
 from report_cache.client import ReportAPIClient
@@ -195,7 +196,10 @@ def build_report_mcp(rctx: ReportToolContext) -> FastMCP:
             if not (payload.get("pagination") or {}).get("has_next_page"):
                 break
             page += 1
-        rows = rows[:ctx.row_limit]
+        # Raw report-API rows carry internal POS fields (terminal/device keys,
+        # surrogate ids) with no business meaning — strip before this reaches
+        # the model's answer or any UI table.
+        rows = strip_internal_fields(rows[:ctx.row_limit])
         _set_last_result(rctx, f"report-detail:{report_id} {start_date}..{end_date}",
                          rows, {})
         return rows

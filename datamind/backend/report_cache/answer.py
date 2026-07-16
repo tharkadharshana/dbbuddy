@@ -90,16 +90,27 @@ def _requested_all_combinable(report, requested, n_periods: int) -> bool:
                for k in requested)
 
 
+def _is_empty_row(row: dict) -> bool:
+    """True if every metric in the row is None/zero — e.g. a product that
+    exists in the tenant's catalog but had no activity in the period. Noise
+    the user never asked for; dropped before the row count reaches them."""
+    values = [v for k, v in row.items() if k != "name"]
+    return not values or all(v is None or v == 0 for v in values)
+
+
 def _merge_dim_rows(report, dim_facts: list, requested=None, top_n=None) -> list:
     """Merge cached dimensional rows across months by dim_key (sum additive,
-    recompute ratios). Returns rows sorted by the first summable metric desc."""
+    recompute ratios). Returns rows sorted by the first summable metric desc,
+    with all-zero/empty rows dropped."""
     by_key = {}
     for _, dim_key, dim_label, metrics in dim_facts:
         by_key.setdefault(dim_key, {"label": dim_label, "parts": []})["parts"].append(metrics)
     rows = []
     for dim_key, entry in by_key.items():
         merged, _ = aggregate(report, entry["parts"], requested)
-        rows.append({"name": entry["label"], **merged})
+        row = {"name": entry["label"], **merged}
+        if not _is_empty_row(row):
+            rows.append(row)
     sort_keys = [m.key for m in report.metrics if m.agg == "sum"]
     if requested:
         sort_keys = [k for k in requested if k in sort_keys] or sort_keys
@@ -140,6 +151,7 @@ def _answer_live(conn, tenant_id, report, start, end, shop_id, cashier, token,
             page += 1
         rows = [{"name": lbl, **m}
                 for _, lbl, m in normalize_dim_rows(report, raw, dec, thou)]
+        rows = [r for r in rows if not _is_empty_row(r)]
         sort_keys = [m.key for m in report.metrics if m.agg == "sum"]
         if sort_keys:
             rows.sort(key=lambda r: r.get(sort_keys[0]) or 0, reverse=True)
