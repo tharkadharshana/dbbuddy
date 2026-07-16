@@ -151,6 +151,12 @@ _MCP_TOOL_CALLING_TEST_EMAILS = {
     e.strip().lower() for e in os.getenv("MCP_TOOL_CALLING_TEST_EMAILS", "").split(",") if e.strip()
 }
 
+# Smart-answers rollout flag (see docs/AI_Answer_Quality_Fix_Plan.md, Phases 1–3).
+# When on: classifier gains an out_of_scope guardrail, routes advice/forecast to
+# data_query instead of refusing, and defaults vague periods; the answer layer
+# reasons like an analyst grounded in the merchant's data. Off = legacy behaviour.
+_SMART_ANSWERS_ENABLED = os.getenv("SMART_ANSWERS_ENABLED", "").lower() == "true"
+
 # Cached name of the session timeout variable for this MySQL/MariaDB server.
 # "max_execution_time" (MySQL 5.7.8+, milliseconds)
 # "max_statement_time"  (MariaDB, seconds)
@@ -1623,6 +1629,7 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
             req.question, table_names_str, llm, api_key, user["email"],
             app_name=_APP_NAME, conversation_history=conv_history,
             language_hint=_classifier_context,
+            smart_answers=_SMART_ANSWERS_ENABLED,
         )
         q_type = classification.get("type", "data_query")
 
@@ -1654,6 +1661,21 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
                 " When querying products, always SELECT sku alongside product_name so the UI can use the short code as a chart label."
             )
         is_integration = s.get("db_configs") is None
+
+        # ── Out of scope (coding / off-topic) — cheap deflection, no DB work ───
+        if q_type == "out_of_scope":
+            from llm import OUT_OF_SCOPE_DEFLECTION
+            response_text = classification.get("response") or OUT_OF_SCOPE_DEFLECTION
+            if conv_id:
+                try:
+                    _conv.save_message(conv_id, "user", req.question)
+                    _conv.save_message(conv_id, "assistant", response_text)
+                except Exception:
+                    pass
+            return _base_query_response(
+                success=True, type="conversational", message=response_text,
+                steps=steps, conversation_id=conv_id, think_mode=req.think_mode,
+            )
 
         # ── Conversational / greeting ─────────────────────────────────────────
         if q_type == "conversational":

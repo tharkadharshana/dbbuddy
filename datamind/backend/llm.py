@@ -514,18 +514,78 @@ def validate_llm_key(llm: str, api_key: str) -> Dict[str, Any]:
 
 # ── Question classification ───────────────────────────────────────────────────
 
+# Categories that get an immediate, cheap prompt-level deflection — NO schema
+# load, SQL generation, or tool loop. Edit this list to add/remove scopes:
+# add a line to widen the guardrail, delete one to let those questions through
+# to the normal (data-grounded) answer path. Keep it to genuinely off-topic
+# asks — general business/economics reasoning is NOT here on purpose; those get
+# a real analytical answer grounded in the merchant's data.
+OUT_OF_SCOPE_SCOPES = [
+    "writing, debugging, or explaining code / programming / scripts (any language), "
+    "including SQL syntax help, regex, and general software-engineering how-tos",
+]
+OUT_OF_SCOPE_DEFLECTION = (
+    "I'm your business data assistant, so I can't help with that — "
+    "but ask me anything about your sales, products, customers, or trends and I'm all yours."
+)
+
+
 def classify_question(
     question: str, table_names: str,
     llm: str, api_key: str, user_email: str,
     app_name: str = "DataMind",
     conversation_history: str = "",
     language_hint: str = "",
+    smart_answers: bool = False,
 ) -> dict:
     """
     Classify the user question to determine handling strategy.
     Returns a dict with 'type' and type-specific fields.
     Falls back to {"type": "data_query"} if classification fails.
     """
+    if smart_answers:
+        scope_lines = "".join(f"  - {s}\n" for s in OUT_OF_SCOPE_SCOPES)
+        out_of_scope_block = (
+            '{"type":"out_of_scope","response":"..."} — the question is NOT about the '
+            "merchant's own business data and falls into one of these off-topic scopes:\n"
+            f"{scope_lines}"
+            "Return a short, friendly one-line deflection as the response. "
+            "IMPORTANT: business, sales, economics, and strategy questions are NOT out_of_scope even when "
+            "they invoke general knowledge — e.g. 'how could the world economy affect my sales', "
+            "'what should I do to grow', 'is now a good time to raise prices' are all data_query (the "
+            "assistant answers them analytically using the merchant's own numbers plus general reasoning).\n"
+        )
+        unsupported_block = (
+            '{"type":"unsupported_query","response":"..."} — ONLY when the answer needs external data the '
+            "database simply does not contain: competitor data, weather, or city-wide/industry market data. "
+            "Do NOT use this for advice ('what should I do', 'how do I increase sales'), for simple "
+            "forecasting/trend questions ('what will next month look like', 'am I trending up'), or for any "
+            "question with a time filter — those are all data_query. "
+            "Respond by explaining what CAN be shown instead.\n"
+        )
+        clarification_block = (
+            '{"type":"clarification_needed","clarification":"..."} — use ONLY when the metric itself is '
+            "missing or ambiguous (e.g. 'show me the good ones', 'how are things') so no sensible SQL can be "
+            "written. Do NOT ask for a time period — a data question with no explicit period is still a "
+            "data_query; a sensible default window is applied automatically. "
+        )
+    else:
+        out_of_scope_block = ""
+        unsupported_block = (
+            '{"type":"unsupported_query","response":"..."} — ONLY use this when the question requires data that '
+            "genuinely cannot come from the database: future predictions (next month/next year), "
+            "external market data, competitor data, weather, or city-wide/industry trends. "
+            "NEVER use this for questions with time filters like 'this month', 'this week', 'today', "
+            "'last 30 days', 'so far this year' — those are valid data_query questions that filter "
+            "existing records by date. "
+            "Respond helpfully by explaining what CAN be shown instead "
+            "(e.g. 'I can't predict next month, but I can show you historical top sellers by month — would that help?').\n"
+        )
+        clarification_block = (
+            '{"type":"clarification_needed","clarification":"..."} — the question is about data but too vague to answer; '
+            "ask ONE specific clarifying question. "
+        )
+
     system = (
         "You are a data assistant classifier. Respond ONLY with valid JSON — no markdown, no explanation.\n"
         "Classify the question into exactly one type:\n"
@@ -535,16 +595,10 @@ def classify_question(
         '{"type":"multi_step","sub_questions":["q1","q2"]} — clearly contains 2+ separate data queries; '
         "only use this when two or more genuinely distinct SQL queries are needed\n"
 
-        '{"type":"unsupported_query","response":"..."} — ONLY use this when the question requires data that '
-        "genuinely cannot come from the database: future predictions (next month/next year), "
-        "external market data, competitor data, weather, or city-wide/industry trends. "
-        "NEVER use this for questions with time filters like 'this month', 'this week', 'today', "
-        "'last 30 days', 'so far this year' — those are valid data_query questions that filter "
-        "existing records by date. "
-        "Respond helpfully by explaining what CAN be shown instead "
-        "(e.g. 'I can't predict next month, but I can show you historical top sellers by month — would that help?').\n"
+        + out_of_scope_block
+        + unsupported_block
 
-        '{"type":"conversational","response":"..."} — greeting, small talk, thank-you, or a request to '
+        + '{"type":"conversational","response":"..."} — greeting, small talk, thank-you, or a request to '
         "modify/delete/create data (INSERT/UPDATE/DELETE/DROP/TRUNCATE/ALTER). "
         f"For harmful/destructive requests respond with a polite refusal as {app_name}. "
         "Also use this type when: "
@@ -554,9 +608,8 @@ def classify_question(
         "context provided in these instructions, do NOT deflect or say 'I'm a data assistant'; "
         f"for all other conversational cases respond as {app_name}, a friendly AI data assistant.\n"
 
-        '{"type":"clarification_needed","clarification":"..."} — the question is about data but too vague to answer; '
-        "ask ONE specific clarifying question. "
-        "IMPORTANT RULE: if the conversation history shows the last assistant message was already a clarification "
+        + clarification_block
+        + "IMPORTANT RULE: if the conversation history shows the last assistant message was already a clarification "
         "question and the user has now given ANY response (even a single word like 'sales', 'any', a category name, "
         "or a number), do NOT return clarification_needed again — instead reconstruct the full original intent from "
         "history combined with the user's answer, and return data_query.\n"
@@ -580,7 +633,7 @@ def classify_question(
         if raw.startswith("```"):
             raw = re.sub(r"^```[a-z]*\n?", "", raw).rstrip("`").strip()
         result = json.loads(raw)
-        if result.get("type") not in ("data_query", "multi_step", "conversational", "clarification_needed", "unsupported_query"):
+        if result.get("type") not in ("data_query", "multi_step", "conversational", "clarification_needed", "unsupported_query", "out_of_scope"):
             return {"type": "data_query"}
         return result
     except Exception as _e:
