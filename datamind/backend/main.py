@@ -1942,6 +1942,10 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
         # instead of one blind SQL guess. Falls back to the legacy one-shot
         # path below on ANY failure so this is never a single point of failure.
         sql = columns = data = None
+        # When report tools run, the plan-window upsell is owned by that layer
+        # (report_tools._plan_limit_error + report_system_prompt). Track it so the
+        # answer layer's over_range upsell doesn't double-message (Round 2 Part 5).
+        _report_tools_active = False
         if _MCP_TOOL_CALLING_ENABLED and (
             not _MCP_TOOL_CALLING_TEST_EMAILS or user["email"].lower() in _MCP_TOOL_CALLING_TEST_EMAILS
         ):
@@ -1972,6 +1976,7 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
                     try:
                         from mcp_server.report_tools import load_report_context
                         report_ctx = load_report_context(conn, nl_tenant_id, tool_ctx)
+                        _report_tools_active = report_ctx is not None
                     except Exception as _rc_err:
                         log.warning("Report tool context unavailable",
                                     user=user["email"], error=str(_rc_err))
@@ -2073,6 +2078,10 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
                     # N days" claim could overstate an all-time own-DB result.
                     if nl_tenant_id:
                         _period_label, _plan_tier, _over_range = _derive_period(req.question, history)
+                        # Avoid double-upsell: report tools already own the
+                        # plan-window message when they're active.
+                        if _report_tools_active:
+                            _over_range = False
                     else:
                         _period_label, _plan_tier, _over_range = "", "", False
                     # Real token streaming only when someone's listening (SSE);

@@ -34,6 +34,9 @@ log = get_logger(__name__)
 _MAX_PAGES = int(os.getenv("REPORT_API_MAX_PAGE_CAP", "50"))
 _CALL_GAP = float(os.getenv("REPORT_CACHE_MIN_CALL_INTERVAL", "1.0"))
 _BACKFILL_MONTHS_CAP = int(os.getenv("REPORT_CACHE_BACKFILL_MONTHS_CAP", "24"))
+# Trailing closed months re-fetched on each backfill run to catch late
+# refunds/voids that mutate an already-closed month (C4 re-finalization).
+_REFINALIZE_MONTHS = int(os.getenv("REPORT_CACHE_REFINALIZE_MONTHS", "2"))
 
 
 # ── periods ──────────────────────────────────────────────────────────────────
@@ -101,14 +104,16 @@ def is_month_cached(conn, tenant_id: str, report_id: str, ym: str,
 
 
 def ingest_month(conn, tenant_id: str, report_id: str, ym: str, token: str,
-                 number_format=None) -> str:
+                 number_format=None, force: bool = False) -> str:
     """Cache one closed month of one report. Returns 'cached'|'skipped'.
-    Caller owns the connection; this commits on success."""
+    Caller owns the connection; this commits on success.
+    force=True re-fetches an already-final month (trailing re-finalization to
+    catch late refunds/voids)."""
     report = REPORTS[report_id]
     today = date.today()
     if month_end(ym) >= today:
         raise ValueError(f"Month {ym} is not closed yet — current periods are answered live.")
-    if is_month_cached(conn, tenant_id, report_id, ym):
+    if not force and is_month_cached(conn, tenant_id, report_id, ym):
         return "skipped"
 
     dec, thou = separators(number_format)
@@ -167,6 +172,9 @@ def backfill(tenant_id: str, token: str, months: int) -> dict:
     first run. Returns {cached, skipped, failed} counts."""
     months = min(int(months or 3), _BACKFILL_MONTHS_CAP)
     stats = {"cached": 0, "skipped": 0, "failed": 0}
+    # The most-recent closed months are re-fetched even if already final, to
+    # catch late refunds/voids that mutate a closed month (C4 re-finalization).
+    trailing = set(closed_months(min(_REFINALIZE_MONTHS, months)))
     conn = get_internal_conn()
     try:
         cursor = conn.cursor(dictionary=True)
@@ -177,7 +185,8 @@ def backfill(tenant_id: str, token: str, months: int) -> dict:
         for ym in closed_months(months):
             for report_id in CORE_REPORTS:
                 try:
-                    result = ingest_month(conn, tenant_id, report_id, ym, token, nf)
+                    result = ingest_month(conn, tenant_id, report_id, ym, token, nf,
+                                          force=(ym in trailing))
                     stats[result] += 1
                     if result == "cached":
                         time.sleep(_CALL_GAP)
@@ -208,4 +217,46 @@ def start_backfill_async(tenant_id: str, token: str, months: int) -> bool:
                 _inflight.discard(tenant_id)
 
     threading.Thread(target=_run, name=f"report-backfill-{tenant_id}", daemon=True).start()
+    return True
+
+
+def warm_months_async(tenant_id: str, report_id: str, ym_list: list, token: str,
+                      number_format=None) -> bool:
+    """Background-cache specific closed months for one report — used by the
+    answer path when a cached range has gaps, so the chat request is answered
+    LIVE now and the cache is populated for next time (never fetched inline).
+    Deduped per tenant per process; runs on a daemon thread."""
+    ym_list = [ym for ym in (ym_list or [])]
+    if not ym_list or not token:
+        return False
+    with _inflight_lock:
+        if tenant_id in _inflight:
+            return False
+        _inflight.add(tenant_id)
+
+    def _run():
+        conn = get_internal_conn()
+        try:
+            nf = number_format
+            if nf is None:
+                cur = conn.cursor(dictionary=True)
+                cur.execute("SELECT number_format FROM tenant_profile WHERE tenant_id=%s",
+                            (tenant_id,))
+                r = cur.fetchone()
+                nf = r["number_format"] if r else None
+            for ym in ym_list:
+                try:
+                    ingest_month(conn, tenant_id, report_id, ym, token, nf)
+                    time.sleep(_CALL_GAP)
+                except Exception as e:
+                    log.warning("Async month warm failed", tenant=tenant_id,
+                                report=report_id, month=ym, error=str(e))
+        except Exception as e:
+            log.error("Month warm crashed", tenant=tenant_id, error=str(e))
+        finally:
+            conn.close()
+            with _inflight_lock:
+                _inflight.discard(tenant_id)
+
+    threading.Thread(target=_run, name=f"report-warm-{tenant_id}", daemon=True).start()
     return True

@@ -184,5 +184,51 @@ def test_unknown_report_raises():
         answer.answer_metric_query(None, "t", "nope", TODAY, TODAY)
 
 
+# ── cache-vs-live parity eval (Round 2 Issue D) ──────────────────────────────
+# Trust check for cached quarterly/annual aggregates: summing per-month cached
+# facts must equal what a single live whole-range fetch would return. This is
+# doc-09 Part 8's parity eval at the aggregation boundary (no live network call).
+
+def test_cache_vs_live_parity_additive():
+    months = [
+        {"receipt_count": 10, "total_sum": 100.0},
+        {"receipt_count": 30, "total_sum": 500.0},
+        {"receipt_count":  5, "total_sum":  50.0},
+    ]
+    cache_out, dropped = answer.aggregate(
+        RECEIPTS, months, ["receipt_count", "total_sum", "avg_receipt_value"])
+    # A live whole-range summary would report these exact totals:
+    live_receipts, live_total = 45, 650.0
+    assert cache_out["receipt_count"] == live_receipts        # additive sum
+    assert cache_out["total_sum"] == live_total               # additive sum
+    # ratio recomputed from summed num/den (rounded to 4dp, as both paths do)
+    assert cache_out["avg_receipt_value"] == round(live_total / live_receipts, 4)
+    assert dropped == []                                      # nothing lost
+
+def test_cache_vs_live_parity_non_additive_never_summed():
+    # distinct-customer counts can't be summed across months — they must be
+    # dropped (never silently mis-summed), which routes the answer live instead.
+    out, dropped = answer.aggregate(
+        RECEIPTS, [{"total_customers": 17}, {"total_customers": 12}], ["total_customers"])
+    assert dropped == ["total_customers"] and "total_customers" not in out
+
+
+def test_cache_gap_answers_live_not_inline(monkeypatch):
+    """C5: a range with an uncached month must answer LIVE (never fetch the
+    month inline in the request) and kick a background warm."""
+    warmed = {"called": False}
+    monkeypatch.setattr(answer, "warm_months_async",
+                        lambda *a, **k: warmed.__setitem__("called", True) or True)
+    monkeypatch.setattr(answer, "is_month_cached", lambda *a, **k: False)  # cache cold
+    monkeypatch.setattr(answer, "_answer_live",
+                        lambda *a, **k: {"metrics": {}, "rows": [], "source": "live"})
+    # closed multi-month all-shops range that WOULD use cache if warm
+    end = answer.last_closed_day(TODAY)
+    start = end.replace(day=1)
+    out = answer.answer_metric_query(None, "t", "receipts", start, end,
+                                     token="tok", metrics=["receipt_count"])
+    assert out["source"] == "live" and warmed["called"] is True
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

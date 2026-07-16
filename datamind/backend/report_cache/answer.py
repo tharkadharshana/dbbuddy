@@ -27,7 +27,7 @@ from logger import get_logger
 
 from . import read
 from .client import ReportAPIClient
-from .ingest import ingest_month, is_month_cached, month_end
+from .ingest import is_month_cached, month_end, warm_months_async
 from .normalize import normalize_dim_rows, normalize_metrics, separators
 from .registry import REPORTS
 
@@ -177,16 +177,14 @@ def _answer_live(conn, tenant_id, report, start, end, shop_id, cashier, token,
         result = {"metrics": metrics, "rows": []}
 
     # Write-through: an exact closed calendar month for all shops is cacheable.
+    # Warm it in the BACKGROUND (never inline) so this live answer returns now
+    # and the month is cached for the next identical ask.
     if (shop_id in (None, "all") and not cashier and report.cacheable
             and start.day == 1 and start.replace(day=1) == end.replace(day=1)
             and end == month_end(f"{start.year:04d}-{start.month:02d}")
             and end < date.today().replace(day=1)):
         ym = f"{start.year:04d}-{start.month:02d}"
-        try:
-            ingest_month(conn, tenant_id, report.id, ym, token, number_format)
-        except Exception as e:
-            log.warning("Write-through cache failed", tenant=tenant_id,
-                        report=report.id, month=ym, error=str(e))
+        warm_months_async(tenant_id, report.id, [ym], token, number_format)
 
     result.update({"report_id": report.id, "start_date": start.isoformat(),
                    "end_date": end.isoformat(), "source": "live",
@@ -224,16 +222,18 @@ def answer_metric_query(conn, tenant_id: str, report_id: str, start: date,
         return _answer_live(conn, tenant_id, report, start, end, shop_id,
                             cashier, token, number_format, metrics, top_n)
 
-    # ── cache path: ensure coverage (write-through), then read + aggregate ──
+    # ── cache path ────────────────────────────────────────────────────────────
+    # If any month in the range isn't cached, do NOT fetch it inline — a
+    # multi-month × paged fetch (with rate-limit sleeps) would time out the chat
+    # request. Answer LIVE for the whole range now (one API call, server-side
+    # aggregation) and warm the missing months in the background for next time.
     missing = [ym for ym in ym_list if not is_month_cached(conn, tenant_id, report_id, ym)]
-    for ym in missing:
-        if not token:
-            raise ValueError(
-                f"Month {ym} isn't cached yet and there is no active POS session "
-                "to fetch it. Try a range within the cached months.")
-        ingest_month(conn, tenant_id, report_id, ym, token, number_format)
+    if missing:
+        warm_months_async(tenant_id, report_id, missing, token, number_format)
+        return _answer_live(conn, tenant_id, report, start, end, shop_id,
+                            cashier, token, number_format, metrics, top_n)
 
-    source = "cache" if not missing else "cache+live"
+    source = "cache"
     if report.kind == "dimensional":
         dim_facts = read.read_dim_facts(conn, tenant_id, report_id, ym_list)
         rows = _merge_dim_rows(report, dim_facts, metrics, top_n)
