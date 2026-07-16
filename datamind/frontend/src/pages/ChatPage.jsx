@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { runNLQuery, createConversation, getConversationMessages, getErrorMessage } from '../utils/api'
+import { runNLQuery, streamNLQuery, createConversation, getConversationMessages, getErrorMessage } from '../utils/api'
 import { Spinner, UsageMeter } from '../components/UI'
 import Logo from '../components/Logo'
+import Markdown from '../components/Markdown'
 import { formatCurrency, formatNumber } from '../utils/locale'
 
 const TT = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)', borderRadius:8, fontSize:12, color:'#f0f1fa' }
@@ -161,7 +162,7 @@ function Message({ msg, llm }) {
                 <div style={{ fontSize:11, fontWeight:600, color:'var(--blue)', textTransform:'uppercase', letterSpacing:'.06em', marginBottom:6 }}>
                   🧠 Think Mode
                 </div>
-                {msg.analysis.replace(/\*\*/g, '').replace(/\*/g, '').replace(/_{2}/g, '').replace(/_/g, '')}
+                <Markdown text={msg.analysis} />
               </div>
             )}
 
@@ -294,7 +295,33 @@ export default function ChatPage({
     }, 10000)
 
     try {
-      const data = await runNLQuery(q, llm, thinkMode, currentConvId)
+      // Streaming first: live progress + the analyst answer as it arrives.
+      // Falls back to the plain endpoint when streaming is disabled server-side
+      // (404) or the stream dies before producing any output.
+      const patchMsg = (patch) => setMessages(m => m.map(msg =>
+        msg.id === thinkMsg.id ? { ...msg, ...patch } : msg
+      ))
+      let sawOutput = false
+      let data = null
+      try {
+        data = await streamNLQuery(q, llm, thinkMode, currentConvId, {
+          onStep:  p => { if (p.label) patchMsg({ loadingText: p.label }) },
+          onToken: t => {
+            sawOutput = true
+            setMessages(m => m.map(msg => {
+              if (msg.id !== thinkMsg.id) return msg
+              const acc = (msg.streamText || '') + t
+              return { role: 'ai', id: thinkMsg.id, content: '', analysis: acc, streamText: acc }
+            }))
+          },
+        })
+      } catch (se) {
+        data = null   // stream failed — fall back below
+      }
+      // Re-run via the plain endpoint only if the stream produced nothing —
+      // never after tokens were shown (that would double-charge the question).
+      if (!data && !sawOutput) data = await runNLQuery(q, llm, thinkMode, currentConvId)
+      if (!data) data = { success: false, type: 'error', message: 'The connection dropped mid-answer. Please try again.' }
       const rowCount = data.row_count
       const type     = data.type
       let summary

@@ -15,6 +15,7 @@ import { notifyParent } from './EmbedApp'
 import EmbedHistoryDrawer from './EmbedHistoryDrawer'
 import { appName, productTitle as resolveProductTitle } from './embedBranding'
 import Logo from '../components/Logo'
+import Markdown from '../components/Markdown'
 
 const TT = {
   background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)',
@@ -243,7 +244,7 @@ function Message({ msg, theme }) {
                 <div style={{ fontSize:10, fontWeight:600, color:'var(--blue)', textTransform:'uppercase', letterSpacing:'.06em', marginBottom:5 }}>
                   🧠 Think Mode
                 </div>
-                {msg.analysis.replace(/\*\*/g, '').replace(/\*/g, '').replace(/_{2}/g, '').replace(/_/g, '')}
+                <Markdown text={msg.analysis} />
               </div>
             )}
 
