@@ -169,7 +169,11 @@ export default function ChatPage({
   // Used to distinguish "sidebar selected a different conversation" (should reload
   // messages) from "send() just created this conversation" (must NOT reload —
   // that would wipe the in-flight thinking bubble).
-  const localConvIdRef = useRef(convId)
+  // Starts at null (NOT convId) even when the URL already names a conversation —
+  // otherwise the guard below sees activeConvId === ref on the very first render
+  // and skips the initial load, leaving messages empty despite a valid deep link
+  // (e.g. refreshing on /chat/<uuid>).
+  const localConvIdRef = useRef(null)
 
   // When the parent navigates to a different conversation (sidebar click), load it.
   // Guard: skip if activeConvId matches the conversation we already own locally —
@@ -233,7 +237,10 @@ export default function ChatPage({
         currentConvId = newId
         localConvIdRef.current = newId  // claim ownership before notifying parent
         setConvId(newId)
-        onConvCreated?.()  // parent only refreshes list — does NOT setActiveConvId
+        // Ownership (localConvIdRef) is already claimed above, so the parent
+        // setting activeConvId=newId (to update the URL for refresh-persistence)
+        // matches what we already own — ChatPage's reload-guard effect no-ops.
+        onConvCreated?.(newId)
       } catch {
         // If creation fails, continue without conversation memory (graceful degradation)
         currentConvId = null

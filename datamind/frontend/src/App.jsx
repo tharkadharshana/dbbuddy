@@ -15,11 +15,26 @@ import Sidebar           from './components/Sidebar'
 import UsageLimitBanner  from './components/UsageLimitBanner'
 import { fetchTables, fetchCacheStatus, fetchSettings, fetchConnectedProviders, fetchProviderStats, fetchSubscription, listConversations, ssoLogin } from './utils/api'
 
+// URL <-> page/conversation sync so a refresh (or bookmark/back-forward) lands
+// back where the user was, instead of always resetting to a blank new chat.
+// Plain History API — no react-router — the rest of the app already navigates
+// via onNavigate(page) callbacks, not <Link>/useNavigate, so a full router
+// migration would be a much bigger diff for the same result.
+const KNOWN_PAGES = ['chat', 'discover', 'forecast', 'anomaly', 'reports', 'connections', 'settings', 'billing', 'docs']
+
+function parseLocation() {
+  const [first, second] = window.location.pathname.split('/').filter(Boolean)
+  if (first && KNOWN_PAGES.includes(first)) {
+    return { page: first, convId: first === 'chat' && second ? second : null }
+  }
+  return { page: 'chat', convId: null }
+}
+
 export default function App() {
   const [user, setUser]       = useState(() => {
     try { return JSON.parse(localStorage.getItem('dm_user')) } catch { return null }
   })
-  const [page, setPage]       = useState('chat')
+  const [page, setPage]       = useState(() => parseLocation().page)
   const [llm, setLlm]         = useState('openai')
   const [cacheStatus, setCacheStatus] = useState(null)
   const [connection, setConnection]   = useState(null) // active connection summary
@@ -29,7 +44,30 @@ export default function App() {
   const [sub, setSub]             = useState(null)
   const [hasDB, setHasDB]         = useState(false)
   const [conversations, setConversations]   = useState([])
-  const [activeConvId, setActiveConvId]     = useState(null)
+  const [activeConvId, setActiveConvId]     = useState(() => parseLocation().convId)
+
+  // Push/replace the URL to match a page (+ conversation) change. Use this
+  // instead of setPage/setActiveConvId directly so the address bar and
+  // history stack stay in sync with in-app navigation.
+  function navigate(nextPage, convId = null, { replace = false } = {}) {
+    setPage(nextPage)
+    setActiveConvId(convId)
+    const path = nextPage === 'chat' && convId ? `/chat/${convId}` : `/${nextPage}`
+    if (window.location.pathname !== path) {
+      window.history[replace ? 'replaceState' : 'pushState']({ page: nextPage, convId }, '', path)
+    }
+  }
+
+  // Back/forward buttons — resync state from the URL the browser navigated to.
+  useEffect(() => {
+    function onPopState() {
+      const { page: p, convId } = parseLocation()
+      setPage(p)
+      setActiveConvId(convId)
+    }
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [])
   const [ssoPending, setSsoPending] = useState(() => new URLSearchParams(window.location.search).has('sso'))
   const ssoHandledRef = useRef(false)
   const subIntervalRef = useRef(null)
@@ -147,7 +185,8 @@ export default function App() {
     localStorage.removeItem('dm_token')
     localStorage.removeItem('dm_user')
     if (pollRef.current) clearInterval(pollRef.current)
-    setUser(null); setConnection(null); setCacheStatus(null); setPage('chat')
+    setUser(null); setConnection(null); setCacheStatus(null)
+    navigate('chat', null, { replace: true })
   }
 
   if (ssoPending) {
@@ -174,33 +213,36 @@ export default function App() {
   const noScroll = ['chat', 'discover', 'reports'].includes(page)
 
   const handleConvSelect = (convId) => {
-    setActiveConvId(convId)
-    setPage('chat')
+    navigate('chat', convId)
   }
 
-  const handleConvCreated = () => {
-    // Only refresh the sidebar list — do NOT setActiveConvId here.
-    // ChatPage manages its own convId internally during an active send().
-    // Calling setActiveConvId would change the prop, trigger the useEffect
-    // inside ChatPage, and wipe the in-flight "thinking…" message.
+  const handleConvCreated = (convId) => {
+    // Update the URL to the newly created conversation so a refresh lands back
+    // on it — replace (not push) since this is the same user turn that was
+    // already sitting on plain /chat, not a new navigation action. Safe to set
+    // activeConvId here too: ChatPage's send() already claimed
+    // localConvIdRef.current = newId BEFORE calling this, so the prop change
+    // matches what ChatPage already owns and its reload-guard no-ops.
+    if (convId) navigate('chat', convId, { replace: true })
+    else navigate('chat', null, { replace: true })   // "Clear conversation"
     loadConversations()
   }
 
   const handleConvDeleted = (convId) => {
-    if (activeConvId === convId) setActiveConvId(null)
+    if (activeConvId === convId) navigate('chat', null, { replace: true })
     loadConversations()
   }
 
   const pageEl = {
-    chat:        <ChatPage llm={llm} setLlm={setLlm} connection={connection} sub={sub} onNavigate={setPage}
+    chat:        <ChatPage llm={llm} setLlm={setLlm} connection={connection} sub={sub} onNavigate={navigate}
                            onQueryComplete={loadSub} activeConvId={activeConvId}
                            onConvCreated={handleConvCreated} onConversationChange={loadConversations} />,
-    discover:    <DiscoverPage llm={llm} setLlm={setLlm} sub={sub} hasDB={hasDB} onNavigate={setPage} onQueryComplete={loadSub} />,
-    forecast:    <ForecastPage sub={sub} onNavigate={setPage} onQueryComplete={loadSub} />,
-    anomaly:     <AnomalyPage sub={sub} onNavigate={setPage} onQueryComplete={loadSub} />,
-    reports:     <ReportsPage llm={llm} setLlm={setLlm} sub={sub} onNavigate={setPage} onQueryComplete={loadSub} />,
+    discover:    <DiscoverPage llm={llm} setLlm={setLlm} sub={sub} hasDB={hasDB} onNavigate={navigate} onQueryComplete={loadSub} />,
+    forecast:    <ForecastPage sub={sub} onNavigate={navigate} onQueryComplete={loadSub} />,
+    anomaly:     <AnomalyPage sub={sub} onNavigate={navigate} onQueryComplete={loadSub} />,
+    reports:     <ReportsPage llm={llm} setLlm={setLlm} sub={sub} onNavigate={navigate} onQueryComplete={loadSub} />,
     connections: <ConnectionsPage onConnectionChange={checkSetup} sub={sub} />,
-    settings:    <SettingsPage user={user} onLogout={handleLogout} onNavigate={setPage} sub={sub} />,
+    settings:    <SettingsPage user={user} onLogout={handleLogout} onNavigate={navigate} sub={sub} />,
     billing:     <BillingPage onSubChange={loadSub} />,
     docs:        <DocsPage />,
   }[page] ?? <ChatPage llm={llm} setLlm={setLlm} connection={connection} />
@@ -209,7 +251,7 @@ export default function App() {
     <div style={{ display:'flex', height:'100vh', overflow:'hidden', background:'var(--bg)' }}>
       <Sidebar
         active={page}
-        setActive={(p) => { setPage(p); if (p !== 'chat') setActiveConvId(null) }}
+        setActive={(p) => navigate(p, null)}
         connection={connection}
         cacheStatus={cacheStatus}
         totalRows={totalRows}
@@ -218,7 +260,7 @@ export default function App() {
         conversations={conversations}
         activeConvId={activeConvId}
         onConvSelect={handleConvSelect}
-        onConvCreate={() => { setActiveConvId(null); setPage('chat') }}
+        onConvCreate={() => navigate('chat', null)}
         onConvDelete={handleConvDeleted}
       />
       <main style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', minWidth:0 }}>
