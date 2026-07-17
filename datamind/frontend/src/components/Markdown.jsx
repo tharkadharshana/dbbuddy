@@ -4,9 +4,9 @@ import React from 'react'
 // Escape-first: all HTML is escaped BEFORE any transform, so the model's text
 // can never inject raw HTML — then a fixed whitelist of transforms runs.
 // Covers exactly what the answer prompt emits: **bold**, *italic*, `code`,
-// bullet / numbered lists, and paragraphs. No links or images (not emitted,
-// and the riskiest surface), so none are produced. Shared by the main app
-// (ChatPage) and the embed widget (EmbedChat) so both render identically.
+// bullet / numbered lists, GFM pipe tables, and paragraphs. No links or images
+// (not emitted, and the riskiest surface), so none are produced. Shared by the
+// main app (ChatPage) and the embed widget (EmbedChat) so both render identically.
 
 const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
@@ -18,13 +18,30 @@ function inline(text) {
   return t
 }
 
+const _isTableRow = line => /^\s*\|.*\|\s*$/.test(line)
+const _isTableSep  = line => /^\s*\|?(\s*:?-+:?\s*\|)+\s*:?-+:?\s*\|?\s*$/.test(line)
+const _splitRow = line => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim())
+
 export default function Markdown({ text, style }) {
   if (!text) return null
   const blocks = []
   let list = null                               // { type:'ul'|'ol', items:[] }
   const flush = () => { if (list) { blocks.push(list); list = null } }
 
-  for (const line of String(text).split('\n')) {
+  const lines = String(text).split('\n')
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    // GFM table: a "| a | b |" row immediately followed by a "|---|---|" row
+    if (_isTableRow(line) && i + 1 < lines.length && _isTableSep(lines[i + 1])) {
+      flush()
+      const header = _splitRow(line)
+      let j = i + 2
+      const rows = []
+      while (j < lines.length && _isTableRow(lines[j])) { rows.push(_splitRow(lines[j])); j++ }
+      blocks.push({ type: 'table', header, rows })
+      i = j - 1
+      continue
+    }
     const bullet   = line.match(/^\s*[-*•]\s+(.*)$/)
     const numbered = line.match(/^\s*\d+[.)]\s+(.*)$/)
     if (bullet) {
@@ -47,6 +64,31 @@ export default function Markdown({ text, style }) {
         if (b.type === 'p')
           return <p key={i} style={{ margin: '0 0 8px' }}
                     dangerouslySetInnerHTML={{ __html: inline(b.text) }} />
+        if (b.type === 'table')
+          return (
+            <div key={i} style={{ overflowX: 'auto', margin: '4px 0 10px' }}>
+              <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: '0.95em' }}>
+                <thead>
+                  <tr>
+                    {b.header.map((c, k) => (
+                      <th key={k} style={{ textAlign: 'left', padding: '6px 10px', borderBottom: '2px solid var(--border2, #444)', whiteSpace: 'nowrap' }}
+                          dangerouslySetInnerHTML={{ __html: inline(c) }} />
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {b.rows.map((r, ri) => (
+                    <tr key={ri}>
+                      {r.map((c, ci) => (
+                        <td key={ci} style={{ padding: '6px 10px', borderBottom: '1px solid var(--border, #333)' }}
+                            dangerouslySetInnerHTML={{ __html: inline(c) }} />
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
         const items = b.items.map((it, j) =>
           <li key={j} dangerouslySetInnerHTML={{ __html: inline(it) }} />)
         return b.type === 'ul'

@@ -189,17 +189,23 @@ export default function ChatPage({
       .then(res => {
         const loaded = (res.messages || []).map((m, i) => {
           const snap = m.data_snapshot || null
+          const analysis = snap?.analysis || null
+          // Smart answers stores the analyst prose as BOTH the message content
+          // and the snapshot's analysis (so conversation memory has real text) —
+          // rendering both would duplicate it. Only show content separately when
+          // it differs from the analysis (e.g. legacy "Found N results").
+          const content = (analysis && m.content === analysis) ? '' : m.content
           return {
             id:       m.id || i,
             role:     m.role === 'user' ? 'user' : 'ai',
-            content:  m.content,
+            content,
             data: snap ? {
               type:      'data',
               columns:   snap.columns || [],
               data:      snap.rows || [],
               row_count: m.row_count || 0,
             } : null,
-            analysis: snap?.analysis || null,
+            analysis,
           }
         })
         setMessages(loaded)
