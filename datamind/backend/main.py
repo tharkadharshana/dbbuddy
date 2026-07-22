@@ -33,6 +33,7 @@ from llm import (
     list_gemini_models, LLMTransientError,
     classify_question, synthesize_multi_step_answer, fix_currency_symbol,
     rewrite_followup, last_assistant_was_clarification,
+    safety_gate, add_advice_caveat, SAFE_REFUSAL, CODING_DECLINE,
     _filter_sensitive_schema,
 )
 from cache import get_cache, save_cache, invalidate_cache, get_cache_status
@@ -168,10 +169,15 @@ _FOLLOWUP_REWRITE_ENABLED = os.getenv("FOLLOWUP_REWRITE_ENABLED", "").lower() in
 _ANSWER_SANITISER_ENABLED = os.getenv("ANSWER_SANITISER_ENABLED", "").lower() in ("1", "true", "yes")
 # Business-knowledge route (D2 / PLAN_09 S4). Default OFF.
 _BUSINESS_KNOWLEDGE_ENABLED = os.getenv("BUSINESS_KNOWLEDGE_ENABLED", "").lower() in ("1", "true", "yes")
+# Answer-everything: scope->safety inversion (T1 / PLAN_10). Answers general
+# knowledge/strategy/advice by default; refuses on harm only, declines coding.
+# Supersedes BUSINESS_KNOWLEDGE — do not enable both. Default OFF.
+_ANSWER_EVERYTHING_ENABLED = os.getenv("ANSWER_EVERYTHING_ENABLED", "").lower() in ("1", "true", "yes")
 log.info("Conversational-layer flags",
          followup_rewrite=_FOLLOWUP_REWRITE_ENABLED,
          answer_sanitiser=_ANSWER_SANITISER_ENABLED,
-         business_knowledge=_BUSINESS_KNOWLEDGE_ENABLED)
+         business_knowledge=_BUSINESS_KNOWLEDGE_ENABLED,
+         answer_everything=_ANSWER_EVERYTHING_ENABLED)
 
 # Cached name of the session timeout variable for this MySQL/MariaDB server.
 # "max_execution_time" (MySQL 5.7.8+, milliseconds)
@@ -1674,6 +1680,24 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
             message=reason,
         )
 
+    # ── Safety backstop (T4) — always on, deterministic, pre-classification ────
+    # Genuine-harm requests get a plain refusal even if the classifier would miss
+    # them. Cheap regex; tuned to require intent+object so business phrasing is
+    # unaffected. (The advice-caveat side of the gate is applied on the
+    # knowledge/advisory answer paths, not here.)
+    if safety_gate(req.question).get("action") == "refuse":
+        log.info("Safety gate refused request", user=user["email"], question=req.question[:80])
+        if conv_id:
+            try:
+                _conv.save_message(conv_id, "user", req.question)
+                _conv.save_message(conv_id, "assistant", SAFE_REFUSAL)
+            except Exception:
+                pass
+        return _base_query_response(
+            success=True, type="conversational", message=SAFE_REFUSAL,
+            conversation_id=conv_id, think_mode=req.think_mode,
+        )
+
     llm = _effective_llm(user, req.llm)
     log.info("NL query", user=user["email"], llm=llm, question=req.question[:80])
     api_key = _resolve_api_key(user, llm)
@@ -1847,6 +1871,7 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
             language_hint=_classifier_context,
             smart_answers=_SMART_ANSWERS_ENABLED,
             business_knowledge=_BUSINESS_KNOWLEDGE_ENABLED,
+            answer_everything=_ANSWER_EVERYTHING_ENABLED,
         )
         q_type = classification.get("type", "data_query")
 
@@ -1895,6 +1920,62 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
                 " When querying products, always SELECT sku alongside product_name so the UI can use the short code as a chart label."
             )
         is_integration = s.get("db_configs") is None
+
+        # ── Answer-everything routes (T1 / PLAN_10) ───────────────────────────
+        # unsafe -> plain refusal; coding -> polite decline; knowledge -> answer
+        # from the model's own knowledge (with an advice caveat where relevant);
+        # advisory -> the grounded data path (analyst persona reasons over their
+        # figures). Refuse only for harm, decline only coding.
+        if q_type in ("unsafe", "coding"):
+            response_text = classification.get("response") or (
+                SAFE_REFUSAL if q_type == "unsafe" else CODING_DECLINE)
+            if conv_id:
+                try:
+                    _conv.save_message(conv_id, "user", req.question)
+                    _conv.save_message(conv_id, "assistant", response_text)
+                except Exception:
+                    pass
+            return _base_query_response(
+                success=True, type="conversational", message=response_text,
+                steps=steps, conversation_id=conv_id, think_mode=req.think_mode,
+            )
+
+        if q_type == "knowledge":
+            response_text = None
+            try:
+                response_text = _run_knowledge_answer(
+                    nl_question, llm, api_key, user["email"],
+                    currency=nl_currency, extra_hint=profile_hint,
+                )
+                response_text = fix_currency_symbol(response_text, nl_currency)
+                if response_text and safety_gate(nl_question).get("action") == "caveat":
+                    response_text = add_advice_caveat(response_text)
+            except Exception as _ke:
+                log.warning("Knowledge answer failed, falling back to data path",
+                            user=user["email"], error=str(_ke))
+            if not response_text or not response_text.strip():
+                q_type = "data_query"   # fall through to the normal data path
+            else:
+                if conv_id:
+                    try:
+                        _conv.save_message(conv_id, "user", req.question)
+                        _conv.save_message(conv_id, "assistant", response_text)
+                    except Exception:
+                        pass
+                return _base_query_response(
+                    success=True, type="conversational", message=response_text,
+                    steps=steps, conversation_id=conv_id, think_mode=req.think_mode,
+                    show_data=False,
+                )
+
+        if q_type == "advisory":
+            # Grounded strategy: reuse the data path's advice intent so the answer
+            # is reasoned over the merchant's own figures (the analyst pass always
+            # runs for advice, even with 0 rows). Full knowledge+data+web hybrid is
+            # PLAN_10 T3. ponytail: reuse data_query rather than a parallel branch.
+            q_type = "data_query"
+            classification["type"] = "data_query"
+            classification["intent"] = "advice"
 
         # ── Out of scope (coding / off-topic) — cheap deflection, no DB work ───
         if q_type == "out_of_scope":
@@ -2222,17 +2303,20 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
         # must NOT depend on whether it did. So advice/forecast/trend always get the
         # analyst pass (data is context, possibly empty); lookups only when rows
         # came back. This fixes the "Found 0 results." inconsistency on advice.
-        _intent = (classification.get("intent") or "lookup") if _SMART_ANSWERS_ENABLED else "lookup"
+        # ANSWER_EVERYTHING implies the smart analyst answer layer (advisory
+        # answers must reason over the merchant's figures, not dump a table).
+        _smart = _SMART_ANSWERS_ENABLED or _ANSWER_EVERYTHING_ENABLED
+        _intent = (classification.get("intent") or "lookup") if _smart else "lookup"
         _show_data = _intent != "advice"
         analysis = None
         _want_analysis = (
-            (_SMART_ANSWERS_ENABLED and (bool(data) or _intent in ("advice", "forecast", "trend")))
+            (_smart and (bool(data) or _intent in ("advice", "forecast", "trend")))
             or (req.think_mode and bool(data))
         )
         if _want_analysis:
             steps.append({"label": "Analyzing results", "status": "running"})
             try:
-                if _SMART_ANSWERS_ENABLED:
+                if _smart:
                     # Coverage/upsell only where the date window is actually
                     # enforced (integration tenants) — otherwise a "covers last
                     # N days" claim could overstate an all-time own-DB result.
@@ -2261,6 +2345,11 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
             except Exception as _te:
                 log.warning("Answer analysis failed", user=user["email"], error=str(_te))
                 steps[-1]["status"] = "failed"
+
+        # T4: advisory/strategy answers about legal/financial/medical topics get
+        # one honest "general information" caveat — answered, never refused.
+        if analysis and _intent == "advice" and safety_gate(nl_question).get("action") == "caveat":
+            analysis = add_advice_caveat(analysis)
 
         # ── Build conversation summary & persist ──────────────────────────────
         answer_summary = f"Found {len(data)} result{'s' if len(data) != 1 else ''}."
@@ -2304,7 +2393,7 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
         # Smart answers: the analyst prose IS the answer — store it as the
         # assistant turn so conversation memory and follow-ups have real content,
         # not "Found N results."
-        if _SMART_ANSWERS_ENABLED and analysis:
+        if _smart and analysis:
             answer_summary = analysis
         if conv_id:
             try:

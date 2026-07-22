@@ -680,6 +680,7 @@ def classify_question(
     language_hint: str = "",
     smart_answers: bool = False,
     business_knowledge: bool = False,
+    answer_everything: bool = False,
 ) -> dict:
     """
     Classify the user question to determine handling strategy.
@@ -765,6 +766,38 @@ def classify_question(
         "business_knowledge; 'write me a python script to sum a column' -> out_of_scope.\n"
     ) if business_knowledge else ""
 
+    # T1 (PLAN_10): scope -> safety inversion. Default to answering; refuse only
+    # for genuine harm ('unsafe') and politely decline programming help ('coding').
+    # Supersedes and widens the business_knowledge route above. When on, the
+    # topic-based out_of_scope / unsupported options are removed entirely below.
+    answer_everything_block = (
+        '{"type":"knowledge"} — a general-knowledge, definition, concept, or "how does X work" question '
+        "answerable from your own knowledge WITHOUT the merchant's data (e.g. 'difference between net and "
+        "gross sales', 'what is a POS system', 'what is a discount', 'who won the cricket'). Answer it.\n"
+        '{"type":"advisory"} — strategy, "what should I do", "is X a good idea", "how do I grow" — answer '
+        "with real reasoning, grounded in the merchant's own figures where relevant (e.g. 'how do I grow my "
+        "sales', 'is now a good time to raise prices', 'should I incorporate my business').\n"
+        '{"type":"unsafe","response":"..."} — ONLY genuine harm: malware/exploits/hacking, weapons or '
+        "explosives, other illicit how-to, or anything sexualising minors. Give a brief plain refusal.\n"
+        '{"type":"coding","response":"..."} — programming, SQL, regex or software-engineering help. Politely '
+        "decline — that genuinely isn't this product. A business question that merely mentions numbers is "
+        "NOT coding.\n"
+        "SCOPE PRINCIPLE: default to ANSWERING. NEVER refuse a question just because it isn't about the "
+        "merchant's data. Definitions, general knowledge, current events, opinions-with-caveats, strategy "
+        "and advice are ALL answerable (knowledge or advisory). Legal/financial/medical/tax questions are "
+        "answered too (a short caveat is added downstream), never refused. The ONLY refusal is 'unsafe'; "
+        "the ONLY decline is 'coding'.\n"
+        "Few-shot: 'difference between net and gross sales' -> knowledge; 'what is a POS system' -> "
+        "knowledge; 'what is a discount' -> knowledge; 'who won the cricket' -> knowledge; 'how do I grow "
+        "my sales' -> advisory; 'is now a good time to raise prices' -> advisory; 'write me a SQL query' -> "
+        "coding; 'how do I make a weapon' -> unsafe.\n"
+    ) if answer_everything else ""
+    if answer_everything:
+        # Inversion: no topic refusals. Harm -> unsafe, programming -> coding.
+        out_of_scope_block = ""
+        unsupported_block = ""
+        knowledge_block = ""   # superseded by the wider knowledge/advisory split
+
     if smart_answers:
         data_query_block = (
             '{"type":"data_query","intent":"lookup|advice|forecast|trend"} — question about data that exists '
@@ -790,6 +823,7 @@ def classify_question(
         + out_of_scope_block
         + unsupported_block
         + knowledge_block
+        + answer_everything_block
 
         + '{"type":"conversational","response":"..."} — greeting, small talk, thank-you, or a request to '
         "modify/delete/create data (INSERT/UPDATE/DELETE/DROP/TRUNCATE/ALTER). "
@@ -841,6 +875,8 @@ def classify_question(
                     "unsupported_query", "out_of_scope"]
         if business_knowledge:
             _allowed += ["business_knowledge", "hybrid"]
+        if answer_everything:
+            _allowed += ["knowledge", "advisory", "unsafe", "coding"]
         if result.get("type") not in _allowed:
             return {"type": "data_query"}
         return result
@@ -998,6 +1034,73 @@ def sanitise_answer(text, fallback: str = ""):
     if not cleaned:
         return fallback, found
     return cleaned, found
+
+
+# ── Safety gate (T4 / PLAN_10) ────────────────────────────────────────────────
+# A code-level safety control, NOT prompt-dependent (prompts drift). The
+# classifier's 'unsafe'/'coding' categories are the primary router; this is the
+# deterministic backstop that refuses genuine harm even if the classifier misses,
+# and flags legal/financial/medical questions for a one-line advice caveat.
+
+SAFE_REFUSAL = (
+    "I can't help with that one. But I'm glad to help with your business — your sales, "
+    "products, customers, pricing, or anything you'd like to understand or improve."
+)
+CODING_DECLINE = (
+    "I don't write code or SQL — that's outside what I do here. But ask me anything about "
+    "your business — sales, products, customers, trends — and I'm all yours."
+)
+_ADVICE_CAVEAT = "This is general information, not professional advice."
+
+# Genuine-harm patterns. Deliberately require an intent verb NEAR a harmful object
+# so ordinary business phrasing ("knife supplier", "gun shop sales") does not trip.
+# ponytail: keyword heuristic; if it proves leaky, swap for a dedicated model check.
+_HARM_RES = [
+    re.compile(r"\b(how\s+to|how\s+do\s+i|make|build|create|synthesi[sz]e|manufacture|assemble)\b"
+               r"[^.?!\n]{0,40}\b(bomb|explosive|weapon|firearm|silencer|nerve\s+agent|nerve\s+gas|"
+               r"meth|methamphetamine|cocaine|heroin|fentanyl|poison)\b", re.I),
+    re.compile(r"\b(write|create|build|code|generate|develop|make)\b[^.?!\n]{0,40}\b"
+               r"(malware|ransomware|keylogger|botnet|rootkit|backdoor|spyware|computer\s+virus)\b", re.I),
+    re.compile(r"\b(hack|ddos|sql\s*inject|phish|brute[-\s]?force|bypass)\b[^.?!\n]{0,40}"
+               r"\b(account|password|login|credentials|system|server|firewall|database|wifi)\b", re.I),
+    re.compile(r"\b(child|children|minor|underage|infant|kid)s?\b[^.?!\n]{0,25}"
+               r"\b(porn|sexual|nude|naked|explicit)\b", re.I),
+    re.compile(r"\b(porn|sexual|nude|naked|explicit)\b[^.?!\n]{0,25}"
+               r"\b(child|children|minor|underage|infant|kid)s?\b", re.I),
+]
+# Domains that get an answer PLUS a caveat (never a refusal). Applied ONLY on the
+# knowledge/advisory answer paths, never on data lookups — so "how much tax did I
+# collect" (a data query) is not caveated, but "how should I handle my taxes" is.
+# Leading \b anchors to a word start; no trailing \b so stems like "incorporat",
+# "liabilit", "regulat", "diagnos", "bankruptc" match their inflections.
+_ADVICE_RES = [
+    re.compile(r"\b(incorporat|llc\b|sole\s+proprietor|register\s+(my\s+)?business|lawsuit|sue\b|"
+               r"legal|contract|liabilit|comply|complian|regulat)", re.I),
+    re.compile(r"\b(diagnos|medical|medicine|prescri|symptom|disease|health\s+condition)", re.I),
+    re.compile(r"\b(invest(?!igat)|stock\b|stocks\b|shares\b|loan|mortgage|refinanc|bankruptc|audit\s+risk)", re.I),
+]
+
+
+def safety_gate(question: str) -> dict:
+    """Classify the REQUEST. Returns {"action": "refuse"|"caveat"|"allow",
+    "refusal": str}. Pure, no LLM, no DB — a deterministic control."""
+    q = question or ""
+    for rx in _HARM_RES:
+        if rx.search(q):
+            return {"action": "refuse", "refusal": SAFE_REFUSAL}
+    for rx in _ADVICE_RES:
+        if rx.search(q):
+            return {"action": "caveat", "refusal": ""}
+    return {"action": "allow", "refusal": ""}
+
+
+def add_advice_caveat(text: str) -> str:
+    """Append the one-line professional-advice caveat once (no-op if already present)."""
+    if not text:
+        return text
+    if "not professional advice" in text.lower():
+        return text
+    return f"{text.rstrip()}\n\n*{_ADVICE_CAVEAT}*"
 
 
 # Matches a literal '$' immediately adjacent to a number, in either order:
