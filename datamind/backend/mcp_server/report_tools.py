@@ -103,6 +103,17 @@ def _rank_reports(query: str) -> list:
             for rid in ranked]
 
 
+def _unknown_report_error(report_id: str) -> ValueError:
+    """Actionable rejection for a hallucinated report_id (e.g. 'sales' instead of
+    'sales_summary'): hand the model the closest VALID ids so it self-corrects in
+    the next call instead of guessing again."""
+    probe = (report_id or "").replace("_", " ")
+    suggestions = [r["id"] for r in _rank_reports(probe)][:6] or list(REPORTS)[:6]
+    return ValueError(
+        f"Unknown report '{report_id}'. Use one of these exact report ids: "
+        f"{', '.join(suggestions)}. Call list_reports to see all with descriptions.")
+
+
 def _window_start(history_months: int) -> date:
     return date.today() - timedelta(days=(history_months or 3) * 30)
 
@@ -154,7 +165,7 @@ def build_report_mcp(rctx: ReportToolContext) -> FastMCP:
         Returns {metrics, rows, source} — 'source' says whether the numbers
         came from the monthly cache or a live POS fetch."""
         if report_id not in REPORTS:
-            raise ValueError(f"Unknown report '{report_id}'. Call list_reports first.")
+            raise _unknown_report_error(report_id)
         start, end = date.fromisoformat(start_date), date.fromisoformat(end_date)
         if start < _window_start(ctx.history_months):
             raise _plan_limit_error(ctx.history_months)
@@ -175,7 +186,7 @@ def build_report_mcp(rctx: ReportToolContext) -> FastMCP:
         asks. Live fetch, bounded to a few pages; use get_report_metrics for
         totals. Optional `search` filters rows server-side."""
         if report_id not in REPORTS:
-            raise ValueError(f"Unknown report '{report_id}'. Call list_reports first.")
+            raise _unknown_report_error(report_id)
         if not rctx.token:
             raise ValueError("Row detail needs a live POS session, which isn't "
                              "available right now — offer the cached totals instead.")
