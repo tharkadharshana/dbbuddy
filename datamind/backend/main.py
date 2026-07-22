@@ -32,6 +32,7 @@ from llm import (
     query_to_sql, generate_report_summary, call_llm, validate_llm_key,
     list_gemini_models, LLMTransientError,
     classify_question, synthesize_multi_step_answer, fix_currency_symbol,
+    rewrite_followup, last_assistant_was_clarification,
     _filter_sensitive_schema,
 )
 from cache import get_cache, save_cache, invalidate_cache, get_cache_status
@@ -156,6 +157,21 @@ _MCP_TOOL_CALLING_TEST_EMAILS = {
 # data_query instead of refusing, and defaults vague periods; the answer layer
 # reasons like an analyst grounded in the merchant's data. Off = legacy behaviour.
 _SMART_ANSWERS_ENABLED = os.getenv("SMART_ANSWERS_ENABLED", "").lower() == "true"
+
+# Follow-up rewriter (D1 / PLAN_09 S1). When on, a short pre-classification LLM
+# call rewrites bare follow-ups ("for this week", "then fried rice?") into a
+# standalone question using recent turns, so the classifier/tool loop/answer
+# prompt all see a complete question. Default OFF → byte-identical to today.
+_FOLLOWUP_REWRITE_ENABLED = os.getenv("FOLLOWUP_REWRITE_ENABLED", "").lower() in ("1", "true", "yes")
+# Output sanitiser (D3 / PLAN_09 S2). Strips internal table/SQL/tool identifiers
+# from every outgoing answer. Default OFF.
+_ANSWER_SANITISER_ENABLED = os.getenv("ANSWER_SANITISER_ENABLED", "").lower() in ("1", "true", "yes")
+# Business-knowledge route (D2 / PLAN_09 S4). Default OFF.
+_BUSINESS_KNOWLEDGE_ENABLED = os.getenv("BUSINESS_KNOWLEDGE_ENABLED", "").lower() in ("1", "true", "yes")
+log.info("Conversational-layer flags",
+         followup_rewrite=_FOLLOWUP_REWRITE_ENABLED,
+         answer_sanitiser=_ANSWER_SANITISER_ENABLED,
+         business_knowledge=_BUSINESS_KNOWLEDGE_ENABLED)
 
 # Cached name of the session timeout variable for this MySQL/MariaDB server.
 # "max_execution_time" (MySQL 5.7.8+, milliseconds)
@@ -361,6 +377,21 @@ def _base_query_response(**kwargs) -> dict:
         base["sql"] = kwargs["sql"]
     if "multi_results" in kwargs:
         base["multi_results"] = kwargs["multi_results"]
+    # D3 exit guard — the single place every outgoing answer passes through, so
+    # no branch can leak internal table/SQL/tool/report names to a merchant.
+    # (SSE streams tokens before this payload exists; those are covered in S5
+    # when the answer prompt itself is rewritten — no mid-stream filtering here.)
+    if _ANSWER_SANITISER_ENABLED:
+        from llm import sanitise_answer, CAPABILITIES_MESSAGE
+        _fb = CAPABILITIES_MESSAGE.format(app=_APP_NAME, provider="business")
+        for _field in ("message", "analysis"):
+            _val = base.get(_field)
+            if isinstance(_val, str) and _val:
+                _clean, _found = sanitise_answer(_val, fallback=_fb)
+                if _found:
+                    log.warning("Answer sanitiser stripped internal identifiers",
+                                field=_field, found=list(dict.fromkeys(_found))[:8])
+                    base[_field] = _clean
     return base
 
 
@@ -1510,6 +1541,27 @@ def _derive_period(question: str, history: dict):
     return period_label, plan_tier, over_range
 
 
+_EMPTY_PERIOD_PHRASES = (
+    "today", "yesterday", "this week", "last week", "this month", "last month",
+    "this year", "last year", "this quarter", "last quarter", "so far this year",
+)
+
+
+def _empty_result_narrative(question: str) -> str:
+    """D5: a never-blank answer for the 0-row data path. Names the period the
+    user asked about (if any) and offers a concrete next step, instead of
+    returning nothing or a bare 'Found 0 results.'."""
+    q = (question or "").lower()
+    hit = next((p for p in _EMPTY_PERIOD_PHRASES if p in q), None)
+    where = f" for {hit}" if hit else " for that"
+    return (
+        f"I don't see any matching records{where} yet. That usually means there was no "
+        "activity in that period, or the filter was too specific. You could try a wider "
+        "date range or a different product, category, or shop — or ask me about your top "
+        "sellers or busiest days and I'll pull it up."
+    )
+
+
 def _run_answer(question: str, columns: list, data: list,
                 llm: str, api_key: str, user_email: str,
                 currency: str = "$", period_label: str = "",
@@ -1566,6 +1618,35 @@ def _run_answer(question: str, columns: list, data: list,
         operation="think",
         on_delta=on_delta,
     )
+
+
+def _run_knowledge_answer(question: str, llm: str, api_key: str, user_email: str,
+                          currency: str = "$", extra_hint: str = "") -> str:
+    """D2: answer a general retail/business-knowledge question from the model's
+    own knowledge in the analyst persona — no tools, no data fetch. Offers to
+    ground the concept in the merchant's own numbers as a next step.
+    ponytail: hybrid questions reuse this same path (knowledge + an offer to pull
+    figures) rather than a live pre-fetch — the true grounded-in-your-numbers
+    variant belongs to the full-context agent (PLAN_09 S5), add it there."""
+    prompt = (
+        f"The user asked: \"{question}\"\n\n"
+        "Answer as an expert retail/business analyst. Explain the concept, definition, or "
+        "how-to clearly and concisely in plain language a shop owner understands. If their own "
+        "figures would make this more useful, end with ONE short offer to pull the relevant "
+        "numbers from their data (e.g. 'Want me to show your actual figures?'). "
+        "Keep it tight: a short paragraph or a few bullets."
+    )
+    system = (
+        "You are DataMind, an expert retail/business data analyst. You answer business questions "
+        "helpfully from your own knowledge, in plain language. Never refuse a retail, sales, "
+        "pricing, stock, staffing, customer, or accounting question. Never mention databases, "
+        "tables, SQL, or internal tools. "
+        f"When you mention money use '{currency}'. Answer in the same language the user used."
+    )
+    if extra_hint:
+        system += " " + extra_hint
+    return call_llm(prompt, system, llm, max_tokens=500, api_key=api_key,
+                    user_email=user_email, operation="knowledge")
 
 
 class NLQueryRequest(BaseModel):
@@ -1716,6 +1797,26 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
             except Exception as _tze:
                 log.debug("Could not fetch shop timezone, defaulting to UTC", error=str(_tze))
 
+        # ── Follow-up rewrite (D1) ────────────────────────────────────────────
+        # Rewrite a bare follow-up into a standalone question BEFORE anything
+        # downstream sees it. nl_question is what the classifier / tool loop /
+        # answer prompt operate on; req.question stays the original for display,
+        # storage and language detection.
+        nl_question = req.question
+        _rewrite = {"resolved": True, "carried": [], "changed": False}
+        _prev_was_clarification = last_assistant_was_clarification(conv_history)
+        if _FOLLOWUP_REWRITE_ENABLED and conv_history:
+            try:
+                _rewrite = rewrite_followup(req.question, conv_history, llm, api_key, user["email"])
+                nl_question = _rewrite["standalone"]
+                if _rewrite.get("changed"):
+                    log.info("Follow-up rewritten", original=req.question[:80],
+                             rewritten=nl_question[:80], carried=_rewrite.get("carried"),
+                             resolved=_rewrite.get("resolved"))
+            except Exception as _rw_err:
+                log.warning("Follow-up rewrite errored, using original", error=str(_rw_err))
+                nl_question = req.question
+
         # ── Question classification ───────────────────────────────────────────
         steps.append({"label": "Analyzing your question", "status": "done"})
         table_names_str = ", ".join(list(schemas.keys())[:20])
@@ -1726,13 +1827,45 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
             _classifier_context += f" The user's currency is '{nl_currency}' — use this when answering any question about their currency."
         if nl_user_tz and nl_user_tz != "UTC":
             _classifier_context += f" The user's timezone is '{nl_user_tz}'."
+        # Date awareness (P2): the system knows the date and the shop timezone —
+        # "what is today's date?" must be answered, not refused.
+        _ctx_tz = nl_shop_timezone if nl_shop_timezone and nl_shop_timezone != "UTC" else (nl_user_tz or "UTC")
+        try:
+            from datetime import datetime as _dtnow
+            from zoneinfo import ZoneInfo
+            _today = _dtnow.now(ZoneInfo(_ctx_tz))
+        except Exception:
+            from datetime import datetime as _dtnow
+            _today = _dtnow.utcnow()
+        _classifier_context += (
+            f" Today's date is {_today:%A, %B %d, %Y} in the shop's timezone ({_ctx_tz}). "
+            "If the user asks the current date or time, answer it directly — never refuse."
+        )
         classification = classify_question(
-            req.question, table_names_str, llm, api_key, user["email"],
+            nl_question, table_names_str, llm, api_key, user["email"],
             app_name=_APP_NAME, conversation_history=conv_history,
             language_hint=_classifier_context,
             smart_answers=_SMART_ANSWERS_ENABLED,
+            business_knowledge=_BUSINESS_KNOWLEDGE_ENABLED,
         )
         q_type = classification.get("type", "data_query")
+
+        # ── Clarification guards (D1) — enforced in code, not prompt ───────────
+        # (a) The rewriter resolved the reference → never bounce it back as
+        #     "please specify"; answer the standalone question instead.
+        # (b) Never two clarifications in a row: if the previous assistant turn
+        #     was already a clarification, merge + answer this turn.
+        if _FOLLOWUP_REWRITE_ENABLED and q_type == "clarification_needed":
+            if _rewrite.get("resolved"):
+                log.info("Clarification overridden — rewriter resolved reference",
+                         question=nl_question[:80])
+                q_type = "data_query"
+                classification["type"] = "data_query"
+            elif _prev_was_clarification:
+                log.info("Clarification suppressed — previous turn was already a clarification",
+                         question=nl_question[:80])
+                q_type = "data_query"
+                classification["type"] = "data_query"
 
         row_limit = history["row_limit"]
         _profile_parts = [
@@ -1778,9 +1911,36 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
                 steps=steps, conversation_id=conv_id, think_mode=req.think_mode,
             )
 
+        # ── Business-knowledge (D2) — answer definitions/how-to from knowledge ─
+        if q_type in ("business_knowledge", "hybrid"):
+            response_text = None
+            try:
+                response_text = _run_knowledge_answer(
+                    nl_question, llm, api_key, user["email"],
+                    currency=nl_currency, extra_hint=profile_hint,
+                )
+                response_text = fix_currency_symbol(response_text, nl_currency)
+            except Exception as _ke:
+                log.warning("Business-knowledge answer failed, falling back to data path",
+                            user=user["email"], error=str(_ke))
+            if not response_text or not response_text.strip():
+                q_type = "data_query"   # fall through to the normal data path
+            else:
+                if conv_id:
+                    try:
+                        _conv.save_message(conv_id, "user", req.question)
+                        _conv.save_message(conv_id, "assistant", response_text)
+                    except Exception:
+                        pass
+                return _base_query_response(
+                    success=True, type="conversational", message=response_text,
+                    steps=steps, conversation_id=conv_id, think_mode=req.think_mode,
+                    show_data=False,
+                )
+
         # ── Conversational / greeting ─────────────────────────────────────────
         if q_type == "conversational":
-            if _SMART_ANSWERS_ENABLED and classification.get("subtype") == "capabilities":
+            if classification.get("subtype") == "capabilities":
                 from llm import CAPABILITIES_MESSAGE
                 response_text = CAPABILITIES_MESSAGE.format(app=_APP_NAME, provider=nl_provider_label)
             else:
@@ -1901,7 +2061,7 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
 
                 steps.append({"label": "Combining results", "status": "running"})
                 analysis = synthesize_multi_step_answer(
-                    req.question, step_results, llm, api_key, user["email"],
+                    nl_question, step_results, llm, api_key, user["email"],
                     currency=nl_currency,
                 )
                 steps[-1]["status"] = "done"
@@ -1981,7 +2141,7 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
                         log.warning("Report tool context unavailable",
                                     user=user["email"], error=str(_rc_err))
                 sql, columns, data = asyncio.run(_mcp_answer_business_question(
-                    req.question, tool_ctx, llm, api_key, user["email"],
+                    nl_question, tool_ctx, llm, api_key, user["email"],
                     conversation_history=conv_history, extra_hints=extra_hints,
                     currency=nl_currency, shop_timezone=nl_shop_timezone,
                     report_ctx=report_ctx,
@@ -1995,7 +2155,7 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
         if sql is None:
             steps.append({"label": "Generating SQL query", "status": "running"})
             sql = query_to_sql(
-                req.question, schemas, llm, fkeys, api_key=api_key,
+                nl_question, schemas, llm, fkeys, api_key=api_key,
                 user_email=user["email"], history_months=history["months"],
                 tenant_id=nl_tenant_id if is_integration else None,
                 row_limit=row_limit, conversation_history=conv_history,
@@ -2077,7 +2237,7 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
                     # enforced (integration tenants) — otherwise a "covers last
                     # N days" claim could overstate an all-time own-DB result.
                     if nl_tenant_id:
-                        _period_label, _plan_tier, _over_range = _derive_period(req.question, history)
+                        _period_label, _plan_tier, _over_range = _derive_period(nl_question, history)
                         # Avoid double-upsell: report tools already own the
                         # plan-window message when they're active.
                         if _report_tools_active:
@@ -2088,13 +2248,13 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
                     # on the plain endpoint on_delta stays None → one-shot call.
                     _delta = (lambda t: _progress.emit("token", {"text": t})) if _progress.has_listener() else None
                     analysis = _run_answer(
-                        req.question, columns, data, llm, api_key, user["email"],
+                        nl_question, columns, data, llm, api_key, user["email"],
                         currency=nl_currency, period_label=_period_label,
                         plan_tier=_plan_tier, history_months=history["months"],
                         over_range=_over_range, on_delta=_delta,
                     )
                 else:
-                    analysis = _run_think_analysis(req.question, columns, data, llm, api_key, user["email"], currency=nl_currency)
+                    analysis = _run_think_analysis(nl_question, columns, data, llm, api_key, user["email"], currency=nl_currency)
                 analysis = fix_currency_symbol(analysis, nl_currency)
                 log.info("Answer analysis complete", user=user["email"])
                 steps[-1]["status"] = "done"
@@ -2123,6 +2283,13 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
                     "If you've just connected your store, a sync may still be in "
                     "progress — check your integration status, or try again in a few minutes."
                 )
+        # D5: the data path must NEVER return a blank answer. If nothing produced
+        # user-visible narrative (e.g. a 0-row lookup), synthesise one — the
+        # tailored near-empty-tenant message if we have it, otherwise a generic
+        # empty-result narrative that names the period and offers a next step.
+        if len(data) == 0 and not (analysis and analysis.strip()):
+            analysis = answer_summary if not answer_summary.startswith("Found ") \
+                else _empty_result_narrative(nl_question)
         if columns and data:
             num_col = _pick_summary_column(columns, data[0])
             if num_col:
@@ -2169,7 +2336,7 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
                 "right now", "current", "latest", "recent",
                 "tonight", "this morning", "this afternoon",
             )
-            if any(kw in req.question.lower() for kw in _TIME_KEYWORDS):
+            if any(kw in nl_question.lower() for kw in _TIME_KEYWORDS):
                 try:
                     from datetime import datetime as _dt, timezone as _tz
                     _synced = _dt.fromisoformat(nl_last_sync_at.replace("Z", "+00:00"))

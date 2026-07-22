@@ -28,13 +28,24 @@ def test_message_formats_with_app_and_provider():
     assert "SalesPlay AI" in out and "SalesPlay" in out
     assert "**Track performance**" in out          # markdown bullets present
 
-def test_capabilities_instruction_only_in_smart_mode(monkeypatch):
+def test_capabilities_block_only_in_smart_mode(monkeypatch):
+    # The dedicated "what can you do / how you can help" capabilities block is
+    # smart-only. (The table-listing → capabilities routing under (1) now applies
+    # in BOTH modes — that's the D3 fix, tested separately below.)
     cap = _stub(monkeypatch, '{"type":"conversational"}')
     classify_question("what can you do", "t", "openai", "k", None, smart_answers=True)
-    assert "capabilities" in cap["system"]
+    assert "how you can help" in cap["system"]
     cap2 = _stub(monkeypatch, '{"type":"conversational"}')
     classify_question("what can you do", "t", "openai", "k", None, smart_answers=False)
-    assert "capabilities" not in cap2["system"]
+    assert "how you can help" not in cap2["system"]
+
+def test_table_listing_never_instructed(monkeypatch):
+    # D3: the classifier must never be told to list internal table names.
+    for smart in (True, False):
+        cap = _stub(monkeypatch, '{"type":"conversational"}')
+        classify_question("what data do you have", "t", "openai", "k", None, smart_answers=smart)
+        assert "list of the available tables" not in cap["system"]
+        assert "NEVER list internal table names" in cap["system"]
 
 def test_subtype_preserved(monkeypatch):
     _stub(monkeypatch, json.dumps({"type": "conversational", "subtype": "capabilities"}))

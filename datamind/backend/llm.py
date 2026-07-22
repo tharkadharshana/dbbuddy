@@ -679,11 +679,18 @@ def classify_question(
     conversation_history: str = "",
     language_hint: str = "",
     smart_answers: bool = False,
+    business_knowledge: bool = False,
 ) -> dict:
     """
     Classify the user question to determine handling strategy.
     Returns a dict with 'type' and type-specific fields.
     Falls back to {"type": "data_query"} if classification fails.
+
+    business_knowledge (D2): when True, two extra categories are offered —
+    "business_knowledge" (answerable from general retail/business knowledge, no
+    merchant data needed) and "hybrid" (knowledge the merchant's own numbers
+    would enrich) — and out_of_scope is narrowed to coding/unrelated topics only.
+    When False the prompt and the accepted-type set are unchanged.
     """
     if smart_answers:
         scope_lines = "".join(f"  - {s}\n" for s in OUT_OF_SCOPE_SCOPES)
@@ -696,6 +703,13 @@ def classify_question(
             "they invoke general knowledge — e.g. 'how could the world economy affect my sales', "
             "'what should I do to grow', 'is now a good time to raise prices' are all data_query (the "
             "assistant answers them analytically using the merchant's own numbers plus general reasoning).\n"
+            + (
+                "out_of_scope means ONLY coding/programming/SQL-syntax help and topics with no business "
+                "bearing at all. Retail, sales, pricing, stock, staffing, customers, accounting concepts, "
+                "and the product itself are ALL in scope — definitions and how-to questions about them are "
+                "business_knowledge, NEVER out_of_scope.\n"
+                if business_knowledge else ""
+            )
         )
         unsupported_block = (
             '{"type":"unsupported_query","response":"..."} — ONLY when the answer needs external data the '
@@ -734,6 +748,23 @@ def classify_question(
         "answer is filled in).\n"
     ) if smart_answers else ""
 
+    # D2: routes for retail/business knowledge questions the assistant should
+    # answer, not refuse. hybrid = the same but the merchant's own numbers would
+    # make the answer materially better.
+    knowledge_block = (
+        '{"type":"business_knowledge"} — a definition, formula, concept, or how-to question '
+        "answerable from general retail/business knowledge WITHOUT needing the merchant's data "
+        "(e.g. 'what is the difference between net and gross sales', 'define average order value', "
+        "'what is a POS system', 'what is debt in sales', 'how do I calculate the number of sales per day').\n"
+        '{"type":"hybrid"} — a knowledge/definition question where the merchant\'s OWN figures would '
+        "make the answer materially better (e.g. 'what’s my average order value and is it good', "
+        "'explain my net vs gross sales'). The assistant will explain the concept AND ground it in their numbers.\n"
+        "Few-shot: 'explain the difference between net sales and gross sales' -> business_knowledge; "
+        "'define average order value' -> business_knowledge; 'what is a POS system' -> business_knowledge; "
+        "'what is debt in sales' -> business_knowledge; 'how to calculate the number of sales per day' -> "
+        "business_knowledge; 'write me a python script to sum a column' -> out_of_scope.\n"
+    ) if business_knowledge else ""
+
     if smart_answers:
         data_query_block = (
             '{"type":"data_query","intent":"lookup|advice|forecast|trend"} — question about data that exists '
@@ -758,15 +789,20 @@ def classify_question(
 
         + out_of_scope_block
         + unsupported_block
+        + knowledge_block
 
         + '{"type":"conversational","response":"..."} — greeting, small talk, thank-you, or a request to '
         "modify/delete/create data (INSERT/UPDATE/DELETE/DROP/TRUNCATE/ALTER). "
         f"For harmful/destructive requests respond with a polite refusal as {app_name}. "
         "Also use this type when: "
         "(1) the user asks what data, tables, or information is available ('what data do you have', 'what can you show me', "
-        "'what tables are there') — respond with a friendly list of the available tables from the table list provided; "
-        "(2) the user asks about their own account details (country, currency, timezone) — answer directly from the "
-        "context provided in these instructions, do NOT deflect or say 'I'm a data assistant'; "
+        '\'what tables are there\') — return {"type":"conversational","subtype":"capabilities"} (a curated '
+        "business-language overview is filled in). NEVER list internal table names, column names, or SQL to the user; "
+        "(2) the user asks about their own account details (country, currency, timezone) OR the current date/time — "
+        "answer directly from the context provided in these instructions, do NOT deflect or say 'I'm a data assistant'; "
+        "(3) the user asks what they asked earlier or to summarise the conversation — answer from the conversation "
+        "history if it is provided; if there is no history, say plainly that each chat starts fresh, and NEVER claim "
+        "you cannot recall when history is available; "
         f"for all other conversational cases respond as {app_name}, a friendly AI data assistant.\n"
 
         + capabilities_block
@@ -783,6 +819,12 @@ def classify_question(
         "data request from the conversation history and return data_query. Never return unsupported_query for "
         "a user acceptance of an alternative the assistant itself offered.\n"
 
+        "DEFLECTION RULE: whenever you write a 'response' that says you can't do something (an off-topic "
+        "deflection, an unsupported-data reply, or a conversational refusal), it MUST have two parts: (a) what "
+        "you can't do, in one short clause, and (b) one concrete thing you CAN do right now, phrased in terms of "
+        "the merchant's own sales, products, customers, or trends. Never close the door without offering a way "
+        "forward.\n"
+
         "IMPORTANT: Use conversation history (if provided) to understand follow-up questions and pronouns like "
         "'they', 'those', 'it'. "
         + (language_hint if language_hint else "Always respond in the same language the user used to write their question.")
@@ -795,12 +837,167 @@ def classify_question(
         if raw.startswith("```"):
             raw = re.sub(r"^```[a-z]*\n?", "", raw).rstrip("`").strip()
         result = json.loads(raw)
-        if result.get("type") not in ("data_query", "multi_step", "conversational", "clarification_needed", "unsupported_query", "out_of_scope"):
+        _allowed = ["data_query", "multi_step", "conversational", "clarification_needed",
+                    "unsupported_query", "out_of_scope"]
+        if business_knowledge:
+            _allowed += ["business_knowledge", "hybrid"]
+        if result.get("type") not in _allowed:
             return {"type": "data_query"}
         return result
     except Exception as _e:
         log.debug("Question classification failed, treating as data_query", error=str(_e))
         return {"type": "data_query"}
+
+
+# ── Follow-up rewriting (D1) ──────────────────────────────────────────────────
+# A dedicated, cheap step that runs BEFORE classification: rewrite a short
+# follow-up ("for this week", "then fried rice?", "the latest one") into a
+# standalone question using the last few turns, so everything downstream sees a
+# complete question. This is standard conversational-search practice — one call
+# cannot both resolve a reference and pick a category, which is why bare phrases
+# were being bounced back as "please specify". See PLAN_09 S1.
+
+_REWRITE_SYSTEM = (
+    "You rewrite a user's latest chat message into a STANDALONE question, using the "
+    "conversation so far. You do not answer it. Reply with strict JSON only, no markdown.\n"
+    'Output: {"standalone": "<rewritten question>", "resolved": true|false, '
+    '"carried": ["metric"|"period"|"shop"|"product"|"filter"], "changed": true|false}\n'
+    "Rules:\n"
+    "- Carry forward the metric, period, shop, product and filters from the previous turn "
+    "UNLESS the new message overrides them.\n"
+    "- Resolve pronouns and ellipsis ('that', 'those', 'the latest one', 'then fried rice?', "
+    "'for this week', 'payment type') to the concrete thing they refer to in the history.\n"
+    "- If the message is already a complete standalone question, return it UNCHANGED with "
+    "changed=false.\n"
+    "- Never invent a metric, period, product or filter that appears nowhere in the history "
+    "or the new message.\n"
+    "- Set resolved=false ONLY when the history genuinely contains no referent to resolve "
+    "against — that is the only case where the assistant may ask for clarification.\n"
+    "- 'carried' lists which of metric/period/shop/product/filter you pulled from earlier turns."
+)
+
+
+def rewrite_followup(question: str, conversation_history: str,
+                     llm: str, api_key: str, user_email: str) -> dict:
+    """Rewrite a follow-up utterance into a standalone question using recent turns.
+
+    Returns {"standalone": str, "resolved": bool, "carried": list[str], "changed": bool}.
+    Never raises — on ANY failure (or empty history) it returns the original question
+    unchanged with resolved=True/changed=False, i.e. exactly today's behaviour.
+    """
+    fallback = {"standalone": question, "resolved": True, "carried": [], "changed": False}
+    if not conversation_history or not conversation_history.strip():
+        return fallback
+    prompt = (
+        f"Conversation so far:\n{conversation_history}\n\n"
+        f"New message: {question}\n\nJSON:"
+    )
+    try:
+        raw = call_llm(prompt, _REWRITE_SYSTEM, llm, max_tokens=200,
+                       api_key=api_key, user_email=user_email, operation="rewrite").strip()
+        if raw.startswith("```"):
+            raw = re.sub(r"^```[a-z]*\n?", "", raw).rstrip("`").strip()
+        result = json.loads(raw)
+        standalone = (result.get("standalone") or "").strip() or question
+        return {
+            "standalone": standalone,
+            "resolved": bool(result.get("resolved", True)),
+            "carried": result.get("carried") if isinstance(result.get("carried"), list) else [],
+            "changed": bool(result.get("changed", standalone.strip() != question.strip())),
+        }
+    except Exception as _e:
+        log.debug("Follow-up rewrite failed, using original question", error=str(_e))
+        return fallback
+
+
+# Heuristic markers that an assistant turn was a clarification request (not an
+# answer). Leans toward True on purpose: the only consumer is the "never two
+# clarifications in a row" guard, where a false positive means we answer instead
+# of re-asking — the safe direction.
+_CLARIFY_MARKERS = (
+    "please specify", "could you", "can you tell me", "which ", "what specific",
+    "provide more detail", "more details about", "clarif", "did you mean",
+    "what would you like", "let me know which",
+)
+
+
+def last_assistant_was_clarification(conversation_history: str) -> bool:
+    """True if the most recent assistant turn in the formatted history looks like
+    a clarification question. Pure string inspection — no DB round-trip."""
+    if not conversation_history:
+        return False
+    last = ""
+    for line in conversation_history.splitlines():
+        if line.startswith("Assistant:"):
+            last = line[len("Assistant:"):].strip().lower()
+    if not last or "?" not in last:
+        return False
+    return any(m in last for m in _CLARIFY_MARKERS)
+
+
+# ── Answer sanitiser (D3) ─────────────────────────────────────────────────────
+# Exit guard: no internal identifier (prefixed table names, SQL, MCP tool names,
+# underscored report slugs) may reach a merchant. Pure function — runs on every
+# outgoing answer at no cost. See PLAN_09 S2. Note: single plain words that
+# happen to be report ids ('receipts', 'taxes', 'refunds', 'charges', 'shifts')
+# are legitimate business language and are deliberately NOT treated as internal.
+
+_MCP_TOOL_NAMES = (
+    "get_schema", "run_select_query", "get_report_metrics", "get_report_detail",
+    "list_reports", "get_sample_rows", "get_date_range",
+)
+
+_INTERNAL_TOKEN_RES = [
+    re.compile(r"\bsp_[a-z][a-z_]*\b"),
+    re.compile(r"\bly_[a-z][a-z_]*\b"),
+    re.compile(r"\b(?:" + "|".join(_MCP_TOOL_NAMES) + r")\b"),
+]
+# A SELECT … FROM anywhere in the answer (case-insensitive, bounded span).
+_SQL_RE = re.compile(r"\bSELECT\b[\s\S]{0,600}?\bFROM\b", re.IGNORECASE)
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
+
+
+def _internal_report_slugs() -> tuple:
+    """Report ids that read as internal identifiers — underscored slugs only."""
+    try:
+        from report_cache.registry import REPORTS
+        return tuple(sorted((r for r in REPORTS if "_" in r), key=len, reverse=True))
+    except Exception:
+        return ()
+
+
+def _internal_hits(text: str, slugs: tuple) -> list:
+    hits: list = []
+    for rx in _INTERNAL_TOKEN_RES:
+        hits += rx.findall(text)
+    if _SQL_RE.search(text):
+        hits.append("SQL")
+    low = text.lower()
+    for s in slugs:
+        if re.search(r"\b" + re.escape(s) + r"\b", low):
+            hits.append(s)
+    return hits
+
+
+def sanitise_answer(text, fallback: str = ""):
+    """Strip internal identifiers from a user-facing answer.
+
+    Returns (cleaned_text, found). Drops any sentence containing an internal
+    identifier; if that empties the answer entirely, returns `fallback` (intended
+    to be the capabilities message). Pure — no LLM call, no DB.
+    """
+    if not text or not isinstance(text, str):
+        return text, []
+    slugs = _internal_report_slugs()
+    found = _internal_hits(text, slugs)
+    if not found:
+        return text, []
+    kept = [s for s in _SENTENCE_SPLIT_RE.split(text)
+            if s.strip() and not _internal_hits(s, slugs)]
+    cleaned = " ".join(p.strip() for p in kept).strip()
+    if not cleaned:
+        return fallback, found
+    return cleaned, found
 
 
 # Matches a literal '$' immediately adjacent to a number, in either order:
