@@ -2036,6 +2036,7 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
                     "Ask me anything about your data — for example: "
                     "'Show me sales from last month' or 'Who are my top customers?'"
                 )
+            msg_id = None
             if conv_id:
                 try:
                     _conv.save_message(conv_id, "user", req.question)
@@ -2406,6 +2407,7 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
         # not "Found N results."
         if _smart and analysis:
             answer_summary = analysis
+        msg_id = None
         if conv_id:
             try:
                 stat_col = _pick_summary_column(columns, data[0]) if data else None
