@@ -10,16 +10,13 @@ import React, { useState, useRef, useEffect } from 'react'
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { embedRunQuery, embedGetSSOHandoff, embedCreateConversation, embedGetSubscription, embedVoteMessage } from './embedApi'
 import { getErrorMessage } from '../utils/api'
-import { formatCurrency } from '../utils/locale'
+import { formatCurrency, isMoneyColumn, summarySuffix } from '../utils/locale'
 import { notifyParent } from './EmbedApp'
 import EmbedHistoryDrawer from './EmbedHistoryDrawer'
 import { appName, productTitle as resolveProductTitle } from './embedBranding'
 import Logo from '../components/Logo'
-
-const TT = {
-  background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)',
-  borderRadius:8, fontSize:11, color:'#f0f1fa',
-}
+import Markdown from '../components/Markdown'
+import ResultChart from '../components/ResultChart'
 
 const SUGGESTIONS = [
   { icon:'💰', text:'What was my total revenue last month?' },
@@ -99,56 +96,8 @@ function TypingDots() {
   )
 }
 
-const _CODE_COLS = /^(sku|code|customer_code|shop_id|product_code|item_code)$/i
-
-// ── Chart ─────────────────────────────────────────────────────────────────────
-function ResultChart({ columns, data, theme }) {
-  if (!data?.length || !columns?.length) return null
-  const numCols = columns.filter(c => typeof data[0]?.[c] === 'number')
-  const strCols = columns.filter(c => typeof data[0]?.[c] === 'string')
-  if (!numCols.length || !strCols.length || data.length < 2) return null
-  const y1 = numCols[0], y2 = numCols[1]
-  const isLight    = theme === 'light'
-  const gridColor  = isLight ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.06)'
-  const tickColor  = isLight ? '#6b7280' : '#5a5f7d'
-  const labelKey = strCols.find(c => _CODE_COLS.test(c)) || strCols[0]
-  const nameKey  = labelKey !== strCols[0] ? strCols[0] : null
-  const chartData = data.slice(0, 15).map(r => ({
-    name:     String(r[labelKey] || '').slice(0, 14),
-    _tooltip: nameKey ? String(r[nameKey] || '') : null,
-    [y1]: r[y1],
-    ...(y2 ? { [y2]: r[y2] } : {}),
-  }))
-  const CustomTooltip = ({ active, payload, label }) => {
-    if (!active || !payload?.length) return null
-    const fullName = payload[0]?.payload?._tooltip
-    return (
-      <div style={TT}>
-        <p style={{ margin:'0 0 4px', color:'var(--text)', fontWeight:500 }}>{fullName || label}</p>
-        {payload.map(p => (
-          <p key={p.dataKey} style={{ margin:'2px 0', color:p.color }}>{p.name}: {p.value?.toLocaleString()}</p>
-        ))}
-      </div>
-    )
-  }
-  return (
-    <div style={{ marginTop:10, background:'var(--bg2)', borderRadius:8, padding:10, border:'1px solid var(--border)' }}>
-      <ResponsiveContainer width="100%" height={140}>
-        <ComposedChart data={chartData}>
-          <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
-          <XAxis dataKey="name" tick={{ fontSize:9, fill:tickColor }} axisLine={false} tickLine={false} />
-          <YAxis tick={{ fontSize:9, fill:tickColor }} axisLine={false} tickLine={false} />
-          <Tooltip content={<CustomTooltip />} />
-          <Bar dataKey={y1} fill="var(--blue)" radius={[3,3,0,0]} barSize={data.length > 10 ? 6 : 16} />
-          {y2 && <Line dataKey={y2} stroke="var(--green)" strokeWidth={1.5} dot={false} />}
-        </ComposedChart>
-      </ResponsiveContainer>
-    </div>
-  )
-}
-
 // ── Table ─────────────────────────────────────────────────────────────────────
-function ResultTable({ columns, data, rowCount }) {
+function ResultTable({ columns, data, rowCount, moneyCols }) {
   const [expanded, setExpanded] = useState(false)
   const visible = expanded ? data : data.slice(0, 4)
 
@@ -156,9 +105,7 @@ function ResultTable({ columns, data, rowCount }) {
     if (v === null || v === undefined)
       return <span style={{ color:'var(--text3)' }}>—</span>
     if (typeof v === 'number') {
-      const isCount = col.includes('visit') || col.includes('count') || col.includes('qty') || col.includes('quantity') || col.includes('num_')
-      if (!isCount && (col.includes('revenue') || col.includes('total') || col.includes('amount') ||
-          col.includes('price') || col.includes('value') || col.includes('spent')))
+      if (isMoneyColumn(col, moneyCols))
         return <span style={{ color:'var(--blue)', fontFamily:'var(--mono)' }}>{formatCurrency(v)}</span>
       if (col.includes('pct') || col.includes('rate') || col.includes('percent'))
         return <span style={{ color: v > 0 ? 'var(--green)' : 'var(--red)', fontFamily:'var(--mono)' }}>{v > 0 ? '+' : ''}{v}%</span>
@@ -286,15 +233,21 @@ function Message({ msg, theme, onVote }) {
                 <div style={{ fontSize:10, fontWeight:600, color:'var(--blue)', textTransform:'uppercase', letterSpacing:'.06em', marginBottom:5 }}>
                   🧠 Think Mode
                 </div>
-                {msg.analysis.replace(/\*\*/g, '').replace(/\*/g, '').replace(/_{2}/g, '').replace(/_/g, '')}
+                <Markdown text={msg.analysis} />
               </div>
             )}
 
-            <div style={{ fontSize:13, color:'var(--text)', lineHeight:1.6 }}>{msg.content}</div>
-            {msg.data?.data?.length > 0 && (
+            {/* Advisory (prose-only) answers set show_data=false — hide the
+                "Found N results" summary and the unrelated chart/table. */}
+            {msg.content && msg.data?.show_data !== false && (
+              <div style={{ fontSize:13, color:'var(--text)', lineHeight:1.6 }}>
+                <Markdown text={msg.content} />
+              </div>
+            )}
+            {msg.data?.data?.length > 0 && msg.data?.show_data !== false && (
               <>
                 <ResultChart columns={msg.data.columns} data={msg.data.data} theme={theme} />
-                <ResultTable columns={msg.data.columns} data={msg.data.data} rowCount={msg.data.row_count} />
+                <ResultTable columns={msg.data.columns} data={msg.data.data} rowCount={msg.data.row_count} moneyCols={msg.data.money_cols} />
               </>
             )}
             {msg.data?.message_id != null && (
@@ -426,13 +379,42 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, on
     const slowTimer = setTimeout(() => {
       setMessages(m => m.map(msg =>
         msg.id === thinkMsg.id && msg.loading
-          ? { ...msg, loadingText: 'Complex queries can take a moment...' }
+          ? { ...msg, loadingText: 'Still thinking — going deeper into your data…' }
           : msg
       ))
     }, 10000)
 
     try {
-      const data = await embedRunQuery(q, 'default', thinkMode, currentConvId)
+      // Streaming first: live progress steps, model thinking, and the answer
+      // text as it arrives. Falls back to the plain endpoint when streaming is
+      // disabled server-side (404) or the stream dies before producing output.
+      const patchMsg = (patch) => setMessages(m => m.map(msg =>
+        msg.id === thinkMsg.id ? { ...msg, ...patch } : msg
+      ))
+      let sawOutput = false
+      let data = null
+      try {
+        data = await embedStreamQuery(q, 'default', thinkMode, currentConvId, {
+          onStep:  p => { if (p.label) patchMsg({ loadingText: p.label }) },
+          onToken: t => {
+            sawOutput = true
+            setMessages(m => m.map(msg => {
+              if (msg.id !== thinkMsg.id) return msg
+              const acc = (msg.streamText || '') + t
+              // Render the growing answer in the Think Mode box; the data
+              // table/summary replace this when the final payload lands.
+              return { role:'ai', id: thinkMsg.id, content:'', analysis: acc, streamText: acc }
+            }))
+          },
+        })
+      } catch (se) {
+        if (se.status === 401) { onExpired(); return }
+        data = null   // stream failed
+      }
+      // Re-run via the plain endpoint only if the stream produced nothing —
+      // never after tokens were shown (that would double-charge the question).
+      if (!data && !sawOutput) data = await embedRunQuery(q, 'default', thinkMode, currentConvId)
+      if (!data) data = { success: false, type: 'error', message: 'The connection dropped mid-answer. Please try again.' }
       const rowCount = data.row_count
       const type     = data.type
       let summary
@@ -442,12 +424,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, on
       } else if (!data.success || type === 'error') {
         summary = data.message || 'Something went wrong. Please try again.'
       } else {
-        const numCol = data.columns?.find(c => typeof data.data?.[0]?.[c] === 'number')
-        summary = `Found ${rowCount} result${rowCount !== 1 ? 's' : ''}`
-        if (numCol && data.data?.[0]) {
-          const total = data.data.reduce((s, r) => s + (r[numCol] || 0), 0)
-          summary += ` · ${numCol.replace(/_/g, ' ')}: ${total.toLocaleString(undefined, { maximumFractionDigits:2 })}`
-        }
+        summary = `Found ${rowCount} result${rowCount !== 1 ? 's' : ''}` + summarySuffix(data)
         if (rowCount === 0) summary = "I couldn't find anything matching that. Try rephrasing or broadening your question."
       }
 

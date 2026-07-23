@@ -35,6 +35,33 @@ log = get_logger(__name__)
 
 router = APIRouter(prefix="/embed", tags=["embed"])
 
+# ── Report-cache profile sync (feature-flagged, always non-fatal) ─────────────
+_REPORT_CACHE_ENABLED = os.getenv("REPORT_CACHE_ENABLED", "false").strip().lower() in ("1", "true", "yes")
+
+
+def _sync_report_profile(table_prefix: Optional[str], email: str, aat: str) -> None:
+    """Sync the tenant's SalesPlay profile (shops/cashiers/currency), stash
+    the live session token for chat-time report fetches, and kick the
+    plan-window report backfill on a background thread. Runs on every widget
+    open — the only moment a working /app/* token exists. Never fatal:
+    onboarding proceeds unchanged on any failure. Backfill is idempotent, so
+    repeat widget opens only fetch months that aren't cached yet."""
+    if not _REPORT_CACHE_ENABLED or not table_prefix:
+        return
+    try:
+        from report_cache.profile import sync_tenant_profile
+        sync_tenant_profile(table_prefix, aat)
+    except Exception as e:
+        log.warning("Report cache: profile sync skipped", email=email, error=str(e))
+        return
+    try:
+        from billing import get_plan_history_limit
+        from report_cache.ingest import start_backfill_async
+        months = get_plan_history_limit(email).get("months") or 3
+        start_backfill_async(table_prefix, aat, months)
+    except Exception as e:
+        log.warning("Report cache: backfill kick skipped", email=email, error=str(e))
+
 # ── Simple in-memory rate limiter (no external deps) ─────────────────────────
 # Tracks per-IP request timestamps for /embed/init (5 requests/minute max).
 _rate_store: dict = collections.defaultdict(list)
@@ -665,14 +692,16 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
     # skip_validation=True: token was created directly from Salesplay's own API,
     # so it is guaranteed valid without needing a separate /merchant round-trip.
     sync = "skipped"
+    table_prefix = None
     if salesplay_api_token:
         try:
-            connect_integration(
+            result = connect_integration(
                 user_email       = email,
                 provider_id      = "salesplay",
                 creds            = {"api_token": salesplay_api_token},
                 skip_validation  = True,
             )
+            table_prefix = (result or {}).get("table_prefix")
             sync = "started"
             log.info("Salesplay onboard: provider connected with new token", email=email)
         except Exception as e:
@@ -682,14 +711,20 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
         # Returning user with a healthy integration — trigger a delta sync so they
         # see data from any new Salesplay transactions since their last sync.
         try:
-            from integrations import trigger_sync
+            from integrations import trigger_sync, get_integration
             trigger_sync(email, "salesplay", full=False)
             sync = "delta_started"
+            integ = get_integration(email, "salesplay")
+            table_prefix = (integ or {}).get("table_prefix")
             log.info("Salesplay onboard: delta sync triggered for returning user", email=email)
         except Exception as e:
             log.warning("Salesplay onboard: delta sync trigger failed (non-fatal)",
                         email=email, error=str(e))
             sync = "skipped"
+
+    # Report cache: refresh profile (shops/cashiers/currency) + stash the live
+    # session token for chat-time report fetches. Feature-flagged, non-fatal.
+    _sync_report_profile(table_prefix, email, aat)
 
     token = create_token(email)
     log.info("Salesplay onboard: complete", email=email, is_new_user=is_new_user, sync=sync)

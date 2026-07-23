@@ -3,9 +3,10 @@ import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Respons
 import { runNLQuery, createConversation, getConversationMessages, getErrorMessage, voteMessage } from '../utils/api'
 import { Spinner, UsageMeter } from '../components/UI'
 import Logo from '../components/Logo'
-import { formatCurrency, formatNumber } from '../utils/locale'
+import Markdown from '../components/Markdown'
+import ResultChart from '../components/ResultChart'
+import { formatCurrency, formatNumber, isMoneyColumn, summarySuffix } from '../utils/locale'
 
-const TT = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)', borderRadius:8, fontSize:12, color:'#f0f1fa' }
 
 const SUGGESTIONS = [
   { icon:'💰', text:'What was my total revenue last month?' },
@@ -27,65 +28,15 @@ function TypingDots() {
   )
 }
 
-// Prefer a short-code column (sku, code, customer_code, shop_id) for chart
-// labels so long names don't overflow. Falls back to the first string column.
-const _CODE_COLS = /^(sku|code|customer_code|shop_id|product_code|item_code)$/i
 
-function ResultChart({ columns, data }) {
-  if (!data?.length || !columns?.length) return null
-  const numCols = columns.filter(c => typeof data[0]?.[c] === 'number')
-  const strCols = columns.filter(c => typeof data[0]?.[c] === 'string')
-  if (!numCols.length || !strCols.length || data.length < 2) return null
-  const y1 = numCols[0], y2 = numCols[1]
-  // Use a short code column as label if available; fall back to first string col
-  const labelKey = strCols.find(c => _CODE_COLS.test(c)) || strCols[0]
-  // Keep the full-name column for tooltip if we're using a code as label
-  const nameKey  = labelKey !== strCols[0] ? strCols[0] : null
-  const chartData = data.slice(0,20).map(r => ({
-    name:     String(r[labelKey] || '').slice(0, 14),
-    _tooltip: nameKey ? String(r[nameKey] || '') : null,
-    [y1]: r[y1],
-    ...(y2 ? {[y2]: r[y2]} : {}),
-  }))
-
-  const CustomTooltip = ({ active, payload, label }) => {
-    if (!active || !payload?.length) return null
-    const fullName = payload[0]?.payload?._tooltip
-    return (
-      <div style={TT}>
-        <p style={{ margin:'0 0 4px', color:'var(--text)', fontWeight:500 }}>{fullName || label}</p>
-        {payload.map(p => (
-          <p key={p.dataKey} style={{ margin:'2px 0', color: p.color }}>{p.name}: {p.value?.toLocaleString()}</p>
-        ))}
-      </div>
-    )
-  }
-
-  return (
-    <div style={{ marginTop:14, background:'rgba(255,255,255,0.02)', borderRadius:10, padding:14, border:'1px solid var(--border)' }}>
-      <ResponsiveContainer width="100%" height={180}>
-        <ComposedChart data={chartData}>
-          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
-          <XAxis dataKey="name" tick={{fontSize:10,fill:'#5a5f7d'}} axisLine={false} tickLine={false} />
-          <YAxis tick={{fontSize:10,fill:'#5a5f7d'}} axisLine={false} tickLine={false} />
-          <Tooltip content={<CustomTooltip />} />
-          <Bar dataKey={y1} fill="var(--blue)" radius={[4,4,0,0]} barSize={data.length > 10 ? 8 : 20} />
-          {y2 && <Line dataKey={y2} stroke="var(--green)" strokeWidth={2} dot={false} />}
-        </ComposedChart>
-      </ResponsiveContainer>
-    </div>
-  )
-}
-
-function ResultTable({ columns, data, rowCount }) {
+function ResultTable({ columns, data, rowCount, moneyCols }) {
   const [expanded, setExpanded] = useState(false)
   const visible = expanded ? data : data.slice(0,5)
   const isNum = v => typeof v === 'number'
   const fmt = (col, v) => {
     if (v === null || v === undefined) return <span style={{color:'var(--text3)'}}>—</span>
     if (isNum(v)) {
-      const isCount = col.includes('visit')||col.includes('count')||col.includes('qty')||col.includes('quantity')||col.includes('num_')
-      if (!isCount && (col.includes('revenue')||col.includes('total')||col.includes('amount')||col.includes('price')||col.includes('value')||col.includes('spent')))
+      if (isMoneyColumn(col, moneyCols))
         return <span style={{color:'var(--blue)',fontFamily:'var(--mono)'}}>{formatCurrency(v)}</span>
       if (col.includes('pct')||col.includes('rate')||col.includes('percent'))
         return <span style={{color:v>0?'var(--green)':'var(--red)',fontFamily:'var(--mono)'}}>{v > 0 ? '+' : ''}{v}%</span>
@@ -209,14 +160,18 @@ function Message({ msg, llm, onVote }) {
                 <div style={{ fontSize:11, fontWeight:600, color:'var(--blue)', textTransform:'uppercase', letterSpacing:'.06em', marginBottom:6 }}>
                   🧠 Think Mode
                 </div>
-                {msg.analysis.replace(/\*\*/g, '').replace(/\*/g, '').replace(/_{2}/g, '').replace(/_/g, '')}
+                <Markdown text={msg.analysis} />
               </div>
             )}
 
-            <div style={{ fontSize:14, color:'var(--text)', lineHeight:1.7, marginBottom: msg.data ? 4 : 0 }}>
-              {msg.content}
-            </div>
-            {msg.data && (
+            {/* Advisory (prose-only) answers set show_data=false — hide the
+                "Found N results" summary and the unrelated chart/table. */}
+            {msg.content && msg.data?.show_data !== false && (
+              <div style={{ fontSize:14, color:'var(--text)', lineHeight:1.7, marginBottom: msg.data ? 4 : 0 }}>
+                <Markdown text={msg.content} />
+              </div>
+            )}
+            {msg.data && msg.data?.show_data !== false && (
               <>
                 {/* TODO: Re-enable "View SQL" toggle when ready
                 {msg.data.sql && (
@@ -234,7 +189,7 @@ function Message({ msg, llm, onVote }) {
                 */}
                 {msg.data.data?.length > 0 && <>
                   <ResultChart columns={msg.data.columns} data={msg.data.data} />
-                  <ResultTable columns={msg.data.columns} data={msg.data.data} rowCount={msg.data.row_count} />
+                  <ResultTable columns={msg.data.columns} data={msg.data.data} rowCount={msg.data.row_count} moneyCols={msg.data.money_cols} />
                 </>}
               </>
             )}
@@ -266,7 +221,11 @@ export default function ChatPage({
   // Used to distinguish "sidebar selected a different conversation" (should reload
   // messages) from "send() just created this conversation" (must NOT reload —
   // that would wipe the in-flight thinking bubble).
-  const localConvIdRef = useRef(convId)
+  // Starts at null (NOT convId) even when the URL already names a conversation —
+  // otherwise the guard below sees activeConvId === ref on the very first render
+  // and skips the initial load, leaving messages empty despite a valid deep link
+  // (e.g. refreshing on /chat/<uuid>).
+  const localConvIdRef = useRef(null)
 
   // When the parent navigates to a different conversation (sidebar click), load it.
   // Guard: skip if activeConvId matches the conversation we already own locally —
@@ -286,11 +245,17 @@ export default function ChatPage({
       .then(res => {
         const loaded = (res.messages || []).map((m, i) => {
           const snap = m.data_snapshot || null
+          const analysis = snap?.analysis || null
           const isAssistant = m.role !== 'user'
+          // Smart answers stores the analyst prose as BOTH the message content
+          // and the snapshot's analysis (so conversation memory has real text) —
+          // rendering both would duplicate it. Only show content separately when
+          // it differs from the analysis (e.g. legacy "Found N results").
+          const content = (analysis && m.content === analysis) ? '' : m.content
           return {
             id:       m.id || i,
             role:     m.role === 'user' ? 'user' : 'ai',
-            content:  m.content,
+            content,
             data: (snap || isAssistant) ? {
               type:      'data',
               columns:   snap?.columns || [],
@@ -299,7 +264,7 @@ export default function ChatPage({
               message_id: m.id,
               conversation_id: activeConvId,
             } : null,
-            analysis: snap?.analysis || null,
+            analysis,
             vote: m.vote ?? null,
           }
         })
@@ -336,7 +301,10 @@ export default function ChatPage({
         currentConvId = newId
         localConvIdRef.current = newId  // claim ownership before notifying parent
         setConvId(newId)
-        onConvCreated?.()  // parent only refreshes list — does NOT setActiveConvId
+        // Ownership (localConvIdRef) is already claimed above, so the parent
+        // setting activeConvId=newId (to update the URL for refresh-persistence)
+        // matches what we already own — ChatPage's reload-guard effect no-ops.
+        onConvCreated?.(newId)
       } catch {
         // If creation fails, continue without conversation memory (graceful degradation)
         currentConvId = null
@@ -357,7 +325,33 @@ export default function ChatPage({
     }, 10000)
 
     try {
-      const data = await runNLQuery(q, llm, thinkMode, currentConvId)
+      // Streaming first: live progress + the analyst answer as it arrives.
+      // Falls back to the plain endpoint when streaming is disabled server-side
+      // (404) or the stream dies before producing any output.
+      const patchMsg = (patch) => setMessages(m => m.map(msg =>
+        msg.id === thinkMsg.id ? { ...msg, ...patch } : msg
+      ))
+      let sawOutput = false
+      let data = null
+      try {
+        data = await streamNLQuery(q, llm, thinkMode, currentConvId, {
+          onStep:  p => { if (p.label) patchMsg({ loadingText: p.label }) },
+          onToken: t => {
+            sawOutput = true
+            setMessages(m => m.map(msg => {
+              if (msg.id !== thinkMsg.id) return msg
+              const acc = (msg.streamText || '') + t
+              return { role: 'ai', id: thinkMsg.id, content: '', analysis: acc, streamText: acc }
+            }))
+          },
+        })
+      } catch (se) {
+        data = null   // stream failed — fall back below
+      }
+      // Re-run via the plain endpoint only if the stream produced nothing —
+      // never after tokens were shown (that would double-charge the question).
+      if (!data && !sawOutput) data = await runNLQuery(q, llm, thinkMode, currentConvId)
+      if (!data) data = { success: false, type: 'error', message: 'The connection dropped mid-answer. Please try again.' }
       const rowCount = data.row_count
       const type     = data.type
       let summary
@@ -367,12 +361,7 @@ export default function ChatPage({
       } else if (!data.success || type === 'error') {
         summary = data.message || 'Something went wrong. Please try again.'
       } else {
-        const numCol = data.columns?.find(c => typeof data.data?.[0]?.[c] === 'number')
-        summary = `Found ${rowCount} result${rowCount !== 1 ? 's' : ''}`
-        if (numCol && data.data?.[0]) {
-          const total = data.data.reduce((s, r) => s + (r[numCol] || 0), 0)
-          summary += ` · Total ${numCol.replace(/_/g, ' ')}: ${formatNumber(total)}`
-        }
+        summary = `Found ${rowCount} result${rowCount !== 1 ? 's' : ''}` + summarySuffix(data)
         if (rowCount === 0) summary = "I couldn't find anything matching that. Try rephrasing or broadening your question."
       }
 

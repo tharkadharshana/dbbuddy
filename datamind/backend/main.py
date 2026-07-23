@@ -11,13 +11,15 @@ Three fixes in this version:
 
 import os
 import re
+import json
+import asyncio
 import hashlib
 import decimal
 import datetime
 import traceback
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, BackgroundTasks, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List, Any, Dict
 from dotenv import load_dotenv
@@ -25,11 +27,14 @@ from dotenv import load_dotenv
 load_dotenv()  # must run before any local module reads os.getenv at import time
 
 from logger import get_logger
-from db import get_connection, get_table_schemas, get_foreign_keys, get_sample_data
+from db import get_connection, get_table_schemas, get_foreign_keys, get_sample_data, run_select_and_format
 from llm import (
     query_to_sql, generate_report_summary, call_llm, validate_llm_key,
     list_gemini_models, LLMTransientError,
     classify_question, synthesize_multi_step_answer, fix_currency_symbol,
+    rewrite_followup, last_assistant_was_clarification,
+    safety_gate, add_advice_caveat, SAFE_REFUSAL, CODING_DECLINE,
+    _filter_sensitive_schema,
 )
 from cache import get_cache, save_cache, invalidate_cache, get_cache_status
 from schema_builder import build_schema_cache
@@ -62,6 +67,10 @@ from embed import router as embed_router, bootstrap_embed_tables
 from feedback import router as feedback_router, bootstrap_feedback_tables
 from v1 import router as partner_router
 from pool import get_pool
+import mcp_server.safety as _safety
+from mcp_server.business_tools import ToolContext as _MCPToolContext
+from mcp_server.orchestrator import answer_business_question as _mcp_answer_business_question
+import progress as _progress
 
 log = get_logger(__name__)
 
@@ -137,6 +146,40 @@ app.add_middleware(SlowAPIMiddleware)
 _FORCE_HTTPS    = os.getenv("FORCE_HTTPS", "").lower() == "true"
 _SQL_TIMEOUT_MS = int(os.getenv("SQL_TIMEOUT_MS", "30000"))  # hard-kill runaway LLM queries
 
+# MCP tool-calling rollout flags (see docs/04_MCP_Architecture_And_Implementation_Guide.md).
+# Empty _MCP_TOOL_CALLING_TEST_EMAILS = the master flag alone controls it for everyone.
+# Non-empty = only those accounts get the new path even with the flag on (staged rollout).
+_MCP_TOOL_CALLING_ENABLED = os.getenv("MCP_TOOL_CALLING_ENABLED", "").lower() == "true"
+_MCP_TOOL_CALLING_TEST_EMAILS = {
+    e.strip().lower() for e in os.getenv("MCP_TOOL_CALLING_TEST_EMAILS", "").split(",") if e.strip()
+}
+
+# Smart-answers rollout flag (see docs/AI_Answer_Quality_Fix_Plan.md, Phases 1–3).
+# When on: classifier gains an out_of_scope guardrail, routes advice/forecast to
+# data_query instead of refusing, and defaults vague periods; the answer layer
+# reasons like an analyst grounded in the merchant's data. Off = legacy behaviour.
+_SMART_ANSWERS_ENABLED = os.getenv("SMART_ANSWERS_ENABLED", "").lower() == "true"
+
+# Follow-up rewriter (D1 / PLAN_09 S1). When on, a short pre-classification LLM
+# call rewrites bare follow-ups ("for this week", "then fried rice?") into a
+# standalone question using recent turns, so the classifier/tool loop/answer
+# prompt all see a complete question. Default OFF → byte-identical to today.
+_FOLLOWUP_REWRITE_ENABLED = os.getenv("FOLLOWUP_REWRITE_ENABLED", "").lower() in ("1", "true", "yes")
+# Output sanitiser (D3 / PLAN_09 S2). Strips internal table/SQL/tool identifiers
+# from every outgoing answer. Default OFF.
+_ANSWER_SANITISER_ENABLED = os.getenv("ANSWER_SANITISER_ENABLED", "").lower() in ("1", "true", "yes")
+# Business-knowledge route (D2 / PLAN_09 S4). Default OFF.
+_BUSINESS_KNOWLEDGE_ENABLED = os.getenv("BUSINESS_KNOWLEDGE_ENABLED", "").lower() in ("1", "true", "yes")
+# Answer-everything: scope->safety inversion (T1 / PLAN_10). Answers general
+# knowledge/strategy/advice by default; refuses on harm only, declines coding.
+# Supersedes BUSINESS_KNOWLEDGE — do not enable both. Default OFF.
+_ANSWER_EVERYTHING_ENABLED = os.getenv("ANSWER_EVERYTHING_ENABLED", "").lower() in ("1", "true", "yes")
+log.info("Conversational-layer flags",
+         followup_rewrite=_FOLLOWUP_REWRITE_ENABLED,
+         answer_sanitiser=_ANSWER_SANITISER_ENABLED,
+         business_knowledge=_BUSINESS_KNOWLEDGE_ENABLED,
+         answer_everything=_ANSWER_EVERYTHING_ENABLED)
+
 # Cached name of the session timeout variable for this MySQL/MariaDB server.
 # "max_execution_time" (MySQL 5.7.8+, milliseconds)
 # "max_statement_time"  (MariaDB, seconds)
@@ -175,220 +218,26 @@ def _set_query_timeout(cursor) -> None:
         log.warning("Failed to set SQL timeout", var=_sql_timeout_var, error=str(e))
 
 
-# SQL keywords that can never be a table alias. The LLM often omits aliases,
-# so the FROM/JOIN regex captures the next keyword (e.g. WHERE, JOIN, ON) as the
-# alias, which then produces invalid SQL like WHERE.tenant_id = '...'. Both the
-# tenant-isolation and date-filter enforcers guard against this by falling back
-# to the table name when the captured alias is one of these.
-_SQL_KEYWORDS = frozenset({
-    'WHERE', 'GROUP', 'ORDER', 'LIMIT', 'HAVING', 'ON', 'SET',
-    'INNER', 'LEFT', 'RIGHT', 'CROSS', 'FULL', 'JOIN', 'UNION',
-    'SELECT', 'FROM', 'AND', 'OR', 'NOT', 'IN', 'IS', 'NULL',
-    'AS', 'BY', 'ASC', 'DESC', 'WITH', 'USING',
-})
-
-
 def _enforce_tenant_isolation(sql: str, tenant_id: str) -> str:
     """
     SEC-15: Server-side tenant isolation enforcement for shared sp_*/ly_* tables.
 
-    The LLM is instructed to add WHERE tenant_id = '...' but sometimes omits it
-    or adds it only for the primary table while leaving JOINed tables unscoped.
-    This function post-processes the generated SQL to guarantee every shared-table
-    reference is filtered to the correct tenant BEFORE execution.
-
-    Strategy:
-      1. Find all sp_*/ly_* table references with their aliases (FROM and JOIN).
-      2. For each alias not already scoped with alias.tenant_id = '...':
-         - If it's the FROM table: inject into the WHERE clause (or create one).
-         - If it's a JOINed table: inject AND alias.tenant_id = '...' into the ON clause.
-      3. Raise ValueError if ANY other tenant_id literal appears in the SQL
-         (prevents prompt-injection attacks requesting another tenant's data).
+    Logic now lives in mcp_server/safety.py (shared with the MCP business-data
+    tools, which run the identical check on every run_select_query tool call)
+    — see that module's docstring for the full strategy. This wrapper just
+    keeps every existing call site in this file unchanged.
     """
-    if not tenant_id:
-        return sql
-
-    safe_tid = tenant_id.replace("'", "\\'")
-    expected_literal = f"'{safe_tid}'"
-
-    # Security: reject if a *different* tenant_id literal appears in the SQL.
-    # e.g. user tries: "show me data where tenant_id = 'other_user_prefix'"
-    tid_val_re = re.compile(r"tenant_id\s*=\s*'([^']*)'", re.IGNORECASE)
-    for m in tid_val_re.finditer(sql):
-        found_tid = m.group(1)
-        if found_tid != tenant_id:
-            raise ValueError(
-                f"Query references tenant_id '{found_tid}' which does not match "
-                f"your account. Cross-tenant queries are not allowed."
-            )
-
-    # Find all sp_*/ly_* table references: (FROM|JOIN) table_name [AS] alias
-    # Captures: group1=clause, group2=table, group3=alias (may be None)
-    table_re = re.compile(
-        r'\b(FROM|(?:INNER|LEFT|RIGHT|CROSS|FULL)?\s*JOIN)\s+'
-        r'(`?(?:sp|ly)_\w+`?)'
-        r'(?:\s+(?:AS\s+)?(`?\w+`?))?',
-        re.IGNORECASE,
-    )
-
-    # Build list of (alias, clause_type, match_end_pos)
-    refs = []
-    for m in table_re.finditer(sql):
-        clause = m.group(1).strip().upper()
-        clause_type = "FROM" if clause == "FROM" else "JOIN"
-        table_raw = m.group(2).strip('`')
-        captured_alias = (m.group(3) or "").strip('`')
-        # If the captured alias is a SQL keyword, the table has no alias — use table name.
-        alias_raw = table_raw if (not captured_alias or captured_alias.upper() in _SQL_KEYWORDS) else captured_alias
-        refs.append((alias_raw, clause_type, m.end()))
-
-    if not refs:
-        return sql  # No shared tables referenced — nothing to enforce.
-
-    # Determine which aliases are already correctly scoped
-    already_scoped = set()
-    for alias, _, _ in refs:
-        pattern = re.compile(
-            rf'\b{re.escape(alias)}\.tenant_id\s*=\s*{re.escape(expected_literal)}',
-            re.IGNORECASE,
-        )
-        if pattern.search(sql):
-            already_scoped.add(alias)
-
-    # Also consider bare "tenant_id = '...'" (no alias prefix) as scoping the FROM table
-    bare_scoped = bool(re.search(
-        rf'\btenant_id\s*=\s*{re.escape(expected_literal)}', sql, re.IGNORECASE
-    ))
-    from_alias = next((a for a, ct, _ in refs if ct == "FROM"), None)
-    if bare_scoped and from_alias:
-        already_scoped.add(from_alias)
-
-    unscoped = [(a, ct, pos) for (a, ct, pos) in refs if a not in already_scoped]
-    if not unscoped:
-        return sql  # All references already scoped — nothing to do.
-
-    log.warning(
-        "Tenant isolation: injecting missing tenant_id filters",
-        tenant_id=tenant_id,
-        unscoped_aliases=[a for a, _, _ in unscoped],
-    )
-
-    # ── Step 1: Inject AND alias.tenant_id = '...' into each JOIN ON clause ──
-    # Process in reverse order so injections don't shift positions.
-    for alias, clause_type, match_end in sorted(unscoped, key=lambda x: x[2], reverse=True):
-        if clause_type != "JOIN":
-            continue
-        # Find the ON keyword after this JOIN match
-        on_re = re.compile(r'\bON\b', re.IGNORECASE)
-        on_m = on_re.search(sql, match_end)
-        if on_m:
-            # Find the end of the ON condition (before next JOIN/WHERE/GROUP/ORDER/LIMIT/HAVING)
-            end_re = re.compile(
-                r'\b(?:INNER\s+JOIN|LEFT\s+JOIN|RIGHT\s+JOIN|CROSS\s+JOIN|JOIN|WHERE|GROUP\s+BY|ORDER\s+BY|HAVING|LIMIT)\b',
-                re.IGNORECASE,
-            )
-            end_m = end_re.search(sql, on_m.end())
-            insert_at = end_m.start() if end_m else len(sql)
-            # Find last non-whitespace before insert_at to place AND cleanly
-            inject = f" AND {alias}.tenant_id = {expected_literal}"
-            sql = sql[:insert_at].rstrip() + inject + " " + sql[insert_at:].lstrip()
-
-    # ── Step 2: Inject tenant_id into WHERE clause for FROM table (if unscoped) ──
-    from_unscoped = [a for a, ct, _ in unscoped if ct == "FROM"]
-    if from_unscoped:
-        alias = from_unscoped[0]
-        cond = f"{alias}.tenant_id = {expected_literal}"
-        where_re = re.compile(r'\bWHERE\b', re.IGNORECASE)
-        where_m = where_re.search(sql)
-        if where_m:
-            # Insert as first condition after WHERE
-            insert_at = where_m.end()
-            sql = sql[:insert_at] + f" {cond} AND " + sql[insert_at:].lstrip()
-        else:
-            # No WHERE clause — insert before GROUP BY / ORDER BY / LIMIT / HAVING
-            end_re = re.compile(
-                r'\b(?:GROUP\s+BY|ORDER\s+BY|HAVING|LIMIT)\b', re.IGNORECASE
-            )
-            end_m = end_re.search(sql)
-            if end_m:
-                sql = sql[:end_m.start()] + f"WHERE {cond} " + sql[end_m.start():]
-            else:
-                sql = sql.rstrip(';').rstrip() + f" WHERE {cond}"
-
-    return sql
+    return _safety.enforce_tenant_isolation(sql, tenant_id)
 
 
 def _enforce_date_filter(sql: str, history_months: int) -> str:
     """
     Enforce the plan's data-history window on every NL query for integration users.
 
-    Problem: follow-up questions ("what can I do to increase this?") let the LLM
-    generate SQL without a date filter, pulling ALL historical data even though
-    the user's plan only allows N months. The LLM prompt hint is advisory —
-    this function is mandatory server-side enforcement.
-
-    Strategy:
-      - Only applies when the query touches a transactional table (sp_receipts or
-        sp_receipt_line_items / ly_receipts or ly_receipt_line_items). Reference
-        tables (products, categories, shops, customers, payment_types) are catalogue
-        data that must never be date-filtered — their created_at reflects when the
-        record was created in the POS, not a transaction date, and for products it
-        is often NULL entirely.
-      - If the SQL already contains a created_at comparison, trust the LLM.
-      - Otherwise inject AND alias.created_at >= DATE_SUB(CURDATE(), INTERVAL N MONTH)
-        into the WHERE clause of the primary transactional table.
-
-    Only applied to integration users (sp_*/ly_* tables) where the date column
-    is always created_at. Not applied to own-DB users — unknown schema.
+    Logic now lives in mcp_server/safety.py (shared with the MCP business-data
+    tools) — see that module's docstring for the full strategy.
     """
-    if not history_months:
-        return sql
-
-    # Only enforce on transactional tables — never on reference/catalogue tables.
-    _TRANSACTIONAL = re.compile(
-        r'\b(sp_receipts|sp_receipt_line_items|ly_receipts|ly_receipt_line_items)\b',
-        re.IGNORECASE,
-    )
-    if not _TRANSACTIONAL.search(sql):
-        return sql
-
-    # If LLM already applied a date filter on created_at, trust it.
-    if re.search(r'\bcreated_at\s*[><=]', sql, re.IGNORECASE):
-        return sql
-
-    # Find the primary FROM sp_*/ly_* table with its alias.
-    table_re = re.compile(
-        r'\bFROM\s+(`?(?:sp|ly)_\w+`?)(?:\s+(?:AS\s+)?(`?\w+`?))?',
-        re.IGNORECASE,
-    )
-    m = table_re.search(sql)
-    if not m:
-        return sql  # no shared table found — nothing to inject
-
-    alias_candidate = m.group(2)
-    if alias_candidate and alias_candidate.strip('`').upper() in _SQL_KEYWORDS:
-        alias_candidate = None
-    alias = (alias_candidate or m.group(1)).strip('`')
-    date_cond = (
-        f"{alias}.created_at >= DATE_SUB(CURDATE(), INTERVAL {history_months} MONTH)"
-    )
-
-    log.debug("Date filter enforced", alias=alias, history_months=history_months)
-
-    where_re = re.compile(r'\bWHERE\b', re.IGNORECASE)
-    where_m = where_re.search(sql)
-    if where_m:
-        insert_at = where_m.end()
-        return sql[:insert_at] + f" {date_cond} AND " + sql[insert_at:].lstrip()
-
-    end_re = re.compile(
-        r'\b(?:GROUP\s+BY|ORDER\s+BY|HAVING|LIMIT)\b', re.IGNORECASE
-    )
-    end_m = end_re.search(sql)
-    if end_m:
-        return sql[:end_m.start()] + f"WHERE {date_cond} " + sql[end_m.start():]
-
-    return sql.rstrip(';').rstrip() + f" WHERE {date_cond}"
+    return _safety.enforce_date_filter(sql, history_months)
 
 
 if _FORCE_HTTPS:
@@ -526,29 +375,48 @@ def _base_query_response(**kwargs) -> dict:
         "think_mode":      kwargs.get("think_mode", False),
         "conversation_id": kwargs.get("conversation_id", None),
         "data_as_of":      kwargs.get("data_as_of", None),
+        # False = prose-only answer (advice); frontend hides chart/table/summary.
+        "show_data":       kwargs.get("show_data", True),
+        # Column the frontend should total in its "· X" summary suffix (or None),
+        # and whether it's money — so the FE doesn't re-derive column heuristics.
+        "summary_col":     kwargs.get("summary_col", None),
+        "summary_is_money": kwargs.get("summary_is_money", False),
+        # Columns that are monetary (backend _is_money_column) — the frontend
+        # table uses this instead of its own divergent regex.
+        "money_cols":      kwargs.get("money_cols", []),
         "message_id":      kwargs.get("message_id", None),
     }
     if "sql" in kwargs:
         base["sql"] = kwargs["sql"]
     if "multi_results" in kwargs:
         base["multi_results"] = kwargs["multi_results"]
+    # D3 exit guard — the single place every outgoing answer passes through, so
+    # no branch can leak internal table/SQL/tool/report names to a merchant.
+    # (SSE streams tokens before this payload exists; those are covered in S5
+    # when the answer prompt itself is rewritten — no mid-stream filtering here.)
+    if _ANSWER_SANITISER_ENABLED:
+        from llm import sanitise_answer, CAPABILITIES_MESSAGE
+        _fb = CAPABILITIES_MESSAGE.format(app=_APP_NAME, provider="business")
+        for _field in ("message", "analysis"):
+            _val = base.get(_field)
+            if isinstance(_val, str) and _val:
+                _clean, _found = sanitise_answer(_val, fallback=_fb)
+                if _found:
+                    log.warning("Answer sanitiser stripped internal identifiers",
+                                field=_field, found=list(dict.fromkeys(_found))[:8])
+                    base[_field] = _clean
     return base
 
 
-# SEC-04: block LLM-generated SQL from running mutating statements
-import re as _re
-_SQL_MUTATION_RE = _re.compile(
-    r'\b(DROP|DELETE|INSERT|UPDATE|TRUNCATE|ALTER|CREATE|REPLACE|GRANT|REVOKE|CALL|EXEC)\b',
-    _re.IGNORECASE
-)
-
+# SEC-04: block LLM-generated SQL from running mutating statements.
+# Logic lives in mcp_server/safety.py (shared with the MCP business-data
+# tools) — this wrapper just converts ValueError -> HTTPException, keeping
+# every existing call site in this file unchanged.
 def _guard_sql(sql: str):
-    m = _SQL_MUTATION_RE.search(sql)
-    if m:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Generated query contains a disallowed statement: {m.group(0).upper()}"
-        )
+    try:
+        _safety.block_mutations(sql)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Generated {e}")
 
 
 # SEC-06: encrypt DB passwords at rest using same Fernet key as integrations
@@ -703,19 +571,10 @@ _ID_COL_RE = re.compile(r'^id$|_id$', re.IGNORECASE)
 
 
 def _run_sql(conn, sql: str, title: str) -> dict:
-    cursor = conn.cursor()
     log.debug("Executing SQL", title=title, sql_preview=f"{sql[:60]}…" if len(sql) > 60 else sql)
-    cursor.execute(sql)
-    cols = [d[0] for d in cursor.description]
-    rows = cursor.fetchall()
-    # Strip raw DB surrogate ID columns — they are internal keys with no meaning
-    # to end users. Human-readable codes (customer_code, product_code) are used instead.
-    visible_cols = [c for c in cols if not _ID_COL_RE.search(c)]
-    if len(visible_cols) < len(cols):
-        log.debug("Stripped ID columns from result", stripped=[c for c in cols if _ID_COL_RE.search(c)])
-    data = [{c: _safe(v) for c, v in zip(cols, row) if not _ID_COL_RE.search(c)} for row in rows]
-    log.debug("SQL result", title=title, rows=len(data))
-    return {"title": title, "columns": visible_cols, "data": data, "row_count": len(data)}
+    result = run_select_and_format(conn, sql)
+    log.debug("SQL result", title=title, rows=len(result["data"]))
+    return {"title": title, "columns": result["columns"], "data": result["data"], "row_count": len(result["data"])}
 
 
 # Maps analytics template IDs to FEATURE_COST operation types.
@@ -1557,15 +1416,70 @@ def discover(request: Request, user: dict = Depends(current_user)):
 _ID_COLUMN_RE = re.compile(r'^id$|_id$', re.IGNORECASE)
 
 # Column name fragments that indicate a monetary value deserving a currency symbol.
+# NOTE: "total" is deliberately excluded — it appears in count columns too
+# (e.g. total_quantity_sold, total_customers) and caused counts to be rendered
+# as money. Real money words below are unambiguous.
 _MONEY_FRAGMENTS = frozenset({
-    "money", "revenue", "spent", "price", "cost", "total", "amount",
+    "money", "revenue", "spent", "price", "cost", "amount",
     "paid", "discount", "tax", "charge", "value", "sales", "profit",
+})
+
+# Whole tokens that mark a column as a count/quantity — never money, even if it
+# also contains a money word (e.g. "total_sales_qty"). Matched per underscore/
+# camelCase token (not substring) so "discount" isn't mistaken for "count".
+_COUNT_TOKENS = frozenset({
+    "quantity", "qty", "count", "cnt", "units", "unit",
+    "number", "num", "rows", "row",
 })
 
 
 def _is_money_column(col: str) -> bool:
     lower = col.lower()
+    tokens = re.split(r'[^a-z]+', lower)
+    if any(t in _COUNT_TOKENS for t in tokens):
+        return False
     return any(frag in lower for frag in _MONEY_FRAGMENTS)
+
+
+def _pick_summary_column(columns: list, first_row: dict) -> str | None:
+    """Choose the column to total in the "…= X" answer summary suffix.
+    Prefer a money column, then an explicit quantity/count column, else None
+    (skip the suffix rather than summing an arbitrary/ID column). ID columns
+    are already filtered upstream but we never sum them here either."""
+    def _numeric(c):
+        return isinstance(first_row.get(c), (int, float)) and not _ID_COLUMN_RE.search(c)
+    numeric = [c for c in columns if _numeric(c)]
+    money = next((c for c in numeric if _is_money_column(c)), None)
+    if money:
+        return money
+    return next(
+        (c for c in numeric
+         if any(t in _COUNT_TOKENS for t in re.split(r'[^a-z]+', c.lower()))),
+        None,
+    )
+
+
+def _format_result_context(columns: list, data: list, currency: str):
+    """Shared prep for the answer LLM calls: strip ID columns, tag MONEY vs
+    VALUE, and render the sampled rows as CSV. Returns
+    (col_type_hint, header, rows_text, truncation_note)."""
+    visible_cols = [c for c in columns if not _ID_COLUMN_RE.search(c)]
+    if not visible_cols:
+        visible_cols = columns  # safety: if everything was IDs keep all
+    col_hints = [
+        f"{c}={'MONEY' if _is_money_column(c) else 'VALUE'}" for c in visible_cols
+    ]
+    col_type_hint = (
+        f"Column types (MONEY = use '{currency}' symbol; VALUE = plain number, NO currency symbol): "
+        + ", ".join(col_hints)
+    )
+    sample = data[:50]
+    header = ", ".join(visible_cols)
+    rows_text = "\n".join(
+        ", ".join(str(row.get(c, "")) for c in visible_cols) for row in sample
+    )
+    truncation_note = f"\n(Showing first 50 of {len(data)} rows)" if len(data) > 50 else ""
+    return col_type_hint, header, rows_text, truncation_note
 
 
 def _run_think_analysis(question: str, columns: list, data: list,
@@ -1573,32 +1487,8 @@ def _run_think_analysis(question: str, columns: list, data: list,
                         currency: str = "$") -> str:
     """Second LLM call for Think Mode: analyse SQL results and answer the question.
     call_llm() handles token charging via charge_ai_usage() automatically."""
-    # Strip internal ID columns — they are opaque keys, meaningless to users.
-    visible_cols = [c for c in columns if not _ID_COLUMN_RE.search(c)]
-    if not visible_cols:
-        visible_cols = columns  # safety: if everything was IDs keep all
-
-    # Build column type hints so LLM knows which columns are monetary vs counts.
-    col_hints = []
-    for c in visible_cols:
-        if _is_money_column(c):
-            col_hints.append(f"{c}=MONEY")
-        else:
-            col_hints.append(f"{c}=VALUE")
-    col_type_hint = (
-        f"Column types (MONEY = use '{currency}' symbol; VALUE = plain number, NO currency symbol): "
-        + ", ".join(col_hints)
-    )
-
-    sample = data[:50]
-    header = ", ".join(visible_cols)
-    rows_text = "\n".join(
-        ", ".join(str(row.get(c, "")) for c in visible_cols)
-        for row in sample
-    )
-    truncation_note = (
-        f"\n(Showing first 50 of {len(data)} rows)" if len(data) > 50 else ""
-    )
+    col_type_hint, header, rows_text, truncation_note = _format_result_context(
+        columns, data, currency)
     prompt = (
         f"The user asked: \"{question}\"\n\n"
         f"{col_type_hint}\n\n"
@@ -1632,6 +1522,146 @@ def _run_think_analysis(question: str, columns: list, data: list,
     )
 
 
+# Matches an explicit lookback range the user typed ("last 2 years", "past 6 months").
+_LOOKBACK_RE = re.compile(r'\b(?:last|past|previous)\s+(\d+)\s+(day|week|month|year)s?\b', re.IGNORECASE)
+# Phrases that imply "everything / more than the plan window".
+_ALL_TIME_RE = re.compile(r'\b(all[\s-]?time|life[\s-]?time|since\s+(?:the\s+)?(?:start|beginning)|ever\s+since)\b', re.IGNORECASE)
+_DAYS_PER = {"day": 1, "week": 7, "month": 30, "year": 365}
+
+
+def _derive_period(question: str, history: dict):
+    """Turn the plan's history window into a human coverage label and decide
+    whether the user asked for more than the plan allows (upsell trigger).
+    Returns (period_label, plan_tier, over_range). ponytail: keyword heuristic
+    for over_range — a full NL date-range parser isn't worth it here."""
+    from datetime import date, timedelta
+    months = history.get("months") or 0
+    plan_tier = history.get("plan_name") or ""
+    window_days = months * 30
+    end = date.today()
+    start = end - timedelta(days=window_days)
+    period_label = (
+        f"the last {window_days} days ({start:%b %d} – {end:%b %d, %Y})" if window_days else ""
+    )
+    over_range = False
+    if window_days:
+        if _ALL_TIME_RE.search(question):
+            over_range = True
+        else:
+            m = _LOOKBACK_RE.search(question)
+            if m and int(m.group(1)) * _DAYS_PER[m.group(2).lower()] > window_days:
+                over_range = True
+    return period_label, plan_tier, over_range
+
+
+_EMPTY_PERIOD_PHRASES = (
+    "today", "yesterday", "this week", "last week", "this month", "last month",
+    "this year", "last year", "this quarter", "last quarter", "so far this year",
+)
+
+
+def _empty_result_narrative(question: str) -> str:
+    """D5: a never-blank answer for the 0-row data path. Names the period the
+    user asked about (if any) and offers a concrete next step, instead of
+    returning nothing or a bare 'Found 0 results.'."""
+    q = (question or "").lower()
+    hit = next((p for p in _EMPTY_PERIOD_PHRASES if p in q), None)
+    where = f" for {hit}" if hit else " for that"
+    return (
+        f"I don't see any matching records{where} yet. That usually means there was no "
+        "activity in that period, or the filter was too specific. You could try a wider "
+        "date range or a different product, category, or shop — or ask me about your top "
+        "sellers or busiest days and I'll pull it up."
+    )
+
+
+def _run_answer(question: str, columns: list, data: list,
+                llm: str, api_key: str, user_email: str,
+                currency: str = "$", period_label: str = "",
+                plan_tier: str = "", history_months: int = 0,
+                over_range: bool = False, on_delta=None) -> str:
+    """Smart-answers analyst pass (SMART_ANSWERS_ENABLED). Unlike the legacy
+    narrator, this reasons over the merchant's own rows like a business analyst:
+    interprets, gives grounded advice, does light labelled forecasting, and may
+    use markdown. period_label/plan_tier/history_months/over_range are populated
+    by Phase 3; empty defaults simply omit the coverage/upsell instructions."""
+    col_type_hint, header, rows_text, truncation_note = _format_result_context(
+        columns, data, currency)
+
+    coverage = ""
+    if period_label:
+        coverage = f"\nThis data covers: {period_label}. State this period in your answer.\n"
+        if over_range and history_months:
+            coverage += (
+                f"The user asked for a longer range than their plan covers. Add ONE short sentence: "
+                f"their current plan includes {history_months} months of history and a higher tier unlocks more.\n"
+            )
+
+    prompt = (
+        f"The user asked: \"{question}\"\n\n"
+        f"{col_type_hint}\n"
+        f"{coverage}\n"
+        f"Here is the query result ({len(data)} rows total):{truncation_note}\n"
+        f"{header}\n{rows_text}\n\n"
+        "Answer as an expert retail/business analyst using THIS data plus your own business reasoning. "
+        "Ground every number in the rows above — never invent figures. "
+        "If the user asks how to improve/grow/fix something, give specific suggestions that reference the "
+        "actual numbers you just saw. If they ask what's next or a trend, you may give a simple run-rate or "
+        "trend estimate from the history shown — clearly label it an estimate. "
+        "Match length to the question: one sentence for a factual lookup; a short structured answer "
+        "(a few sentences or a small bullet list) for how/why/what-should-I-do questions. "
+        "Light markdown is allowed (short **bold** labels, small bullet lists) where it genuinely helps — "
+        "don't over-format simple answers."
+    )
+    return call_llm(
+        prompt,
+        system=(
+            "You are DataMind, an expert retail/business data analyst. You answer using the merchant's own "
+            "data plus general business reasoning — interpret it, surface what's notable, and give grounded, "
+            "specific advice when asked. Be as concise as the question allows. "
+            "Never mention database ID values — they are internal system keys, not business data. "
+            "Only apply a currency symbol to columns marked MONEY; VALUE columns are plain counts — never "
+            "prefix them with a currency symbol. "
+            "Answer in the same language the user used to write their question."
+        ),
+        llm=llm,
+        max_tokens=700,
+        api_key=api_key,
+        user_email=user_email,
+        operation="think",
+        on_delta=on_delta,
+    )
+
+
+def _run_knowledge_answer(question: str, llm: str, api_key: str, user_email: str,
+                          currency: str = "$", extra_hint: str = "") -> str:
+    """D2: answer a general retail/business-knowledge question from the model's
+    own knowledge in the analyst persona — no tools, no data fetch. Offers to
+    ground the concept in the merchant's own numbers as a next step.
+    ponytail: hybrid questions reuse this same path (knowledge + an offer to pull
+    figures) rather than a live pre-fetch — the true grounded-in-your-numbers
+    variant belongs to the full-context agent (PLAN_09 S5), add it there."""
+    prompt = (
+        f"The user asked: \"{question}\"\n\n"
+        "Answer as an expert retail/business analyst. Explain the concept, definition, or "
+        "how-to clearly and concisely in plain language a shop owner understands. If their own "
+        "figures would make this more useful, end with ONE short offer to pull the relevant "
+        "numbers from their data (e.g. 'Want me to show your actual figures?'). "
+        "Keep it tight: a short paragraph or a few bullets."
+    )
+    system = (
+        "You are DataMind, an expert retail/business data analyst. You answer business questions "
+        "helpfully from your own knowledge, in plain language. Never refuse a retail, sales, "
+        "pricing, stock, staffing, customer, or accounting question. Never mention databases, "
+        "tables, SQL, or internal tools. "
+        f"When you mention money use '{currency}'. Answer in the same language the user used."
+    )
+    if extra_hint:
+        system += " " + extra_hint
+    return call_llm(prompt, system, llm, max_tokens=500, api_key=api_key,
+                    user_email=user_email, operation="knowledge")
+
+
 class NLQueryRequest(BaseModel):
     question:        str
     llm:             str  = "openai"
@@ -1639,12 +1669,13 @@ class NLQueryRequest(BaseModel):
     conversation_id: str  = None  # optional — enables conversation memory
 
 
-@v1.post("/query")
-@_limiter.limit(RL_COMPUTE)
-def natural_language_query(request: Request, req: NLQueryRequest, user: dict = Depends(current_user)):
+def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: dict) -> dict:
+    """The full NL-query pipeline. Called by both POST /v1/query (plain JSON)
+    and POST /v1/query/stream (SSE) — the latter runs it on a worker thread
+    with a progress emitter installed, so steps.append() streams live."""
     log = get_logger(__name__)   # local — lets us rebind with log = log.bind(...) later without UnboundLocalError
     conn = None
-    steps: list = []
+    steps: list = _progress.Steps()
     conv_id = req.conversation_id or None
 
     # ── AI limit check ────────────────────────────────────────────────────────
@@ -1656,6 +1687,24 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
             message=reason,
         )
 
+    # ── Safety backstop (T4) — always on, deterministic, pre-classification ────
+    # Genuine-harm requests get a plain refusal even if the classifier would miss
+    # them. Cheap regex; tuned to require intent+object so business phrasing is
+    # unaffected. (The advice-caveat side of the gate is applied on the
+    # knowledge/advisory answer paths, not here.)
+    if safety_gate(req.question).get("action") == "refuse":
+        log.info("Safety gate refused request", user=user["email"], question=req.question[:80])
+        if conv_id:
+            try:
+                _conv.save_message(conv_id, "user", req.question)
+                _conv.save_message(conv_id, "assistant", SAFE_REFUSAL)
+            except Exception:
+                pass
+        return _base_query_response(
+            success=True, type="conversational", message=SAFE_REFUSAL,
+            conversation_id=conv_id, think_mode=req.think_mode,
+        )
+
     llm = _effective_llm(user, req.llm)
     log.info("NL query", user=user["email"], llm=llm, question=req.question[:80])
     api_key = _resolve_api_key(user, llm)
@@ -1664,6 +1713,7 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
     nl_tenant_id = None
     nl_shop_timezone = "UTC"
     nl_last_sync_at = None
+    nl_provider_label = "business"   # display name for the capabilities reply
     _locale         = s.get("locale") or {}
     nl_currency     = _locale.get("currency") or "$"
     nl_country      = _locale.get("country") or ""
@@ -1705,12 +1755,14 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                 prefix = conn_info.get("table_prefix", "")
                 if pid == "salesplay":
                     tables_filter.extend(_SALESPLAY_SHARED_TABLES)
+                    nl_provider_label = "SalesPlay"
                     if not nl_tenant_id:
                         nl_tenant_id = prefix
                         _raw_sync = conn_info.get("last_sync_at")
                         if _raw_sync:
                             nl_last_sync_at = str(_raw_sync)
                 elif pid == "loyverse" and prefix:
+                    nl_provider_label = "Loyverse"
                     tables_filter.extend([f"{prefix}_{_sfx}" for _sfx in _LOYVERSE_VIEW_SUFFIXES])
                     loyverse_hints.append(
                         f"The {prefix}_customers table has pre-aggregated total_spent and "
@@ -1776,6 +1828,26 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
             except Exception as _tze:
                 log.debug("Could not fetch shop timezone, defaulting to UTC", error=str(_tze))
 
+        # ── Follow-up rewrite (D1) ────────────────────────────────────────────
+        # Rewrite a bare follow-up into a standalone question BEFORE anything
+        # downstream sees it. nl_question is what the classifier / tool loop /
+        # answer prompt operate on; req.question stays the original for display,
+        # storage and language detection.
+        nl_question = req.question
+        _rewrite = {"resolved": True, "carried": [], "changed": False}
+        _prev_was_clarification = last_assistant_was_clarification(conv_history)
+        if _FOLLOWUP_REWRITE_ENABLED and conv_history:
+            try:
+                _rewrite = rewrite_followup(req.question, conv_history, llm, api_key, user["email"])
+                nl_question = _rewrite["standalone"]
+                if _rewrite.get("changed"):
+                    log.info("Follow-up rewritten", original=req.question[:80],
+                             rewritten=nl_question[:80], carried=_rewrite.get("carried"),
+                             resolved=_rewrite.get("resolved"))
+            except Exception as _rw_err:
+                log.warning("Follow-up rewrite errored, using original", error=str(_rw_err))
+                nl_question = req.question
+
         # ── Question classification ───────────────────────────────────────────
         steps.append({"label": "Analyzing your question", "status": "done"})
         table_names_str = ", ".join(list(schemas.keys())[:20])
@@ -1786,12 +1858,46 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
             _classifier_context += f" The user's currency is '{nl_currency}' — use this when answering any question about their currency."
         if nl_user_tz and nl_user_tz != "UTC":
             _classifier_context += f" The user's timezone is '{nl_user_tz}'."
+        # Date awareness (P2): the system knows the date and the shop timezone —
+        # "what is today's date?" must be answered, not refused.
+        _ctx_tz = nl_shop_timezone if nl_shop_timezone and nl_shop_timezone != "UTC" else (nl_user_tz or "UTC")
+        try:
+            from datetime import datetime as _dtnow
+            from zoneinfo import ZoneInfo
+            _today = _dtnow.now(ZoneInfo(_ctx_tz))
+        except Exception:
+            from datetime import datetime as _dtnow
+            _today = _dtnow.utcnow()
+        _classifier_context += (
+            f" Today's date is {_today:%A, %B %d, %Y} in the shop's timezone ({_ctx_tz}). "
+            "If the user asks the current date or time, answer it directly — never refuse."
+        )
         classification = classify_question(
-            req.question, table_names_str, llm, api_key, user["email"],
+            nl_question, table_names_str, llm, api_key, user["email"],
             app_name=_APP_NAME, conversation_history=conv_history,
             language_hint=_classifier_context,
+            smart_answers=_SMART_ANSWERS_ENABLED,
+            business_knowledge=_BUSINESS_KNOWLEDGE_ENABLED,
+            answer_everything=_ANSWER_EVERYTHING_ENABLED,
         )
         q_type = classification.get("type", "data_query")
+
+        # ── Clarification guards (D1) — enforced in code, not prompt ───────────
+        # (a) The rewriter resolved the reference → never bounce it back as
+        #     "please specify"; answer the standalone question instead.
+        # (b) Never two clarifications in a row: if the previous assistant turn
+        #     was already a clarification, merge + answer this turn.
+        if _FOLLOWUP_REWRITE_ENABLED and q_type == "clarification_needed":
+            if _rewrite.get("resolved"):
+                log.info("Clarification overridden — rewriter resolved reference",
+                         question=nl_question[:80])
+                q_type = "data_query"
+                classification["type"] = "data_query"
+            elif _prev_was_clarification:
+                log.info("Clarification suppressed — previous turn was already a clarification",
+                         question=nl_question[:80])
+                q_type = "data_query"
+                classification["type"] = "data_query"
 
         row_limit = history["row_limit"]
         _profile_parts = [
@@ -1822,15 +1928,114 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
             )
         is_integration = s.get("db_configs") is None
 
+        # ── Answer-everything routes (T1 / PLAN_10) ───────────────────────────
+        # unsafe -> plain refusal; coding -> polite decline; knowledge -> answer
+        # from the model's own knowledge (with an advice caveat where relevant);
+        # advisory -> the grounded data path (analyst persona reasons over their
+        # figures). Refuse only for harm, decline only coding.
+        if q_type in ("unsafe", "coding"):
+            response_text = classification.get("response") or (
+                SAFE_REFUSAL if q_type == "unsafe" else CODING_DECLINE)
+            if conv_id:
+                try:
+                    _conv.save_message(conv_id, "user", req.question)
+                    _conv.save_message(conv_id, "assistant", response_text)
+                except Exception:
+                    pass
+            return _base_query_response(
+                success=True, type="conversational", message=response_text,
+                steps=steps, conversation_id=conv_id, think_mode=req.think_mode,
+            )
+
+        if q_type == "knowledge":
+            response_text = None
+            try:
+                response_text = _run_knowledge_answer(
+                    nl_question, llm, api_key, user["email"],
+                    currency=nl_currency, extra_hint=profile_hint,
+                )
+                response_text = fix_currency_symbol(response_text, nl_currency)
+                if response_text and safety_gate(nl_question).get("action") == "caveat":
+                    response_text = add_advice_caveat(response_text)
+            except Exception as _ke:
+                log.warning("Knowledge answer failed, falling back to data path",
+                            user=user["email"], error=str(_ke))
+            if not response_text or not response_text.strip():
+                q_type = "data_query"   # fall through to the normal data path
+            else:
+                if conv_id:
+                    try:
+                        _conv.save_message(conv_id, "user", req.question)
+                        _conv.save_message(conv_id, "assistant", response_text)
+                    except Exception:
+                        pass
+                return _base_query_response(
+                    success=True, type="conversational", message=response_text,
+                    steps=steps, conversation_id=conv_id, think_mode=req.think_mode,
+                )
+
+        if q_type == "advisory":
+            # Grounded strategy: reuse the data path's advice intent so the answer
+            # is reasoned over the merchant's own figures (the analyst pass always
+            # runs for advice, even with 0 rows). Full knowledge+data+web hybrid is
+            # PLAN_10 T3. ponytail: reuse data_query rather than a parallel branch.
+            q_type = "data_query"
+            classification["type"] = "data_query"
+            classification["intent"] = "advice"
+
+        # ── Out of scope (coding / off-topic) — cheap deflection, no DB work ───
+        if q_type == "out_of_scope":
+            from llm import OUT_OF_SCOPE_DEFLECTION
+            response_text = classification.get("response") or OUT_OF_SCOPE_DEFLECTION
+            if conv_id:
+                try:
+                    _conv.save_message(conv_id, "user", req.question)
+                    _conv.save_message(conv_id, "assistant", response_text)
+                except Exception:
+                    pass
+            return _base_query_response(
+                success=True, type="conversational", message=response_text,
+                steps=steps, conversation_id=conv_id, think_mode=req.think_mode,
+            )
+
+        # ── Business-knowledge (D2) — answer definitions/how-to from knowledge ─
+        if q_type in ("business_knowledge", "hybrid"):
+            response_text = None
+            try:
+                response_text = _run_knowledge_answer(
+                    nl_question, llm, api_key, user["email"],
+                    currency=nl_currency, extra_hint=profile_hint,
+                )
+                response_text = fix_currency_symbol(response_text, nl_currency)
+            except Exception as _ke:
+                log.warning("Business-knowledge answer failed, falling back to data path",
+                            user=user["email"], error=str(_ke))
+            if not response_text or not response_text.strip():
+                q_type = "data_query"   # fall through to the normal data path
+            else:
+                if conv_id:
+                    try:
+                        _conv.save_message(conv_id, "user", req.question)
+                        _conv.save_message(conv_id, "assistant", response_text)
+                    except Exception:
+                        pass
+                return _base_query_response(
+                    success=True, type="conversational", message=response_text,
+                    steps=steps, conversation_id=conv_id, think_mode=req.think_mode,
+                )
+
         # ── Conversational / greeting ─────────────────────────────────────────
         if q_type == "conversational":
-            response_text = classification.get(
-                "response",
-                f"Hello! I'm {_APP_NAME}, your AI data assistant. "
-                "Ask me anything about your data — for example: "
-                "'Show me sales from last month' or 'Who are my top customers?'"
-            )
-            msg_id = None
+            if classification.get("subtype") == "capabilities":
+                from llm import CAPABILITIES_MESSAGE
+                response_text = CAPABILITIES_MESSAGE.format(app=_APP_NAME, provider=nl_provider_label)
+            else:
+                response_text = classification.get(
+                    "response",
+                    f"Hello! I'm {_APP_NAME}, your AI data assistant. "
+                    "Ask me anything about your data — for example: "
+                    "'Show me sales from last month' or 'Who are my top customers?'"
+                )
             if conv_id:
                 try:
                     _conv.save_message(conv_id, "user", req.question)
@@ -1947,7 +2152,7 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
 
                 steps.append({"label": "Combining results", "status": "running"})
                 analysis = synthesize_multi_step_answer(
-                    req.question, step_results, llm, api_key, user["email"],
+                    nl_question, step_results, llm, api_key, user["email"],
                     currency=nl_currency,
                 )
                 steps[-1]["status"] = "done"
@@ -1983,81 +2188,179 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                 )
 
         # ── Single data query ─────────────────────────────────────────────────
-        steps.append({"label": "Generating SQL query", "status": "running"})
-        sql = query_to_sql(
-            req.question, schemas, llm, fkeys, api_key=api_key,
-            user_email=user["email"], history_months=history["months"],
-            tenant_id=nl_tenant_id if is_integration else None,
-            row_limit=row_limit, conversation_history=conv_history,
-            extra_schema_hints=extra_hints, shop_timezone=nl_shop_timezone,
-        )
-        steps[-1]["status"] = "done"
-
-        # SEC-15: enforce tenant isolation for integration users.
-        if nl_tenant_id:
+        # MCP tool-calling path (feature-flagged, staged rollout — see
+        # docs/04_MCP_Architecture_And_Implementation_Guide.md). Lets the model
+        # look at real schema/sample data and self-correct before answering,
+        # instead of one blind SQL guess. Falls back to the legacy one-shot
+        # path below on ANY failure so this is never a single point of failure.
+        sql = columns = data = None
+        # When report tools run, the plan-window upsell is owned by that layer
+        # (report_tools._plan_limit_error + report_system_prompt). Track it so the
+        # answer layer's over_range upsell doesn't double-message (Round 2 Part 5).
+        _report_tools_active = False
+        if _MCP_TOOL_CALLING_ENABLED and (
+            not _MCP_TOOL_CALLING_TEST_EMAILS or user["email"].lower() in _MCP_TOOL_CALLING_TEST_EMAILS
+        ):
             try:
-                sql = _enforce_tenant_isolation(sql, nl_tenant_id)
-            except ValueError as _te:
-                log.warning("Tenant isolation enforcement failed", user=user["email"], error=str(_te))
-                return _base_query_response(
-                    success=False, type="error", steps=steps, conversation_id=conv_id,
-                    message="I couldn't safely scope your query to your account. Please try rephrasing your question.",
+                tool_ctx = _MCPToolContext(
+                    conn=conn,
+                    schemas=_filter_sensitive_schema(schemas),
+                    fkeys=fkeys,
+                    # SEC-15: matches the legacy path's actual enforcement gate
+                    # (`if nl_tenant_id:`) exactly — NOT `is_integration`, which
+                    # is only correct for the advisory query_to_sql prompt hint.
+                    # `is_integration = s.get("db_configs") is None` is a strict
+                    # identity check that's wrongly False when db_configs is
+                    # present-but-empty ([]), which would silently disable
+                    # tenant scoping here (confirmed via a live trace — a
+                    # SalesPlay query ran with no tenant_id filter at all).
+                    tenant_id=nl_tenant_id,
+                    row_limit=row_limit,
+                    history_months=history["months"],
+                    set_query_timeout=_set_query_timeout,
                 )
-            # Fail-closed: refuse to execute if tenant_id was not successfully injected.
-            if nl_tenant_id not in sql:
-                log.error("Tenant isolation enforcement failed — refusing to execute",
-                          user=user["email"], tenant_id=nl_tenant_id, sql=sql[:300])
-                return _base_query_response(
-                    success=False, type="error", steps=steps, conversation_id=conv_id,
-                    message="Could not generate a safely scoped query. Please rephrase your question.",
-                )
-            # Mandatory date-window enforcement (plan limit, not advisory).
-            sql = _enforce_date_filter(sql, history["months"])
+                # Report tools (cache-first SalesPlay report APIs): offered when
+                # the tenant has a synced profile (only SalesPlay onboarding
+                # creates one) and the report cache is enabled. Never fatal —
+                # on any failure the plain SQL tools run as before.
+                report_ctx = None
+                if nl_tenant_id and os.getenv("REPORT_CACHE_ENABLED", "").lower() in ("1", "true", "yes"):
+                    try:
+                        from mcp_server.report_tools import load_report_context
+                        report_ctx = load_report_context(conn, nl_tenant_id, tool_ctx)
+                        _report_tools_active = report_ctx is not None
+                    except Exception as _rc_err:
+                        log.warning("Report tool context unavailable",
+                                    user=user["email"], error=str(_rc_err))
+                sql, columns, data = asyncio.run(_mcp_answer_business_question(
+                    nl_question, tool_ctx, llm, api_key, user["email"],
+                    conversation_history=conv_history, extra_hints=extra_hints,
+                    currency=nl_currency, shop_timezone=nl_shop_timezone,
+                    report_ctx=report_ctx,
+                ))
+                steps.append({"label": "Answered via MCP tool-calling", "status": "done"})
+            except Exception as _mcp_err:
+                log.warning("MCP tool-calling path failed, falling back to one-shot SQL",
+                            user=user["email"], error=str(_mcp_err))
+                sql = columns = data = None
 
-        # SEC-04: block LLM-generated mutations before execution.
-        try:
-            _guard_sql(sql)
-        except HTTPException:
-            log.warning("Mutation guard blocked query", user=user["email"], sql=sql[:200])
-            return _base_query_response(
-                success=False, type="error", steps=steps, conversation_id=conv_id,
-                message=(
-                    "I can only run read-only queries on your data. "
-                    "If you meant to ask about your data, try rephrasing — "
-                    "for example: 'Show me all orders' instead of 'Delete all orders'."
-                ),
+        if sql is None:
+            steps.append({"label": "Generating SQL query", "status": "running"})
+            sql = query_to_sql(
+                nl_question, schemas, llm, fkeys, api_key=api_key,
+                user_email=user["email"], history_months=history["months"],
+                tenant_id=nl_tenant_id if is_integration else None,
+                row_limit=row_limit, conversation_history=conv_history,
+                extra_schema_hints=extra_hints, shop_timezone=nl_shop_timezone,
             )
+            steps[-1]["status"] = "done"
 
-        steps.append({"label": "Running your query", "status": "running"})
-        cursor = conn.cursor()
-        _set_query_timeout(cursor)
-        cursor.execute(sql)
-        raw_cols = [desc[0] for desc in cursor.description]
-        rows = cursor.fetchall()
-        # Strip surrogate ID columns — keep only business-meaningful columns.
-        columns = [c for c in raw_cols if not _ID_COL_RE.search(c)]
-        data = [{k: _safe(v) for k, v in dict(zip(raw_cols, row)).items() if not _ID_COL_RE.search(k)} for row in rows]
-        # Treat all-NULL results the same as 0 rows — no meaningful data found.
-        if data and all(all(v is None for v in row.values()) for row in data):
-            data = []
-        if len(data) > row_limit:
-            data = data[:row_limit]
-        steps[-1]["status"] = "done"
+            # SEC-15: enforce tenant isolation for integration users.
+            if nl_tenant_id:
+                try:
+                    sql = _enforce_tenant_isolation(sql, nl_tenant_id)
+                except ValueError as _te:
+                    log.warning("Tenant isolation enforcement failed", user=user["email"], error=str(_te))
+                    return _base_query_response(
+                        success=False, type="error", steps=steps, conversation_id=conv_id,
+                        message="I couldn't safely scope your query to your account. Please try rephrasing your question.",
+                    )
+                # Fail-closed: refuse to execute if tenant_id was not successfully injected.
+                if nl_tenant_id not in sql:
+                    log.error("Tenant isolation enforcement failed — refusing to execute",
+                              user=user["email"], tenant_id=nl_tenant_id, sql=sql[:300])
+                    return _base_query_response(
+                        success=False, type="error", steps=steps, conversation_id=conv_id,
+                        message="Could not generate a safely scoped query. Please rephrase your question.",
+                    )
+                # Mandatory date-window enforcement (plan limit, not advisory).
+                sql = _enforce_date_filter(sql, history["months"])
+
+            # SEC-04: block LLM-generated mutations before execution.
+            try:
+                _guard_sql(sql)
+            except HTTPException:
+                log.warning("Mutation guard blocked query", user=user["email"], sql=sql[:200])
+                return _base_query_response(
+                    success=False, type="error", steps=steps, conversation_id=conv_id,
+                    message=(
+                        "I can only run read-only queries on your data. "
+                        "If you meant to ask about your data, try rephrasing — "
+                        "for example: 'Show me all orders' instead of 'Delete all orders'."
+                    ),
+                )
+
+            steps.append({"label": "Running your query", "status": "running"})
+            cursor = conn.cursor()
+            _set_query_timeout(cursor)
+            cursor.execute(sql)
+            raw_cols = [desc[0] for desc in cursor.description]
+            rows = cursor.fetchall()
+            # Strip surrogate ID columns — keep only business-meaningful columns.
+            columns = [c for c in raw_cols if not _ID_COL_RE.search(c)]
+            data = [{k: _safe(v) for k, v in dict(zip(raw_cols, row)).items() if not _ID_COL_RE.search(k)} for row in rows]
+            # Treat all-NULL results the same as 0 rows — no meaningful data found.
+            if data and all(all(v is None for v in row.values()) for row in data):
+                data = []
+            if len(data) > row_limit:
+                data = data[:row_limit]
+            steps[-1]["status"] = "done"
         log.info("NL query complete", user=user["email"], rows=len(data), conv_id=conv_id or "stateless")
         _charge_op(user["email"], "nl_query_rows", len(data))
 
-        # ── Think mode ────────────────────────────────────────────────────────
+        # ── Answer narrative ──────────────────────────────────────────────────
+        # Advisory answers ("how do I grow") route to data_query and a generic SQL
+        # runs for context — but that query may return 0 rows, and an advice answer
+        # must NOT depend on whether it did. So advice/forecast/trend always get the
+        # analyst pass (data is context, possibly empty); lookups only when rows
+        # came back. This fixes the "Found 0 results." inconsistency on advice.
+        # ANSWER_EVERYTHING implies the smart analyst answer layer (advisory
+        # answers must reason over the merchant's figures, not dump a table).
+        _smart = _SMART_ANSWERS_ENABLED or _ANSWER_EVERYTHING_ENABLED
+        _intent = (classification.get("intent") or "lookup") if _smart else "lookup"
+        _show_data = _intent != "advice"
         analysis = None
-        if req.think_mode and data:
+        _want_analysis = (
+            (_smart and (bool(data) or _intent in ("advice", "forecast", "trend")))
+            or (req.think_mode and bool(data))
+        )
+        if _want_analysis:
             steps.append({"label": "Analyzing results", "status": "running"})
             try:
-                analysis = _run_think_analysis(req.question, columns, data, llm, api_key, user["email"], currency=nl_currency)
+                if _smart:
+                    # Coverage/upsell only where the date window is actually
+                    # enforced (integration tenants) — otherwise a "covers last
+                    # N days" claim could overstate an all-time own-DB result.
+                    if nl_tenant_id:
+                        _period_label, _plan_tier, _over_range = _derive_period(nl_question, history)
+                        # Avoid double-upsell: report tools already own the
+                        # plan-window message when they're active.
+                        if _report_tools_active:
+                            _over_range = False
+                    else:
+                        _period_label, _plan_tier, _over_range = "", "", False
+                    # Real token streaming only when someone's listening (SSE);
+                    # on the plain endpoint on_delta stays None → one-shot call.
+                    _delta = (lambda t: _progress.emit("token", {"text": t})) if _progress.has_listener() else None
+                    analysis = _run_answer(
+                        nl_question, columns, data, llm, api_key, user["email"],
+                        currency=nl_currency, period_label=_period_label,
+                        plan_tier=_plan_tier, history_months=history["months"],
+                        over_range=_over_range, on_delta=_delta,
+                    )
+                else:
+                    analysis = _run_think_analysis(nl_question, columns, data, llm, api_key, user["email"], currency=nl_currency)
                 analysis = fix_currency_symbol(analysis, nl_currency)
-                log.info("Think mode analysis complete", user=user["email"])
+                log.info("Answer analysis complete", user=user["email"])
                 steps[-1]["status"] = "done"
             except Exception as _te:
-                log.warning("Think mode analysis failed", user=user["email"], error=str(_te))
+                log.warning("Answer analysis failed", user=user["email"], error=str(_te))
                 steps[-1]["status"] = "failed"
+
+        # T4: advisory/strategy answers about legal/financial/medical topics get
+        # one honest "general information" caveat — answered, never refused.
+        if analysis and _intent == "advice" and safety_gate(nl_question).get("action") == "caveat":
+            analysis = add_advice_caveat(analysis)
 
         # ── Build conversation summary & persist ──────────────────────────────
         answer_summary = f"Found {len(data)} result{'s' if len(data) != 1 else ''}."
@@ -2080,10 +2383,15 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                     "If you've just connected your store, a sync may still be in "
                     "progress — check your integration status, or try again in a few minutes."
                 )
+        # D5: the data path must NEVER return a blank answer. If nothing produced
+        # user-visible narrative (e.g. a 0-row lookup), synthesise one — the
+        # tailored near-empty-tenant message if we have it, otherwise a generic
+        # empty-result narrative that names the period and offers a next step.
+        if len(data) == 0 and not (analysis and analysis.strip()):
+            analysis = answer_summary if not answer_summary.startswith("Found ") \
+                else _empty_result_narrative(nl_question)
         if columns and data:
-            num_col = next(
-                (c for c in columns if isinstance(data[0].get(c), (int, float))), None
-            )
+            num_col = _pick_summary_column(columns, data[0])
             if num_col:
                 try:
                     total = sum(float(r.get(num_col, 0) or 0) for r in data)
@@ -2093,12 +2401,14 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                         answer_summary += f" {num_col.replace('_', ' ')} = {total:,.2f}"
                 except Exception:
                     pass
-        msg_id = None
+        # Smart answers: the analyst prose IS the answer — store it as the
+        # assistant turn so conversation memory and follow-ups have real content,
+        # not "Found N results."
+        if _smart and analysis:
+            answer_summary = analysis
         if conv_id:
             try:
-                stat_col = next(
-                    (c for c in columns if isinstance(data[0].get(c), (int, float))), None
-                ) if data else None
+                stat_col = _pick_summary_column(columns, data[0]) if data else None
                 _conv.save_message(conv_id, "user", req.question)
                 msg_id = _conv.save_message(
                     conv_id, "assistant", answer_summary,
@@ -2126,7 +2436,7 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                 "right now", "current", "latest", "recent",
                 "tonight", "this morning", "this afternoon",
             )
-            if any(kw in req.question.lower() for kw in _TIME_KEYWORDS):
+            if any(kw in nl_question.lower() for kw in _TIME_KEYWORDS):
                 try:
                     from datetime import datetime as _dt, timezone as _tz
                     _synced = _dt.fromisoformat(nl_last_sync_at.replace("Z", "+00:00"))
@@ -2159,12 +2469,22 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                 except Exception as _age_err:
                     log.debug("Staleness note skipped", error=str(_age_err))
 
+        # Backend picks the column to total in the "· X" summary (money → count →
+        # none) and whether it's money, so the frontend renders one consistent
+        # suffix instead of re-deriving its own (divergent) first-numeric logic.
+        _sum_col = _pick_summary_column(columns, data[0]) if data else None
+        # _show_data (computed above with _intent): advice answers are prose-only,
+        # so the frontend hides the unrelated chart/table/summary.
         response = _base_query_response(
             success=True, type="data",
             steps=steps,
             columns=columns, data=data, row_count=len(data),
             analysis=analysis, think_mode=req.think_mode,
             conversation_id=conv_id, data_as_of=nl_last_sync_at,
+            show_data=_show_data,
+            summary_col=_sum_col,
+            summary_is_money=bool(_sum_col and _is_money_column(_sum_col)),
+            money_cols=[c for c in columns if _is_money_column(c)],
             message_id=msg_id,
         )
         # Only own-DB users get the generated SQL back (used by QueryPage's
@@ -2192,6 +2512,124 @@ def natural_language_query(request: Request, req: NLQueryRequest, user: dict = D
                 conn.close()
             except Exception:
                 pass
+
+
+@v1.post("/query")
+@_limiter.limit(RL_COMPUTE)
+def natural_language_query(request: Request, req: NLQueryRequest, user: dict = Depends(current_user)):
+    return _natural_language_query_impl(request, req, user)
+
+
+# ── SSE streaming variant ─────────────────────────────────────────────────────
+# Streams: step (pipeline progress) → thinking (model reasoning between tool
+# calls) → token (answer text chunks) → data (the full JSON payload the plain
+# endpoint would have returned) → done. Errors degrade to error + done.
+# Flag-gated: clients treat a 404 as "not enabled" and fall back to POST /v1/query.
+
+_SSE_STREAMING_ENABLED = os.getenv("SSE_STREAMING_ENABLED", "").lower() in ("1", "true", "yes")
+
+
+def _sse_event(event: str, payload: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(payload, default=str)}\n\n"
+
+
+# What the user sees while we work. Internal pipeline labels (SQL, queries,
+# reports, tool names) are never streamed — the widget should feel like an AI
+# assistant thinking, not a query tool executing. The sync endpoint's steps
+# array keeps the internal labels (used by the main app's debug view).
+_FRIENDLY_STEP_LABELS = {
+    "Analyzing your question": "Understanding your question",
+    "Loading your data schema": "Looking at your business data",
+    "Generating SQL query": "Thinking through your question",
+    "Running your query": "Analyzing your data",
+    "Analyzing results": "Putting your answer together",
+    "Combining results": "Putting your answer together",
+    "Answered via MCP tool-calling": None,          # internal — never shown
+}
+
+
+def _friendly_step(payload: dict):
+    """Map an internal step event to user-facing copy; None = don't stream it."""
+    label = (payload or {}).get("label") or ""
+    if label in _FRIENDLY_STEP_LABELS:
+        friendly = _FRIENDLY_STEP_LABELS[label]
+        return {"label": friendly, "status": "running"} if friendly else None
+    if label.startswith("Running query"):           # multi-step sub-queries
+        return {"label": "Analyzing your data", "status": "running"}
+    return {"label": label, "status": "running"}    # already user-facing (tool labels)
+
+
+def _answer_chunks(text: str, words_per_chunk: int = 8):
+    words = (text or "").split(" ")
+    for i in range(0, len(words), words_per_chunk):
+        yield " ".join(words[i:i + words_per_chunk]) + (" " if i + words_per_chunk < len(words) else "")
+
+
+async def _stream_query_events(request: Request, req: NLQueryRequest, user: dict):
+    import queue as _queue
+    import threading as _threading
+
+    q: "_queue.Queue" = _queue.Queue()
+    _DONE = object()
+
+    def worker():
+        # The emitter lives in this thread's context; asyncio.run() inside the
+        # pipeline (MCP tool loop) inherits it, so tool events stream too.
+        token = _progress.set_emitter(lambda ev, payload: q.put((ev, payload)))
+        try:
+            result = _natural_language_query_impl(request, req, user)
+            q.put(("result", result))
+        except HTTPException as e:
+            q.put(("error", {"message": str(e.detail)}))
+        except Exception as e:
+            get_logger(__name__).error("Stream query failed", user=user["email"], error=str(e))
+            q.put(("error", {"message": "Something went wrong while processing your question. "
+                                        "Please try rephrasing it or try again shortly."}))
+        finally:
+            _progress.reset_emitter(token)
+            q.put(_DONE)
+
+    _threading.Thread(target=worker, daemon=True, name="sse-query").start()
+    loop = asyncio.get_running_loop()
+    streamed_tokens = False
+    while True:
+        item = await loop.run_in_executor(None, q.get)
+        if item is _DONE:
+            break
+        event, payload = item
+        if event == "token":
+            streamed_tokens = True
+            yield _sse_event("token", payload)
+        elif event == "result":
+            # If _run_answer already streamed real LLM token deltas, don't
+            # re-chunk the same text. Otherwise (conversational/clarification/
+            # legacy message, or no listener) fall back to post-hoc chunking so
+            # the client still gets a streamed answer.
+            if not streamed_tokens:
+                text = payload.get("analysis") or payload.get("message") or ""
+                for chunk in _answer_chunks(text):
+                    yield _sse_event("token", {"text": chunk})
+            yield _sse_event("data", payload)
+        elif event == "step":
+            friendly = _friendly_step(payload)
+            if friendly:
+                yield _sse_event("step", friendly)
+        else:
+            yield _sse_event(event, payload)
+    yield _sse_event("done", {})
+
+
+@v1.post("/query/stream")
+@_limiter.limit(RL_COMPUTE)
+async def natural_language_query_stream(request: Request, req: NLQueryRequest,
+                                        user: dict = Depends(current_user)):
+    if not _SSE_STREAMING_ENABLED:
+        raise HTTPException(status_code=404, detail="Streaming is not enabled.")
+    return StreamingResponse(
+        _stream_query_events(request, req, user),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════

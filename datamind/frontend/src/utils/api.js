@@ -66,6 +66,58 @@ export const fetchTables          = () => api.get('/tables').then(r => r.data)
 export const fetchTableColumns    = (table) => api.get(`/tables/${encodeURIComponent(table)}/columns`).then(r => r.data)
 export const fetchDiscover        = () => api.get('/discover').then(r => r.data)
 export const runNLQuery           = (question, llm, thinkMode = false, conversationId = null) => api.post('/query', { question, llm, think_mode: thinkMode, conversation_id: conversationId }).then(r => r.data)
+
+// ── SSE streaming query ───────────────────────────────────────────────────────
+// POST /query/stream emits: step → thinking → token (answer chunks) → data
+// (same payload runNLQuery returns) → done. EventSource is GET-only, so we parse
+// the SSE stream from fetch() ourselves. Returns the final data payload, or null
+// when the caller should fall back to runNLQuery (streaming disabled server-side
+// via 404, or the stream died before producing output). Mirrors the embed's
+// embedStreamQuery so both surfaces behave identically.
+let _streamSupported = true
+export async function streamNLQuery(question, llm, thinkMode, conversationId, handlers = {}) {
+  if (!_streamSupported) return null
+  const token = localStorage.getItem('dm_token')
+  const resp = await fetch('/api/query/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: JSON.stringify({ question, llm, think_mode: thinkMode, conversation_id: conversationId }),
+  })
+  if (resp.status === 404) { _streamSupported = false; return null }  // flag off — don't retry per message
+  if (resp.status === 401) {
+    localStorage.removeItem('dm_token'); localStorage.removeItem('dm_user')
+    window.location.href = '/login'
+    const e = new Error('Session expired'); e.status = 401; throw e
+  }
+  if (!resp.ok || !resp.body) return null
+
+  const reader = resp.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = '', result = null, errorMsg = null
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const blocks = buffer.split('\n\n')
+    buffer = blocks.pop()
+    for (const block of blocks) {
+      let event = 'message', data = ''
+      for (const line of block.split('\n')) {
+        if (line.startsWith('event: ')) event = line.slice(7).trim()
+        else if (line.startsWith('data: ')) data += line.slice(6)
+      }
+      let payload = {}
+      try { payload = JSON.parse(data || '{}') } catch { /* skip malformed */ }
+      if (event === 'step') handlers.onStep?.(payload)
+      else if (event === 'thinking') handlers.onThinking?.(payload)
+      else if (event === 'token') handlers.onToken?.(payload.text || '')
+      else if (event === 'data') result = payload
+      else if (event === 'error') errorMsg = payload.message
+    }
+  }
+  if (!result && errorMsg) return { success: false, type: 'error', message: errorMsg }
+  return result
+}
 export const runAnalytics         = (template_id, llm, params={}, provider=null) => api.post('/analytics/run', { template_id, llm, params, provider }).then(r => r.data)
 export const runForecast          = (table, date_column, value_column, periods=90) => api.post('/forecast', { table, date_column, value_column, periods }).then(r => r.data)
 export const runAutoForecast      = (periods=90) => api.get(`/forecast/auto?periods=${periods}`).then(r => r.data)

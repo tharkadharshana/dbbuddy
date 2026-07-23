@@ -11,6 +11,30 @@ export function isCurrencyColumn(colName) {
   return _CURRENCY_COLS.test(colName || '')
 }
 
+// Money-vs-count decision, unified with the backend's _is_money_column.
+// Prefer the backend-provided money_cols list; fall back to a corrected local
+// heuristic (count tokens win; "total" alone is NOT money) for older payloads
+// and loaded history snapshots that carry no flags.
+const _COUNT_RE = /(^|_)(qty|quantity|count|cnt|units?|number|num|rows?|visits?)($|_)/i
+const _MONEY_RE = /revenue|money|amount|price|value|spend|spent|sale(?!_date)|profit|cost|discount|tax|charge|paid/i
+export function isMoneyColumn(col, moneyCols) {
+  if (Array.isArray(moneyCols)) return moneyCols.includes(col)
+  if (!col) return false
+  if (_COUNT_RE.test(col)) return false
+  return _MONEY_RE.test(col)
+}
+
+// The "· <label>: <total>" suffix for the result summary line. Uses the
+// backend-picked summary_col + summary_is_money so both surfaces render one
+// consistent value instead of each re-deriving a first-numeric total.
+export function summarySuffix(data) {
+  const col = data?.summary_col
+  if (!col || !data.data?.length) return ''
+  const total = data.data.reduce((s, r) => s + (Number(r[col]) || 0), 0)
+  const label = col.replace(/_/g, ' ')
+  return ` · ${label}: ${data.summary_is_money ? formatCurrency(total) : formatNumber(total)}`
+}
+
 export function formatCurrency(value, locale) {
   const l   = locale || getUserLocale()
   const sym = (l?.currency || '$').trim()

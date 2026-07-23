@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
-import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { Card, Btn, UsageMeter, Spinner, Empty, ErrorBox, KPICard, DataTable, COLORS } from '../components/UI'
 import { runNLQuery, getErrorMessage } from '../utils/api'
+import ResultChart from '../components/ResultChart'
 
 const SUGGESTIONS = [
   'Show total revenue by product category',
@@ -13,7 +13,6 @@ const SUGGESTIONS = [
   'Show daily revenue for the last 30 days',
   'What is the average discount per payment method?',
 ]
-const TT = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.08)', borderRadius:8, fontSize:12, color:'#f0f1fa' }
 
 export default function QueryPage({ llm, setLlm }) {
   const [q, setQ]           = useState('')
@@ -40,7 +39,6 @@ export default function QueryPage({ llm, setLlm }) {
   const cols  = result?.columns || []
   const xCol  = cols.find(c => typeof result?.data?.[0]?.[c] === 'string') || cols[0]
   const yCols = cols.filter(c => isNum(result?.data?.[0]?.[c])).slice(0, 2)
-  const chartData = result?.data?.slice(0, 30).map(r => ({ name: String(r[xCol] ?? ''), ...Object.fromEntries(yCols.map(k => [k, r[k]])) })) || []
   const numCols = cols.filter(c => isNum(result?.data?.[0]?.[c])).slice(0, 4)
 
   return (
@@ -114,19 +112,10 @@ export default function QueryPage({ llm, setLlm }) {
             </div>
 
             {/* Chart */}
-            {yCols.length > 0 && chartData.length > 1 && (
+            {yCols.length > 0 && result.data?.length > 1 && (
               <Card style={{ padding:18 }}>
                 <div style={{ fontSize:12, color:'var(--text3)', marginBottom:12 }}>{yCols.join(' & ')} by {xCol}</div>
-                <ResponsiveContainer width="100%" height={220}>
-                  <ComposedChart data={chartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
-                    <XAxis dataKey="name" tick={{fontSize:10,fill:'#5a5f7d'}} axisLine={false} tickLine={false} />
-                    <YAxis tick={{fontSize:10,fill:'#5a5f7d'}} axisLine={false} tickLine={false} />
-                    <Tooltip contentStyle={TT} />
-                    {yCols[0] && <Bar dataKey={yCols[0]} fill="var(--blue)" radius={[4,4,0,0]} barSize={chartData.length > 12 ? 6 : 22} />}
-                    {yCols[1] && <Line dataKey={yCols[1]} stroke="var(--green)" strokeWidth={2} dot={false} />}
-                  </ComposedChart>
-                </ResponsiveContainer>
+                <ResultChart columns={cols} data={result.data} height={220} />
               </Card>
             )}
 

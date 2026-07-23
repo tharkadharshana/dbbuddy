@@ -1,6 +1,9 @@
 import hashlib
 import os
+import re
 import threading
+import decimal
+import datetime
 import mysql.connector
 import mysql.connector.pooling
 from typing import List, Optional, Dict, Any
@@ -119,6 +122,50 @@ def get_foreign_keys(conn) -> List[Dict]:
         WHERE REFERENCED_TABLE_NAME IS NOT NULL AND TABLE_SCHEMA = %s
     """, (db_name,))
     return [{"table": r[0], "column": r[1], "ref_table": r[2], "ref_column": r[3]} for r in cursor.fetchall()]
+
+
+# Matches raw DB surrogate ID columns (`id`, `customer_id`, ...) — internal
+# keys with no meaning to end users; human-readable codes are used instead.
+_ID_COL_RE = re.compile(r'^id$|_id$', re.IGNORECASE)
+
+
+def _safe_value(v):
+    if isinstance(v, decimal.Decimal):
+        return float(v)
+    if isinstance(v, (datetime.date, datetime.datetime)):
+        return str(v)
+    return v
+
+
+def run_select_and_format(conn, sql: str, set_timeout=None) -> Dict[str, Any]:
+    """
+    Execute one SELECT and return {"columns": [...], "data": [...]}:
+      - decimal/datetime values converted to JSON-safe types
+      - surrogate ID columns (id, *_id) stripped from output
+      - all-NULL rows collapsed to an empty result (treated as "no data found")
+
+    `set_timeout`, if given, is called with the new cursor before execution
+    (e.g. main.py's _set_query_timeout, which caches the server's timeout
+    variable across calls) — optional so callers that don't need it can omit it.
+
+    Shared by main.py's _run_sql (legacy one-shot query path) and the MCP
+    business-data tools' run_select_query, so this formatting/stripping logic
+    exists in exactly one place instead of drifting apart in two.
+    """
+    cursor = conn.cursor()
+    if set_timeout:
+        set_timeout(cursor)
+    cursor.execute(sql)
+    cols = [d[0] for d in cursor.description]
+    rows = cursor.fetchall()
+    visible_cols = [c for c in cols if not _ID_COL_RE.search(c)]
+    data = [
+        {c: _safe_value(v) for c, v in zip(cols, row) if not _ID_COL_RE.search(c)}
+        for row in rows
+    ]
+    if data and all(all(v is None for v in row.values()) for row in data):
+        data = []
+    return {"columns": visible_cols, "data": data}
 
 
 def get_sample_data(conn, tables: List[str], rows: int = 3) -> Dict[str, Any]:

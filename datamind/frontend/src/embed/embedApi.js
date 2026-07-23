@@ -63,6 +63,60 @@ export const embedGetProviderStatus = (connection_id) =>
 export const embedRunQuery = (question, llm = 'default', thinkMode = false, conversationId = null) =>
   api.post('/query', { question, llm, think_mode: thinkMode, conversation_id: conversationId }).then(r => r.data)
 
+// ── SSE streaming query ───────────────────────────────────────────────────────
+// POST /query/stream emits: step → thinking → token (answer chunks) → data
+// (the same payload embedRunQuery returns) → done. EventSource is GET-only,
+// so we parse the SSE stream from fetch() ourselves. Returns the final data
+// payload, or null when the caller should fall back to embedRunQuery
+// (streaming disabled server-side, or the stream died before any output).
+let _streamSupported = true
+
+export async function embedStreamQuery(question, llm, thinkMode, conversationId, handlers = {}) {
+  if (!_streamSupported) return null
+  const token = localStorage.getItem('dm_embed_token')
+  const resp = await fetch(`${BASE_URL}/api/query/stream`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ question, llm, think_mode: thinkMode, conversation_id: conversationId }),
+  })
+  if (resp.status === 404) { _streamSupported = false; return null }  // flag off — don't retry per message
+  if (resp.status === 401) {
+    localStorage.removeItem('dm_embed_token')
+    const e = new Error('Session expired'); e.status = 401; throw e
+  }
+  if (!resp.ok || !resp.body) return null
+
+  const reader = resp.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = '', result = null, errorMsg = null
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const blocks = buffer.split('\n\n')
+    buffer = blocks.pop()
+    for (const block of blocks) {
+      let event = 'message', data = ''
+      for (const line of block.split('\n')) {
+        if (line.startsWith('event: ')) event = line.slice(7).trim()
+        else if (line.startsWith('data: ')) data += line.slice(6)
+      }
+      let payload = {}
+      try { payload = JSON.parse(data || '{}') } catch { /* skip malformed */ }
+      if (event === 'step') handlers.onStep?.(payload)
+      else if (event === 'thinking') handlers.onThinking?.(payload)
+      else if (event === 'token') handlers.onToken?.(payload.text || '')
+      else if (event === 'data') result = payload
+      else if (event === 'error') errorMsg = payload.message
+    }
+  }
+  if (!result && errorMsg) return { success: false, type: 'error', message: errorMsg }
+  return result
+}
+
 // Conversation history — same endpoints/data as the main app, so history
 // created in the embed shows up in the main app's sidebar and vice versa.
 export const embedCreateConversation = (id) =>
