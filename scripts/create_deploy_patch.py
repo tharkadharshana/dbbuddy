@@ -37,8 +37,8 @@ PATCH_TAG_PREFIX = "patch-"
 # Backend top-level files to include in the patch.
 BACKEND_FILES = [
     "analytics.py", "auth.py", "billing.py", "cache.py", "conversations.py",
-    "credits.py", "db.py", "Dockerfile", "embed.py", "integrations.py",
-    "limiter.py", "logger.py", "pool.py",
+    "credits.py", "db.py", "Dockerfile", "embed.py", "feedback.py", "integrations.py",
+    "limiter.py", "logger.py", "pool.py", "progress.py",
     "requirements.txt", "schema_builder.py", "start.py", "v1.py", ".env.example",
 ]
 
@@ -48,7 +48,7 @@ BACKEND_FILES = [
 MANUAL_DEPLOY_FILES = ["main.py", "llm.py"]
 
 # Backend directories to include (copied recursively, minus EXCLUDE_NAMES).
-BACKEND_DIRS = ["providers", "scripts"]
+BACKEND_DIRS = ["providers", "scripts", "mcp_server", "report_cache"]
 
 # Files/dirs to skip wherever they're found.
 EXCLUDE_NAMES = {"__pycache__", ".env", "data", "logs", "dist", "scratch"}
