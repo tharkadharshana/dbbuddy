@@ -1965,7 +1965,6 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
                 return _base_query_response(
                     success=True, type="conversational", message=response_text,
                     steps=steps, conversation_id=conv_id, think_mode=req.think_mode,
-                    show_data=False,
                 )
 
         if q_type == "advisory":
@@ -2016,7 +2015,6 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
                 return _base_query_response(
                     success=True, type="conversational", message=response_text,
                     steps=steps, conversation_id=conv_id, think_mode=req.think_mode,
-                    show_data=False,
                 )
 
         # ── Conversational / greeting ─────────────────────────────────────────
