@@ -156,6 +156,31 @@ def save_message(
         conn.close()
 
 
+def set_vote(conv_id: str, message_id: int, user_email: str, vote: Optional[int]) -> bool:
+    """
+    Set (or clear, vote=None) the thumbs up/down vote on an assistant message.
+    Enforces ownership via a JOIN on conversations. Returns False if the
+    message doesn't exist or doesn't belong to this user.
+    """
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE conversation_messages cm
+            JOIN conversations c ON c.id = cm.conversation_id
+            SET cm.vote = %s
+            WHERE cm.id = %s AND cm.conversation_id = %s
+              AND c.user_email = %s AND cm.role = 'assistant'
+            """,
+            (vote, message_id, conv_id, user_email),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
 def update_title(conv_id: str, title: str) -> None:
     """Set the LLM-generated title on a conversation."""
     conn = _get_conn()
@@ -245,7 +270,7 @@ def get_messages(conv_id: str, user_email: str) -> list:
         cur.execute(
             """
             SELECT cm.id, cm.role, cm.content, cm.row_count,
-                   cm.data_snapshot, cm.created_at
+                   cm.data_snapshot, cm.vote, cm.created_at
             FROM conversation_messages cm
             JOIN conversations c ON c.id = cm.conversation_id
             WHERE cm.conversation_id = %s AND c.user_email = %s

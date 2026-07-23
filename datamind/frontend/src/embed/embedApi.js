@@ -74,6 +74,10 @@ export const embedListConversations = () =>
 export const embedGetConversationMessages = (convId) =>
   api.get(`/conversations/${convId}/messages`).then(r => r.data)
 
+// Thumbs up/down on an assistant reply. vote: 1 (up), -1 (down), or null (clear).
+export const embedVoteMessage = (convId, messageId, vote) =>
+  api.patch(`/conversations/${convId}/messages/${messageId}/vote`, { vote }).then(r => r.data)
+
 // One-time link so an already-authenticated embed user can open the
 // standalone DataMind app without re-entering credentials.
 export const embedGetSSOHandoff = () =>
@@ -100,3 +104,11 @@ export const salesplayGetProfile = (partnerKey, aat) =>
 // Check whether a DataMind account with Salesplay credentials exists for a given email.
 export const salesplayCheckUser = (partnerKey, email) =>
   api.post('/embed/salesplay/check-user', { partner_key: partnerKey, email }).then(r => r.data)
+
+// Widget rating (1-5 stars) + optional free-text comment, asked when the user closes the widget.
+export const embedSubmitFeedback = (rating, comment = '') =>
+  api.post('/embed/feedback', { rating, comment }).then(r => r.data)
+
+// Whether this user has ever submitted widget feedback (server-side, cross-device).
+export const embedGetFeedbackStatus = () =>
+  api.get('/embed/feedback/status').then(r => r.data)

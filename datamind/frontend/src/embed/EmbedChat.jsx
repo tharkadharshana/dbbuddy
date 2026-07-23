@@ -8,7 +8,7 @@
  */
 import React, { useState, useRef, useEffect } from 'react'
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { embedRunQuery, embedGetSSOHandoff, embedCreateConversation, embedGetSubscription } from './embedApi'
+import { embedRunQuery, embedGetSSOHandoff, embedCreateConversation, embedGetSubscription, embedVoteMessage } from './embedApi'
 import { getErrorMessage } from '../utils/api'
 import { formatCurrency } from '../utils/locale'
 import { notifyParent } from './EmbedApp'
@@ -205,8 +205,51 @@ function ResultTable({ columns, data, rowCount }) {
   )
 }
 
+// ── Thumbs up/down on an assistant reply ────────────────────────────────────
+function VoteButtons({ vote, onVote }) {
+  const [popped, setPopped] = useState(null) // which button (1 | -1) is mid-animation
+
+  const btn = (active, color) => ({
+    background: 'none', border: 'none', cursor: 'pointer', padding: 4,
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    color: active ? color : 'var(--text3)', opacity: active ? 1 : 0.6,
+  })
+
+  function handleClick(v) {
+    setPopped(v)
+    onVote(v)
+  }
+
+  return (
+    <div style={{ display:'flex', gap:2, marginTop:6 }}>
+      <button
+        type="button" title="Good response" onClick={() => handleClick(1)}
+        onAnimationEnd={() => setPopped(p => p === 1 ? null : p)}
+        className={`dm-vote-btn${popped === 1 ? ' dm-vote-pop' : ''}`}
+        style={btn(vote === 1, 'var(--blue)')}
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill={vote === 1 ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3H14z" />
+          <path d="M7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3" />
+        </svg>
+      </button>
+      <button
+        type="button" title="Bad response" onClick={() => handleClick(-1)}
+        onAnimationEnd={() => setPopped(p => p === -1 ? null : p)}
+        className={`dm-vote-btn${popped === -1 ? ' dm-vote-pop' : ''}`}
+        style={btn(vote === -1, 'var(--red, #e05252)')}
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill={vote === -1 ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3H10z" />
+          <path d="M17 2h3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-3" />
+        </svg>
+      </button>
+    </div>
+  )
+}
+
 // ── Message bubble ────────────────────────────────────────────────────────────
-function Message({ msg, theme }) {
+function Message({ msg, theme, onVote }) {
   if (msg.role === 'user') return (
     <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:14 }}>
       <div style={{ maxWidth:'80%', background:'var(--blue)', color:'#fff', borderRadius:'14px 14px 4px 14px', padding:'9px 13px', fontSize:13, lineHeight:1.5 }}>
@@ -254,6 +297,9 @@ function Message({ msg, theme }) {
                 <ResultTable columns={msg.data.columns} data={msg.data.data} rowCount={msg.data.row_count} />
               </>
             )}
+            {msg.data?.message_id != null && (
+              <VoteButtons vote={msg.vote} onVote={v => onVote(msg.vote === v ? null : v)} />
+            )}
           </>
         )}
       </div>
@@ -262,7 +308,7 @@ function Message({ msg, theme }) {
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function EmbedChat({ context, onExpired, onLogout, onCollapse, initialInput = '' }) {
+export default function EmbedChat({ context, onExpired, onLogout, onCollapse, onMessageSent, initialInput = '' }) {
   const productTitle = resolveProductTitle(context)
   const APP_NAME = appName(context)
   const isSalesplay = context?.provider_id === 'salesplay'
@@ -372,6 +418,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
                        id: Date.now() + 1 }
     setMessages(m => [...m, userMsg, thinkMsg])
     setLoading(true)
+    onMessageSent?.()
 
     notifyParent('dm:query', { question: q })
 
@@ -424,6 +471,14 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
       clearTimeout(slowTimer)
       setLoading(false)
     }
+  }
+
+  function handleVote(msg, vote) {
+    setMessages(m => m.map(x => x.id === msg.id ? { ...x, vote } : x))
+    embedVoteMessage(msg.data.conversation_id, msg.data.message_id, vote).catch(() => {
+      // Best-effort — revert on failure so the UI doesn't lie about saved state.
+      setMessages(m => m.map(x => x.id === msg.id ? { ...x, vote: msg.vote } : x))
+    })
   }
 
   const hasMessages = messages.length > 0
@@ -670,7 +725,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, in
           </div>
         ) : (
           <div style={{ padding: isNarrow ? '0 10px' : '0 14px' }}>
-            {messages.map(msg => <Message key={msg.id} msg={msg} theme={theme} />)}
+            {messages.map(msg => <Message key={msg.id} msg={msg} theme={theme} onVote={v => handleVote(msg, v)} />)}
             <div ref={bottomRef} />
           </div>
         )}
