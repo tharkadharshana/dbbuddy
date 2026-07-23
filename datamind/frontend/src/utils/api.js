@@ -159,6 +159,8 @@ export const createConversation       = (id)       => api.post('/conversations',
 export const listConversations        = ()          => api.get('/conversations').then(r => r.data)
 export const getConversationMessages  = (convId)   => api.get(`/conversations/${convId}/messages`).then(r => r.data)
 export const deleteConversation       = (convId)   => api.delete(`/conversations/${convId}`).then(r => r.data)
+// vote: 1 (thumbs up), -1 (thumbs down), or null (clear)
+export const voteMessage              = (convId, messageId, vote) => api.patch(`/conversations/${convId}/messages/${messageId}/vote`, { vote }).then(r => r.data)
 
 // ── Billing ───────────────────────────────────────────────────────────────────
 export const fetchBillingPlans  = () => api.get('/billing/plans').then(r => r.data)

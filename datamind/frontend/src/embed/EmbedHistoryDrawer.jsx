@@ -39,6 +39,7 @@ export default function EmbedHistoryDrawer({ open, onClose, onSelect, onNewChat,
       const loaded = (r.messages || []).map((m, i) => {
         const snap = m.data_snapshot || null
         const analysis = snap?.analysis || null
+        const isAssistant = m.role !== 'user'
         // Smart answers stores the analyst prose as BOTH the message content and
         // the snapshot's analysis — rendering both duplicates it. Only show
         // content separately when it differs (e.g. legacy "Found N results").
@@ -47,13 +48,16 @@ export default function EmbedHistoryDrawer({ open, onClose, onSelect, onNewChat,
           id: m.id || i,
           role: m.role === 'user' ? 'user' : 'ai',
           content,
-          data: snap ? {
+          data: (snap || isAssistant) ? {
             type: 'data',
-            columns: snap.columns || [],
-            data: snap.rows || [],
+            columns: snap?.columns || [],
+            data: snap?.rows || [],
             row_count: m.row_count || 0,
+            message_id: m.id,
+            conversation_id: convId,
           } : null,
           analysis,
+          vote: m.vote ?? null,
         }
       })
       onSelect(convId, loaded)

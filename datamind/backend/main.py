@@ -64,6 +64,7 @@ from billing import (
     check_plan_feature, get_plan_history_limit,
 )
 from embed import router as embed_router, bootstrap_embed_tables
+from feedback import router as feedback_router, bootstrap_feedback_tables
 from v1 import router as partner_router
 from pool import get_pool
 import mcp_server.safety as _safety
@@ -270,6 +271,7 @@ app.add_middleware(
 )
 
 app.include_router(embed_router)   # /embed/* — kept unversioned (live in partner iframes)
+app.include_router(feedback_router)  # /embed/feedback — widget rating + comment
 app.include_router(partner_router)  # /v1/partner/* — Partner API
 # All user-facing routes are registered on this router and included under /v1
 v1 = APIRouter(prefix="/v1", tags=["v1"])
@@ -320,6 +322,10 @@ def startup_event():
         bootstrap_embed_tables()
     except Exception as _be:
         log.warning("Embed bootstrap skipped", error=str(_be))
+    try:
+        bootstrap_feedback_tables()
+    except Exception as _be:
+        log.warning("Feedback bootstrap skipped", error=str(_be))
     start_scheduler()
     log.info("DataMind backend started")
 
@@ -378,6 +384,7 @@ def _base_query_response(**kwargs) -> dict:
         # Columns that are monetary (backend _is_money_column) — the frontend
         # table uses this instead of its own divergent regex.
         "money_cols":      kwargs.get("money_cols", []),
+        "message_id":      kwargs.get("message_id", None),
     }
     if "sql" in kwargs:
         base["sql"] = kwargs["sql"]
@@ -2032,12 +2039,13 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
             if conv_id:
                 try:
                     _conv.save_message(conv_id, "user", req.question)
-                    _conv.save_message(conv_id, "assistant", response_text)
+                    msg_id = _conv.save_message(conv_id, "assistant", response_text)
                 except Exception:
                     pass
             return _base_query_response(
                 success=True, type="conversational", message=response_text,
                 steps=steps, conversation_id=conv_id, think_mode=req.think_mode,
+                message_id=msg_id,
             )
 
         # ── Unsupported query (predictions, external data, etc.) ─────────────
@@ -2046,15 +2054,17 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
                 "response",
                 "I can't answer that from your data, but I can show you historical trends instead."
             )
+            msg_id = None
             if conv_id:
                 try:
                     _conv.save_message(conv_id, "user", req.question)
-                    _conv.save_message(conv_id, "assistant", response_text)
+                    msg_id = _conv.save_message(conv_id, "assistant", response_text)
                 except Exception:
                     pass
             return _base_query_response(
                 success=True, type="conversational", message=response_text,
                 steps=steps, conversation_id=conv_id, think_mode=req.think_mode,
+                message_id=msg_id,
             )
 
         # ── Needs clarification ───────────────────────────────────────────────
@@ -2064,15 +2074,17 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
                 "Could you provide more details about what you're looking for? "
                 "For example, specify a time period, a product category, or a metric."
             )
+            msg_id = None
             if conv_id:
                 try:
                     _conv.save_message(conv_id, "user", req.question)
-                    _conv.save_message(conv_id, "assistant", clarification)
+                    msg_id = _conv.save_message(conv_id, "assistant", clarification)
                 except Exception:
                     pass
             return _base_query_response(
                 success=True, type="clarification", message=clarification,
                 steps=steps, conversation_id=conv_id, think_mode=req.think_mode,
+                message_id=msg_id,
             )
 
         # ── Multi-step query ──────────────────────────────────────────────────
@@ -2147,6 +2159,7 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
 
                 _charge_op(user["email"], "nl_query_rows", sum(r["row_count"] for r in step_results))
 
+                msg_id = None
                 if conv_id:
                     try:
                         _conv.save_message(conv_id, "user", req.question)
@@ -2155,7 +2168,7 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
                         # (not all of them) — this is a simplification, but it's enough
                         # to let a follow-up refinement preserve the primary query's
                         # date range/filters, which is the common case (see Bug 3 fix).
-                        _conv.save_message(
+                        msg_id = _conv.save_message(
                             conv_id, "assistant",
                             analysis or f"Found results across {len(step_results)} queries.",
                             sql_query=step_results[0].get("sql"),
@@ -2171,7 +2184,7 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
                     columns=primary["columns"], data=primary["data"], row_count=primary["row_count"],
                     analysis=analysis, think_mode=req.think_mode,
                     conversation_id=conv_id, data_as_of=nl_last_sync_at,
-                    multi_results=step_results,
+                    multi_results=step_results, message_id=msg_id,
                 )
 
         # ── Single data query ─────────────────────────────────────────────────
@@ -2397,7 +2410,7 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
             try:
                 stat_col = _pick_summary_column(columns, data[0]) if data else None
                 _conv.save_message(conv_id, "user", req.question)
-                _conv.save_message(
+                msg_id = _conv.save_message(
                     conv_id, "assistant", answer_summary,
                     sql_query=sql, row_count=len(data),
                     columns=columns, data=data, stat_col=stat_col,
@@ -2472,6 +2485,7 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
             summary_col=_sum_col,
             summary_is_money=bool(_sum_col and _is_money_column(_sum_col)),
             money_cols=[c for c in columns if _is_money_column(c)],
+            message_id=msg_id,
         )
         # Only own-DB users get the generated SQL back (used by QueryPage's
         # "Show SQL" debugging view). Integration users query shared internal
@@ -2787,6 +2801,29 @@ def api_delete_conversation(request: Request, conv_id: str,
     except Exception as e:
         log.error("delete_conversation failed", user=user["email"], error=str(e))
         raise _server_error("Could not delete conversation.")
+
+
+class VoteRequest(BaseModel):
+    vote: Optional[int] = None  # 1 = thumbs up, -1 = thumbs down, None/0 = clear
+
+
+@v1.patch("/conversations/{conv_id}/messages/{message_id}/vote")
+@_limiter.limit(RL_WRITE)
+def api_vote_message(request: Request, conv_id: str, message_id: int, body: VoteRequest,
+                     user: dict = Depends(current_user)):
+    vote = body.vote or None
+    if vote not in (1, -1, None):
+        raise HTTPException(status_code=422, detail="vote must be 1, -1, or null.")
+    try:
+        ok = _conv.set_vote(conv_id, message_id, user["email"], vote)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Message not found.")
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("vote_message failed", user=user["email"], error=str(e))
+        raise _server_error("Could not save vote.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════

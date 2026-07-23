@@ -10,12 +10,26 @@
 import React, { useState, useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
 import './embed.css'
-import { embedValidateContext, salesplayGetProfile, salesplayCheckUser, salesplayOnboard } from './embedApi'
+import { embedValidateContext, salesplayGetProfile, salesplayCheckUser, salesplayOnboard, embedSubmitFeedback, embedGetFeedbackStatus } from './embedApi'
 import EmbedOnboarding from './EmbedOnboarding'
 import EmbedChat from './EmbedChat'
 import EmbedSalesplayAutoInit from './EmbedSalesplayAutoInit'
 import EmbedSearchBar from './EmbedSearchBar'
+import EmbedFeedbackModal from './EmbedFeedbackModal'
 import { appName } from './embedBranding'
+
+// "Remind me later" cooldown, jittered like App Store / Play Store review
+// prompts so users aren't all re-asked on the same schedule. Whether the user
+// has ever submitted a rating is checked server-side (GET /embed/feedback/status)
+// so it isn't forgotten on a different browser/device.
+const FEEDBACK_NEXT_PROMPT_KEY = 'dm_feedback_next_prompt'
+const FEEDBACK_COOLDOWN_MIN_MS = 3 * 24 * 60 * 60 * 1000 // 3 days
+const FEEDBACK_COOLDOWN_MAX_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
+
+function snoozeFeedback() {
+  const delay = FEEDBACK_COOLDOWN_MIN_MS + Math.random() * (FEEDBACK_COOLDOWN_MAX_MS - FEEDBACK_COOLDOWN_MIN_MS)
+  localStorage.setItem(FEEDBACK_NEXT_PROMPT_KEY, String(Date.now() + delay))
+}
 
 // ── Collapsed "search bar" layout (?layout=bar) ─────────────────────────────
 // The widget can start as a small search-bar pill instead of the full chat
@@ -74,6 +88,18 @@ function EmbedApp() {
   const layoutBar = params.get('layout') === 'bar'
   const [expanded, setExpanded]         = useState(!layoutBar)
   const [initialInput, setInitialInput] = useState('')
+  const [feedbackAfter, setFeedbackAfter] = useState(null) // fn to run once the feedback prompt is dismissed
+  const hasChattedRef = React.useRef(false) // only ask for feedback if the user actually sent a message
+  const hasFeedbackRef = React.useRef(null) // null=unknown, true=already submitted (server-checked), false=eligible
+
+  // Check once per chat session whether this user has ever submitted feedback —
+  // server-side, so it follows the user across browsers/devices, not just this one.
+  useEffect(() => {
+    if (state !== 'chat') return
+    embedGetFeedbackStatus()
+      .then(r => { hasFeedbackRef.current = !!r.has_feedback })
+      .catch(() => { hasFeedbackRef.current = true }) // fail safe: don't nag if the check itself fails
+  }, [state])
 
   // Apply saved theme on first load so onboarding is themed consistently
   useEffect(() => {
@@ -233,13 +259,46 @@ function EmbedApp() {
     document.documentElement.style.setProperty('--blue', accentColor)
   }
 
-  function handleClose() {
-    notifyParent('dm:close')
-    if (layoutBar) setExpanded(false)
+  // Ask for a rating before actually closing/minimizing the widget — only if
+  // the user sent at least one message this session, hasn't already submitted
+  // feedback (ever, checked server-side), and isn't currently snoozed via
+  // "remind me later".
+  function requestClose(after) {
+    const nextPrompt = Number(localStorage.getItem(FEEDBACK_NEXT_PROMPT_KEY) || 0)
+    if (hasChattedRef.current && hasFeedbackRef.current === false && Date.now() >= nextPrompt) {
+      setFeedbackAfter(() => after)
+    } else {
+      after()
+    }
   }
 
+  // Any dismissal that isn't a submission (including "Remind me later") snoozes
+  // the prompt for a random 3-7 days before it can reappear.
+  function handleRemindLater() {
+    snoozeFeedback()
+    const after = feedbackAfter
+    setFeedbackAfter(null)
+    if (after) after()
+  }
+
+  async function handleFeedbackSubmit(rating, comment) {
+    try { await embedSubmitFeedback(rating, comment) } catch { /* best-effort */ }
+    hasFeedbackRef.current = true
+    const after = feedbackAfter
+    setFeedbackAfter(null)
+    if (after) after()
+  }
+
+  function handleClose() {
+    requestClose(() => {
+      notifyParent('dm:close')
+      if (layoutBar) setExpanded(false)
+    })
+  }
+
+  let content
   if (state === 'salesplay_init') {
-    return (
+    content = (
       <EmbedSalesplayAutoInit
         context={context}
         partnerKey={partnerKey}
@@ -249,10 +308,8 @@ function EmbedApp() {
         onClose={handleClose}
       />
     )
-  }
-
-  if (state === 'onboarding') {
-    return (
+  } else if (state === 'onboarding') {
+    content = (
       <EmbedOnboarding
         context={context}
         partnerKey={partnerKey}
@@ -260,16 +317,26 @@ function EmbedApp() {
         onClose={handleClose}
       />
     )
+  } else {
+    content = (
+      <EmbedChat
+        context={context}
+        onExpired={handleExpired}
+        onLogout={handleLogout}
+        onCollapse={layoutBar ? () => requestClose(() => setExpanded(false)) : undefined}
+        onMessageSent={() => { hasChattedRef.current = true }}
+        initialInput={initialInput}
+      />
+    )
   }
 
   return (
-    <EmbedChat
-      context={context}
-      onExpired={handleExpired}
-      onLogout={handleLogout}
-      onCollapse={layoutBar ? () => setExpanded(false) : undefined}
-      initialInput={initialInput}
-    />
+    <>
+      {content}
+      {feedbackAfter && (
+        <EmbedFeedbackModal onSubmit={handleFeedbackSubmit} onRemindLater={handleRemindLater} />
+      )}
+    </>
   )
 }
 
