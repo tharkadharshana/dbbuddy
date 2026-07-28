@@ -735,3 +735,96 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
         "is_new_user": is_new_user,
         "sync":        sync,
     }
+
+
+# ── Salesplay AI POS subscription proxy ────────────────────────────────────────
+# The "AI POS" addon is billed and tracked entirely inside Salesplay's own
+# subscription system (trial window, quota, plans, payment) — not DataMind's
+# internal billing. These are thin server-to-server proxies (same reasoning
+# as the profile/create-token proxies above: Salesplay's API only allows
+# requests from their own origin, so the browser can't call it directly).
+_SALESPLAY_SUBSCRIPTION_BASE = os.getenv("SALESPLAY_SUBSCRIPTION_BASE_URL", _SALESPLAY_BASE)
+
+
+@router.get("/salesplay/subscription/info")
+def salesplay_subscription_info(request: Request, partner_key: str, aat: str):
+    """
+    Proxy: GET {base}/subscriptions/get_ai_pos_info
+    Returns Salesplay's current AI POS subscription/trial/quota state
+    unchanged — the frontend decides access from it. Called on every widget
+    open (scenario: any user, paid/trial/unpaid, must be re-checked at start).
+    """
+    _salesplay_guard(partner_key, request)
+    url = f"{_SALESPLAY_SUBSCRIPTION_BASE}/subscriptions/get_ai_pos_info"
+    log.debug("Salesplay subscription API request", method="GET", url=url)
+    try:
+        resp = _http.get(
+            url,
+            headers={"Authorization": f"Bearer {aat.strip()}"},
+            timeout=_PROXY_TIMEOUT,
+        )
+        log.debug("Salesplay subscription API response", url=url, status=resp.status_code, raw_body=resp.text)
+        if resp.status_code == 401:
+            raise HTTPException(status_code=401, detail="Salesplay session expired. Please refresh the page.")
+        resp.raise_for_status()
+        return resp.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("Salesplay proxy: subscription info fetch failed", error=str(e))
+        raise HTTPException(status_code=502, detail="Could not reach Salesplay API. Please try again.")
+
+
+class SalesplaySubscriptionPaymentRequest(BaseModel):
+    partner_key: str
+    aat: str
+    subscription_type: str
+    subscription_product_code: str
+    # Object, not a string — confirmed against predev2: Salesplay's endpoint
+    # 500s on a JSON string ("must be an array") and on a missing/null value
+    # (PHP sizeof() on null). Must always be sent, even empty.
+    activation_value_data: dict = Field(default_factory=dict)
+    product_type: Optional[str] = None
+    subscription_activation_type: Optional[str] = None
+    activation_renewal_auto_job_time: Optional[str] = None
+    coupon_code_verified: Optional[bool] = None
+    coupon_code: Optional[str] = None
+    # Confirmed working against predev2 by the Salesplay team directly: "" not
+    # "AUTH_NOT_REQUIRED" — the latter caused "No activations available to
+    # subscribe" on every attempt.
+    payment_action: str = ""
+    auth_payment_intent_id: str = ""
+
+
+@router.post("/salesplay/subscription/payment")
+def salesplay_subscription_payment(request: Request, req: SalesplaySubscriptionPaymentRequest):
+    """
+    Proxy: POST {base}/subscriptions/payment
+    Forwards Salesplay's response unchanged — on success the frontend follows
+    up with GET .../subscription/info to confirm activation; on error
+    Salesplay's response carries a redirect link the frontend must send the
+    user to.
+    """
+    _salesplay_guard(req.partner_key, request)
+    body = req.dict(exclude={"partner_key", "aat"}, exclude_none=True)
+    url = f"{_SALESPLAY_SUBSCRIPTION_BASE}/subscriptions/payment"
+    log.debug("Salesplay subscription API request", method="POST", url=url, body=body)
+    try:
+        resp = _http.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {req.aat.strip()}",
+                "Content-Type":  "application/json",
+            },
+            json=body,
+            timeout=_PROXY_TIMEOUT,
+        )
+        log.debug("Salesplay subscription API response", url=url, status=resp.status_code, raw_body=resp.text)
+        if resp.status_code == 401:
+            raise HTTPException(status_code=401, detail="Salesplay session expired. Please refresh the page.")
+        return resp.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("Salesplay proxy: subscription payment failed", error=str(e))
+        raise HTTPException(status_code=502, detail="Could not reach Salesplay API. Please try again.")
