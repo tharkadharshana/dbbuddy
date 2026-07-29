@@ -120,7 +120,7 @@ function ResultTable({ columns, data, rowCount, moneyCols }) {
           onClick={() => setExpanded(e => !e)}
           style={{ padding:'6px 10px', textAlign:'center', fontSize:10, color:'var(--blue)', cursor:'pointer', borderTop:'1px solid var(--border)' }}
         >
-          {expanded ? '▲ Show less' : `▼ Show all ${rowCount} rows`}
+          {expanded ? '▲ Show less' : `▼ Show all ${rowCount} records`}
         </div>
       )}
     </div>

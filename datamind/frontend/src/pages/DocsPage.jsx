@@ -113,7 +113,7 @@ function WhatAreTokens() {
             {
               icon: '🗄',
               title: 'Data volume',
-              desc: 'The more rows your query or sync processes, the more Tokens it uses. A question over a small table costs far fewer Tokens than the same question over a table with hundreds of thousands of rows.',
+              desc: 'The more records your query or sync processes, the more Tokens it uses. A question over a small table costs far fewer Tokens than the same question over a table with hundreds of thousands of records.',
             },
             {
               icon: '⚙️',
@@ -150,12 +150,12 @@ function WhatAreTokens() {
 function WhatUsesTokens() {
   const ops = [
     { op: 'Ask Your Data (AI query)',  cost: 'Medium–High', note: 'Depends on question complexity and result size' },
-    { op: 'Analytics templates',       cost: 'Low–Medium',  note: 'Depends on how many rows your data has' },
+    { op: 'Analytics templates',       cost: 'Low–Medium',  note: 'Depends on how many records your data has' },
     { op: 'Report generation',         cost: 'Medium–High', note: 'Depends on number of sections and data size' },
     { op: 'Forecasting',               cost: 'Medium',      note: 'Higher compute — Growth & Pro plans only' },
     { op: 'Anomaly detection',         cost: 'Medium',      note: 'Higher compute — Growth & Pro plans only' },
     { op: 'RFM / Cohort / Basket',     cost: 'Low–Medium',  note: 'Multi-pass analysis over your data' },
-    { op: 'Integration data sync',     cost: 'Low–Medium',  note: 'Scales with rows imported — Pro plan only' },
+    { op: 'Integration data sync',     cost: 'Low–Medium',  note: 'Scales with records imported — Pro plan only' },
   ]
 
   return (
@@ -170,8 +170,8 @@ function WhatUsesTokens() {
           rows={ops.map(r => [r.op, r.cost, r.note])}
         />
         <Callout color="amber">
-          <strong>Cost is not fixed.</strong> "Medium" for a 500-row table might be a fraction of a Token.
-          The same operation on a 200,000-row table will cost significantly more because DataMind is processing
+          <strong>Cost is not fixed.</strong> "Medium" for a 500-record table might be a fraction of a Token.
+          The same operation on a 200,000-record table will cost significantly more because DataMind is processing
           far more of your data.
         </Callout>
       </Section>
@@ -193,11 +193,11 @@ function TipsToSave() {
   const tips = [
     {
       title: 'Ask focused questions',
-      desc: 'When using Ask Your Data, specific questions return fewer rows than broad ones. "Show me top 10 products by revenue this month" will use far fewer Tokens than "show me all sales data".',
+      desc: 'When using Ask Your Data, specific questions return fewer records than broad ones. "Show me top 10 products by revenue this month" will use far fewer Tokens than "show me all sales data".',
     },
     {
       title: 'Use analytics templates instead of free-form queries',
-      desc: 'Prebuilt templates are optimised to return only the aggregated data you need. They typically cost fewer Tokens than writing a custom AI question that returns raw rows.',
+      desc: 'Prebuilt templates are optimised to return only the aggregated data you need. They typically cost fewer Tokens than writing a custom AI question that returns raw records.',
     },
     {
       title: 'Run forecasting and anomaly detection when you need it',
@@ -294,7 +294,7 @@ function FAQ() {
   const items = [
     {
       q: 'Why did I use more Tokens than I expected?',
-      a: 'The most common reason is data volume. Operations scale with the number of rows in your database. If your data has grown significantly, the same queries will cost more Tokens than before. Check the Usage tab to see a breakdown of exactly which operations consumed your Tokens.',
+      a: 'The most common reason is data volume. Operations scale with the number of records in your database. If your data has grown significantly, the same queries will cost more Tokens than before. Check the Usage tab to see a breakdown of exactly which operations consumed your Tokens.',
     },
     {
       q: 'Do cached analytics templates cost fewer Tokens?',
@@ -314,7 +314,7 @@ function FAQ() {
     },
     {
       q: 'My Token balance dropped a lot after connecting an integration. Why?',
-      a: 'When you connect an external integration for the first time, DataMind performs an initial sync to import your historical data. The Token cost scales with how many rows are imported. Subsequent delta syncs only import new data and cost much less.',
+      a: 'When you connect an external integration for the first time, DataMind performs an initial sync to import your historical data. The Token cost scales with how many records are imported. Subsequent delta syncs only import new data and cost much less.',
     },
     {
       q: 'What is the minimum Token cost for any operation?',

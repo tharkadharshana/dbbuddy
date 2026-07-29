@@ -326,7 +326,7 @@ export default function Sidebar({ active, setActive, connection, cacheStatus, to
                   : cacheOk
                     ? `⚡ ${cacheStatus.template_count} analytics ready`
                     : totalRows > 0
-                      ? `${totalRows.toLocaleString()} rows synced`
+                      ? `${totalRows.toLocaleString()} records synced`
                       : 'Connected'}
               </div>
             </div>

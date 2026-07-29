@@ -188,7 +188,7 @@ function RenderedReport({ report }) {
           {Object.entries(sections||{}).map(([sid, data]) => (
             <div key={sid} style={{ background:'var(--bg2)', borderRadius:'var(--r-lg)', padding:'16px', border:'1px solid var(--border)' }}>
               <div style={{ fontSize:13, fontWeight:600, color:'var(--text)', marginBottom:2 }}>{data.title}</div>
-              <div style={{ fontSize:11, color:'var(--text3)', marginBottom:8 }}>{data.row_count} rows</div>
+              <div style={{ fontSize:11, color:'var(--text3)', marginBottom:8 }}>{data.row_count} records</div>
               <MiniChart data={data.data} columns={data.columns} title={data.title} />
               {/* Top 3 rows preview */}
               {data.data?.slice(0,3).map((row,i) => (
