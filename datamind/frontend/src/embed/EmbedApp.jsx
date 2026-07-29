@@ -10,7 +10,7 @@
 import React, { useState, useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
 import './embed.css'
-import { embedValidateContext, salesplayGetProfile, salesplayCheckUser, salesplayOnboard, salesplaySubscriptionInfo, embedSubmitFeedback, embedGetFeedbackStatus } from './embedApi'
+import { embedValidateContext, salesplayGetProfile, salesplayCheckUser, salesplayOnboard, salesplaySubscriptionInfo, embedGetSubscription, embedSubmitFeedback, embedGetFeedbackStatus } from './embedApi'
 import { evaluateSalesplayAccess } from './embedSalesplaySubscription'
 import EmbedOnboarding from './EmbedOnboarding'
 import EmbedChat from './EmbedChat'
@@ -20,13 +20,16 @@ import EmbedSearchBar from './EmbedSearchBar'
 import EmbedFeedbackModal from './EmbedFeedbackModal'
 import { appName } from './embedBranding'
 
-// Fetches Salesplay's AI POS subscription state and turns it into an access
-// decision. Used at every widget open (returning + new merchants) and again
-// right after a payment attempt, per the spec: any user — paid, trial, or
-// unpaid — gets re-checked at the start of each session.
+// Combines Salesplay's raw subscription state (card/plans — it's the payment
+// gateway) with DataMind's own billing (trial days, tokens — the actual
+// access gate) into one access decision. Used at every widget open (returning
+// + new merchants) and again right after a payment attempt.
 async function checkSalesplayAccess(partnerKey, aat) {
-  const info = await salesplaySubscriptionInfo(partnerKey, aat)
-  return evaluateSalesplayAccess(info)
+  const [info, sub] = await Promise.all([
+    salesplaySubscriptionInfo(partnerKey, aat),
+    embedGetSubscription(),
+  ])
+  return evaluateSalesplayAccess(info, sub)
 }
 
 // "Remind me later" cooldown, jittered like App Store / Play Store review
@@ -234,13 +237,16 @@ function EmbedApp() {
     localStorage.setItem('dm_embed_token', token)
     if (userData) localStorage.setItem('dm_embed_user', JSON.stringify(userData))
 
-    // Salesplay: show the plans screen before chat unless the merchant already
-    // has access (e.g. widget re-init mid-trial). Non-Salesplay embeds are
-    // unaffected — straight to chat, as before.
+    // Salesplay: show the plans screen once for every brand-new merchant —
+    // informational (their 14-day DataMind trial is already silently active
+    // from onboarding's start_trial() call, so hasAccess is already true and
+    // wouldn't otherwise trigger this screen), and thereafter only when
+    // access is actually blocked. Non-Salesplay embeds are unaffected —
+    // straight to chat, as before.
     if (context?.provider_id === 'salesplay' && aatToken) {
       try {
         const access = await checkSalesplayAccess(partnerKey, aatToken)
-        if (!access.hasAccess) {
+        if (userData?.is_new_user || !access.hasAccess) {
           setSubAccess(access)
           setState('salesplay_plans')
           notifyParent('dm:onboarding_start')

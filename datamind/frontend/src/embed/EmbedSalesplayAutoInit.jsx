@@ -198,6 +198,11 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
     localStorage.setItem('dm_embed_token', result.token)
     if (result.user?.email) localStorage.setItem('dm_sp_email', result.user.email)
 
+    // Carried through to onComplete so EmbedApp can force-show the plans
+    // screen once for brand-new users regardless of computed access (their
+    // trial is already silently active — this is informational/upsell).
+    result.user = { ...result.user, is_new_user: result.is_new_user }
+
     if (result.sync === 'started') {
       setPhase('sync')
       notifyParent('dm:onboarding_sync_started')

@@ -1,56 +1,49 @@
 /**
- * embedSalesplaySubscription.js — turns a raw GET /subscriptions/get_ai_pos_info
- * response into the access decision the embed UI needs: can this merchant use
- * chat right now, and if not, why (and are they still trial-eligible)?
+ * embedSalesplaySubscription.js — decides chat access for the Salesplay embed.
  *
- * Field meanings confirmed against a real predev2 response for a brand-new,
- * never-subscribed merchant:
- *   activation_status: 0, subscribe_status: 0, last_subscribe_date: null,
- *   is_subscribe: true, is_trial: true, available_credit: 0
- * — i.e. is_subscribe/is_trial are static "this product is subscribable /
- * has a trial" flags, NOT "currently subscribed/trialing". activation_status
- * is the real "can they use it right now" signal.
+ * Salesplay is the payment gateway only. Access itself (trial days, token
+ * quota, plan tiers) is DataMind's own — sourced from GET /billing/subscription
+ * (billing.py's get_user_subscription), which already tracks a 14-day trial
+ * per subscription_plans.trial_days and per-plan token limits.
+ *
+ * Salesplay's get_ai_pos_info response is only used for what it's actually
+ * authoritative for: is there a card on file, and what are the real
+ * product_code/price options to display (pricing_plans).
+ *
+ * account is active   when internal status is 'trial' or 'active' AND tokens remain
+ * account is inactive when internal status is 'expired'/'cancelled'/'no_subscription'
+ *   ('no_subscription' also covers a brand-new user before onboarding's
+ *    start_trial() call has run, though in practice that always runs first)
  */
-export function evaluateSalesplayAccess(info) {
-  const sub = info?.data?.subscription?.[0]
-  // Whether a card is on file — checked up front so the plans screen can send
-  // the user to add one instead of calling /subscriptions/payment and hitting
-  // a guaranteed server error with no card.
-  // NOTE: billing_details_added is unreliable — confirmed on predev2 it stays
-  // false even after a card is successfully attached (payment_methods gets
-  // populated but the flag doesn't flip). payment_methods.payment_method_id
-  // is the field that actually reflects reality; treat either as "true" so a
-  // fixed billing_details_added later doesn't need a code change.
-  const billingDetailsAdded = !!info?.data?.billing_details_added || !!info?.data?.payment_methods?.payment_method_id
-  const cardAddUrl = info?.data?.card_add_url || null
-  const card = info?.data?.payment_methods
+export function evaluateSalesplayAccess(salesplayInfo, internalSub) {
+  const sub   = salesplayInfo?.data?.subscription?.[0]
+  const plans = sub?.pricing_plans || []
+
+  // billing_details_added is unreliable — confirmed on predev2 it stays false
+  // even after a card is successfully attached. payment_methods.payment_method_id
+  // is the field that actually reflects reality.
+  const billingDetailsAdded = !!salesplayInfo?.data?.billing_details_added || !!salesplayInfo?.data?.payment_methods?.payment_method_id
+  const cardAddUrl = salesplayInfo?.data?.card_add_url || null
+  const card = salesplayInfo?.data?.payment_methods
   const cardLabel = card?.payment_method_id ? `${(card.brand || 'card').toUpperCase()} ····${card.last4 || ''}` : null
 
-  if (!sub) {
-    return { hasAccess: false, trialAvailable: true, blockReason: null, plans: [], trialDays: 14, billingDetailsAdded, cardAddUrl, cardLabel }
+  const status = internalSub?.status // 'trial' | 'active' | 'expired' | 'cancelled' | 'no_subscription'
+  const isLive = status === 'trial' || status === 'active'
+  const tokensOk = internalSub?.can_use_ai !== false
+  const hasAccess = isLive && tokensOk
+  const trialAvailable = status === 'trial' // silently auto-started at onboarding — this just reflects "still in it"
+
+  let blockReason = null
+  if (!hasAccess) {
+    blockReason = (isLive && !tokensOk) ? 'quota_exceeded' : 'trial_expired'
   }
-
-  const plans = sub.pricing_plans || []
-  const trialDays = Number(sub.trial_period) || 14
-  const neverUsed = !sub.last_subscribe_date && sub.activation_status !== 1 && sub.subscribe_status !== 1
-
-  if (neverUsed) {
-    return { hasAccess: false, trialAvailable: true, blockReason: null, plans, trialDays, billingDetailsAdded, cardAddUrl, cardLabel }
-  }
-
-  // available_credit is pay-as-you-go top-up credit, not a gate on a paid
-  // flat-fee ADDON subscription — confirmed on predev2: an active subscription
-  // (activation_status:1, is_expired:0, expire_date a year out) had
-  // available_credit:0 and still means full access. Only gate on expiry.
-  const expired = sub.is_expired === 1
-  const hasAccess = sub.activation_status === 1 && !expired
 
   return {
     hasAccess,
-    trialAvailable: false,
-    blockReason: hasAccess ? null : 'trial_expired',
+    trialAvailable,
+    blockReason,
     plans,
-    trialDays,
+    trialDays: 14, // subscription_plans.trial_days — same for all 3 plans
     billingDetailsAdded,
     cardAddUrl,
     cardLabel,

@@ -15,10 +15,13 @@
  *     (new tab; can't navigate the iframe itself off the partner site).
  *   - Card on file     → shows a one-screen receipt (plan, price, card) with
  *     a single "Confirm & Subscribe" button — no separate review step.
- * On confirm, calls /subscriptions/payment, then polls subscription/info a
- * few times (activation isn't instant — confirmed on predev2 that a
- * successful charge doesn't flip activation_status right away) with the
- * screen grayed out so the user isn't left clicking around mid-purchase.
+ * On confirm, calls /subscriptions/payment — the backend activates the
+ * matching DataMind plan synchronously in that same request the moment
+ * Salesplay confirms the charge (Salesplay's own activation_status lags
+ * unpredictably — confirmed still 0 after 2.5+ minutes on predev2 — so we
+ * don't gate on it). A single re-check after payment confirms it landed; if
+ * that one check somehow fails, the button becomes a safe "Check again"
+ * (never re-runs the charge) rather than silently retrying forever.
  */
 import React, { useState, useRef, useEffect } from 'react'
 import { salesplaySubscriptionPayment } from './embedApi'
@@ -91,25 +94,27 @@ function yearlySavingsPct(tier) {
   return Math.round((1 - yearly / monthlyAnnualized) * 100)
 }
 
-// Activation lags a successful charge — poll instead of a single check.
-const ACTIVATION_POLL_ATTEMPTS = Number(import.meta.env.VITE_SALESPLAY_ACTIVATION_POLL_ATTEMPTS) || 6
-const ACTIVATION_POLL_INTERVAL_MS = Number(import.meta.env.VITE_SALESPLAY_ACTIVATION_POLL_INTERVAL_MS) || 3000
-// Card-add happens on Salesplay's own page in another tab — poll for it too,
-// so the user isn't stuck needing a manual refresh to move on.
+// Card-add happens on Salesplay's own page in another tab — poll for it, so
+// the user isn't stuck needing a manual refresh to move on.
 const CARD_POLL_INTERVAL_MS = Number(import.meta.env.VITE_SALESPLAY_CARD_POLL_INTERVAL_MS) || 3000
 const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+
+// ponytail: tier index → DataMind subscription_plans.id. Matches the current
+// DB seed (Starter=1, Growth=2, Pro=3, sort_order 1/2/3 — same order as
+// ascending price, same order Salesplay's tiers are grouped in above).
+// Revisit if subscription_plans is ever reseeded with different ids/order.
+const TIER_TO_INTERNAL_PLAN_ID = [1, 2, 3]
 
 function Spin({ color = '#fff' }) {
   return <div style={{ width:13, height:13, border:`2px solid ${color === '#fff' ? 'rgba(255,255,255,0.3)' : 'rgba(0,88,190,0.25)'}`, borderTopColor:color, borderRadius:'50%', animation:'spin 0.7s linear infinite' }} />
 }
 
 export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, trialAvailable, blockReason, trialDays = 14, billingDetailsAdded, cardAddUrl, cardLabel, onTrialSelected, onSubscribed, onRefreshAccess, onClose }) {
-  const [selectedPlan, setSelectedPlan] = useState(null) // plan under review on the receipt screen
+  const [selectedPlan, setSelectedPlan] = useState(null) // { ...plan, _tierIndex } under review on the receipt screen
   const [checking, setChecking] = useState(false) // re-checking access after returning from card_add_url (manual "Continue")
   const [awaitingCard, setAwaitingCard] = useState(false) // polling for a card add — grays out the screen
-  const [confirmBusy, setConfirmBusy] = useState(false) // paying
-  const [activating, setActivating] = useState(false) // polling for activation post-payment — grays out the screen
-  const [paidPending, setPaidPending] = useState(false) // charge succeeded, still waiting on activation — blocks re-paying
+  const [confirmBusy, setConfirmBusy] = useState(false) // paying + confirming activation
+  const [paidPending, setPaidPending] = useState(false) // charge succeeded — blocks re-paying even if the confirm check below fails
   const [billingCycle, setBillingCycle] = useState('MONTHLY') // global toggle — one cycle for all 3 tiers
   const [error, setError] = useState('')
   const appNm = appName(context)
@@ -150,30 +155,19 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
     setAwaitingCard(false)
   }
 
-  function handleChoosePlan(plan) {
+  function handleChoosePlan(plan, tierIndex) {
     setError('')
+    const withTier = { ...plan, _tierIndex: tierIndex }
     // No card on file — Salesplay's own hosted page collects it. We can't call
     // /subscriptions/payment without one (confirmed: it errors with no card),
     // so send them there instead of guessing at a payload that's bound to fail.
     if (!billingDetailsAdded && cardAddUrl) {
       notifyParent('dm:redirect', { url: cardAddUrl })
       window.open(cardAddUrl, '_blank', 'noopener,noreferrer')
-      pollForCard(plan)
+      pollForCard(withTier)
       return
     }
-    setSelectedPlan(plan) // → receipt screen
-  }
-
-  async function pollForActivation() {
-    for (let i = 0; i < ACTIVATION_POLL_ATTEMPTS; i++) {
-      try {
-        await onSubscribed() // throws if still not active; parent switches to chat on success
-        return
-      } catch (e) {
-        if (i === ACTIVATION_POLL_ATTEMPTS - 1) throw e
-        await sleep(ACTIVATION_POLL_INTERVAL_MS)
-      }
-    }
+    setSelectedPlan(withTier) // → receipt screen
   }
 
   async function handleConfirmSubscribe() {
@@ -191,6 +185,10 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
         // Confirmed with Salesplay directly: literal "MANUAL", not the plan's
         // billing_type (MONTHLY/YEARLY) — that's a display field, not this one.
         subscription_activation_type: 'MANUAL',
+        // The backend activates this DataMind plan synchronously the instant
+        // Salesplay confirms the charge — see TIER_TO_INTERNAL_PLAN_ID above.
+        internal_plan_id: TIER_TO_INTERNAL_PLAN_ID[plan._tierIndex] || 1,
+        internal_period_days: plan.billing_type === 'YEARLY' ? 365 : 30,
       })
 
       if (payRes?.status !== 'success') {
@@ -204,18 +202,16 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
         return
       }
 
-      // Charge went through — never re-pay from here again, even if activation
-      // polling below times out. subscription_type + product_code alone are
-      // not enough to know "already paid" server-side, so this flag is the guard.
+      // Charge went through and the backend already activated our plan in
+      // this same request — never re-pay from here again regardless of what
+      // happens next. A single re-check should confirm it immediately; if it
+      // somehow doesn't (real inconsistency, not lag), fall back to a manual
+      // "Check again" rather than a blind retry loop.
       setPaidPending(true)
-      setConfirmBusy(false)
-      setActivating(true)
-      await pollForActivation()
-      // onSubscribed() already moved the parent to 'chat' on success — nothing left to render.
+      await onSubscribed() // parent switches to 'chat' on success
     } catch (e) {
-      setActivating(false)
       setConfirmBusy(false)
-      setError(e.response?.data?.detail || e.message || 'Payment received, but your subscription is still activating. Please check back in a moment.')
+      setError(e.response?.data?.detail || e.message || 'Payment succeeded but activation could not be confirmed yet.')
     }
   }
 
@@ -233,26 +229,14 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
     }
   }
 
-  const grayedOut = activating || awaitingCard
-  const busy = activating || confirmBusy || checking || awaitingCard
+  const grayedOut = awaitingCard
+  const busy = confirmBusy || checking || awaitingCard
 
   return (
     <div style={{
       height: '100%', overflowY: 'auto', padding: '24px 20px',
       background: SP.bg, position: 'relative',
     }}>
-      {activating && (
-        <div style={{
-          position: 'absolute', inset: 0, zIndex: 10,
-          background: 'rgba(240,244,248,0.85)', backdropFilter: 'blur(1px)',
-          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14,
-        }}>
-          <div style={{ width: 28, height: 28, border: '3px solid rgba(0,88,190,0.2)', borderTopColor: SP.blue, borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
-          <div style={{ fontSize: 13, fontWeight: 600, color: SP.heading }}>Activating your subscription…</div>
-          <div style={{ fontSize: 12, color: SP.text3, maxWidth: 220, textAlign: 'center' }}>Payment received — this can take a few seconds.</div>
-        </div>
-      )}
-
       {awaitingCard && (
         <div style={{
           position: 'absolute', inset: 0, zIndex: 10,
@@ -308,7 +292,7 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
             // Charge already went through — this only re-checks, never re-pays.
             <>
               <div style={{ fontSize: 12, color: SP.text3, textAlign: 'center', marginBottom: 10 }}>
-                Payment received — still waiting on activation.
+                Payment received — confirming your subscription.
               </div>
               <button
                 onClick={handleContinue}
@@ -473,7 +457,7 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
                   )}
 
                   <button
-                    onClick={() => handleChoosePlan(plan)}
+                    onClick={() => handleChoosePlan(plan, i)}
                     disabled={busy}
                     style={{
                       width: '100%', padding: '11px', borderRadius: 9999, fontSize: 13, fontWeight: 700,
