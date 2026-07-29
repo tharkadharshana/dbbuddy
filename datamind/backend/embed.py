@@ -22,12 +22,12 @@ from typing import Optional
 
 import mysql.connector
 import requests as _http
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Depends
 from pydantic import BaseModel, Field
 
 from logger import get_logger
-from auth import create_user, authenticate_user, create_token, update_user_settings
-from billing import start_trial
+from auth import create_user, authenticate_user, create_token, update_user_settings, current_user
+from billing import start_trial, subscribe_to_plan, cancel_subscription
 from integrations import connect_provider, connect_integration
 from pool import get_internal_conn as _get_conn
 
@@ -735,3 +735,128 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
         "is_new_user": is_new_user,
         "sync":        sync,
     }
+
+
+# ── Salesplay AI POS subscription proxy ────────────────────────────────────────
+# The "AI POS" addon is billed and tracked entirely inside Salesplay's own
+# subscription system (trial window, quota, plans, payment) — not DataMind's
+# internal billing. These are thin server-to-server proxies (same reasoning
+# as the profile/create-token proxies above: Salesplay's API only allows
+# requests from their own origin, so the browser can't call it directly).
+_SALESPLAY_SUBSCRIPTION_BASE = os.getenv("SALESPLAY_SUBSCRIPTION_BASE_URL", _SALESPLAY_BASE)
+
+
+@router.get("/salesplay/subscription/info")
+def salesplay_subscription_info(request: Request, partner_key: str, aat: str, user: dict = Depends(current_user)):
+    """
+    Proxy: GET {base}/subscriptions/get_ai_pos_info
+    Returns Salesplay's raw state unchanged (frontend reads plans/card info
+    from it), but access itself is decided from DataMind's OWN billing
+    (trial days, tokens — see GET /billing/subscription) — Salesplay is the
+    payment gateway, not the source of truth for what the user can do here.
+    The one thing we do sync down from Salesplay: is_expired=1 means their
+    subscription is no longer valid (failed renewal, refund, chargeback) —
+    cancel our internal one immediately regardless of our own period_end.
+    """
+    _salesplay_guard(partner_key, request)
+    url = f"{_SALESPLAY_SUBSCRIPTION_BASE}/subscriptions/get_ai_pos_info"
+    log.debug("Salesplay subscription API request", method="GET", url=url)
+    try:
+        resp = _http.get(
+            url,
+            headers={"Authorization": f"Bearer {aat.strip()}"},
+            timeout=_PROXY_TIMEOUT,
+        )
+        log.debug("Salesplay subscription API response", url=url, status=resp.status_code, raw_body=resp.text)
+        if resp.status_code == 401:
+            raise HTTPException(status_code=401, detail="Salesplay session expired. Please refresh the page.")
+        resp.raise_for_status()
+        data = resp.json()
+        sub = (data.get("data") or {}).get("subscription") or []
+        if sub and sub[0].get("is_expired") == 1:
+            try:
+                cancel_subscription(user["email"])
+            except Exception as e:
+                log.warning("Internal subscription sync-down failed (non-fatal)", email=user["email"], error=str(e))
+        return data
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("Salesplay proxy: subscription info fetch failed", error=str(e))
+        raise HTTPException(status_code=502, detail="Could not reach Salesplay API. Please try again.")
+
+
+class SalesplaySubscriptionPaymentRequest(BaseModel):
+    partner_key: str
+    aat: str
+    subscription_type: str
+    subscription_product_code: str
+    # Object, not a string — confirmed against predev2: Salesplay's endpoint
+    # 500s on a JSON string ("must be an array") and on a missing/null value
+    # (PHP sizeof() on null). Must always be sent, even empty.
+    activation_value_data: dict = Field(default_factory=dict)
+    product_type: Optional[str] = None
+    subscription_activation_type: Optional[str] = None
+    activation_renewal_auto_job_time: Optional[str] = None
+    coupon_code_verified: Optional[bool] = None
+    coupon_code: Optional[str] = None
+    # Confirmed working against predev2 by the Salesplay team directly: "" not
+    # "AUTH_NOT_REQUIRED" — the latter caused "No activations available to
+    # subscribe" on every attempt.
+    payment_action: str = ""
+    auth_payment_intent_id: str = ""
+    # DataMind's own plan to activate the moment Salesplay confirms the charge
+    # (id from subscription_plans — 1/2/3 for Starter/Growth/Pro) and how many
+    # days that purchase covers (30 monthly, 365 yearly). We don't wait on
+    # Salesplay's activation_status to flip before granting access — that lag
+    # is unbounded (confirmed: still 0 after 2.5+ minutes on predev2). The
+    # money already moved the instant Salesplay returned "success", so we
+    # activate our own side immediately and independently.
+    internal_plan_id: int
+    internal_period_days: int
+
+
+@router.post("/salesplay/subscription/payment")
+def salesplay_subscription_payment(request: Request, req: SalesplaySubscriptionPaymentRequest, user: dict = Depends(current_user)):
+    """
+    Proxy: POST {base}/subscriptions/payment
+    Forwards Salesplay's response unchanged — but on success ALSO activates
+    the matching DataMind plan immediately (subscribe_to_plan), synchronously,
+    in this same request. This is what actually grants chat access; Salesplay
+    is the payment gateway, not the access gate. On error, Salesplay's
+    response carries a redirect link the frontend must send the user to.
+    """
+    _salesplay_guard(req.partner_key, request)
+    body = req.dict(exclude={"partner_key", "aat", "internal_plan_id", "internal_period_days"}, exclude_none=True)
+    url = f"{_SALESPLAY_SUBSCRIPTION_BASE}/subscriptions/payment"
+    log.debug("Salesplay subscription API request", method="POST", url=url, body=body)
+    try:
+        resp = _http.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {req.aat.strip()}",
+                "Content-Type":  "application/json",
+            },
+            json=body,
+            timeout=_PROXY_TIMEOUT,
+        )
+        log.debug("Salesplay subscription API response", url=url, status=resp.status_code, raw_body=resp.text)
+        if resp.status_code == 401:
+            raise HTTPException(status_code=401, detail="Salesplay session expired. Please refresh the page.")
+        result = resp.json()
+        if result.get("status") == "success":
+            try:
+                subscribe_to_plan(user["email"], req.internal_plan_id, period_days=req.internal_period_days)
+            except Exception as e:
+                # The charge already succeeded on Salesplay's side — a failure here
+                # is a real inconsistency (paid but not activated), not something to
+                # silently swallow. Log loudly; still return the payment success so
+                # the frontend doesn't tell the user their card was charged for nothing.
+                log.error("Internal plan activation failed after successful Salesplay charge",
+                          email=user["email"], plan_id=req.internal_plan_id, error=str(e))
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("Salesplay proxy: subscription payment failed", error=str(e))
+        raise HTTPException(status_code=502, detail="Could not reach Salesplay API. Please try again.")

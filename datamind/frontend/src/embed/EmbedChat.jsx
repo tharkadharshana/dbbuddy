@@ -25,31 +25,6 @@ const SUGGESTIONS = [
   { icon:'📍', text:'Compare sales across all my locations' },
 ]
 
-// ── Beta badge ──────────────────────────────────────────────────────────────
-function BetaBadge({ isSalesplay }) {
-  if (isSalesplay) {
-    return (
-      <span style={{
-        fontSize: 10, fontWeight: 700, letterSpacing: '.05em', textTransform: 'uppercase',
-        color: '#64748B', background: '#E2E8F0',
-        borderRadius: 9999, padding: '3px 9px', flexShrink: 0,
-      }}>
-        Beta
-      </span>
-    )
-  }
-  return (
-    <span style={{
-      fontSize: 9, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase',
-      color: 'var(--blue)',
-      background: 'rgba(79,142,247,0.12)',
-      borderRadius: 6, padding: '2px 6px', marginLeft: 6,
-    }}>
-      Beta
-    </span>
-  )
-}
-
 // ── Token usage indicator ──────────────────────────────────────────────────────
 function TokenUsage({ sub, isSalesplay }) {
   if (!sub || sub.status === 'no_subscription') return null
@@ -475,7 +450,6 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, on
             <div style={{ display:'flex', alignItems:'center', gap: isNarrow ? 6 : 8, minWidth:0 }}>
               <Logo size={50} radius={9} style={{ flexShrink:0 }} />
               <span style={{ fontSize: isNarrow ? 15 : 18, fontWeight:800, color:'#191C1E', letterSpacing:'-0.02em', fontFamily:"'Manrope', 'Plus Jakarta Sans', sans-serif", overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{/* {productTitle} */}Ask AI</span>
-              {!isNarrow && <BetaBadge isSalesplay={isSalesplay} />}
             </div>
             <div style={{ display:'flex', alignItems:'center', gap: isNarrow ? 6 : 8, flexShrink:0 }}>
               {/* Minimize back to the collapsed search bar (?layout=bar only) */}
@@ -549,7 +523,6 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, on
             </button>
             <Logo size={22} radius={6} style={{ flexShrink:0 }} />
             <span style={{ fontSize:15, fontWeight:600, color:'var(--text)', letterSpacing:'-0.01em', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{productTitle}</span>
-            {!isNarrow && <BetaBadge isSalesplay={isSalesplay} />}
           </div>
           <div style={{ display:'flex', alignItems:'center', gap: isNarrow ? 4 : 8, flexShrink:0 }}>
             <TokenUsage sub={sub} isSalesplay={isSalesplay} />

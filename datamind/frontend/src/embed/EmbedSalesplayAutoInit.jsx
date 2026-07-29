@@ -133,30 +133,6 @@ function friendlySyncMsg(raw, providerName) {
   return 'Setting up your workspace…'
 }
 
-function BetaBadge({ sp, large }) {
-  if (sp && large) {
-    return (
-      <div style={{
-        display: 'inline-flex', alignItems: 'center', gap: 6,
-        padding: '5px 14px', background: SP.blueLight, color: SP.blueDark,
-        borderRadius: 9999, fontSize: 12, fontWeight: 700, letterSpacing: '.04em',
-      }}>
-        <span style={{ fontSize: 13 }}>⚡</span> BETA
-      </div>
-    )
-  }
-  return (
-    <span style={{
-      fontSize: 9, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase',
-      color: sp ? SP.blue : 'var(--blue)',
-      background: sp ? 'rgba(0,88,190,0.1)' : 'rgba(79,142,247,0.12)',
-      borderRadius: 6, padding: '2px 6px', marginLeft: 6,
-    }}>
-      Beta
-    </span>
-  )
-}
-
 // ── Main component ────────────────────────────────────────────────────────────
 export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, onComplete, onError, onClose }) {
   const sp = context?.provider_id === 'salesplay'
@@ -221,6 +197,11 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
 
     localStorage.setItem('dm_embed_token', result.token)
     if (result.user?.email) localStorage.setItem('dm_sp_email', result.user.email)
+
+    // Carried through to onComplete so EmbedApp can force-show the plans
+    // screen once for brand-new users regardless of computed access (their
+    // trial is already silently active — this is informational/upsell).
+    result.user = { ...result.user, is_new_user: result.is_new_user }
 
     if (result.sync === 'started') {
       setPhase('sync')
@@ -302,7 +283,6 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
           <Logo />
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, fontWeight: 700, color: sp ? SP.heading : 'var(--text)', marginBottom: 4 }}>
             {productTitle}
-            <BetaBadge sp={sp} />
           </div>
         </>
       )}
@@ -310,7 +290,6 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
       {/* ── CONSENT ────────────────────────────────────────────────────────── */}
       {phase === 'consent' && (sp ? (
         <div style={{ width: '100%' }}>
-          <BetaBadge sp={sp} large />
           <h2 style={{
             fontFamily: "'Manrope', 'Plus Jakarta Sans', sans-serif",
             fontSize: 26, lineHeight: '34px', letterSpacing: '-0.02em', fontWeight: 800,
@@ -408,7 +387,7 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
           */}
 
           <button onClick={handleAccept} disabled={loading} style={primaryBtn(loading, sp)}>
-            {loading ? <><Spin sp={sp} /> Setting up…</> : 'Try SalesPlay AI Beta'}
+            {loading ? <><Spin sp={sp} /> Setting up…</> : 'Try SalesPlay AI'}
           </button>
 
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 14 }}>
@@ -471,7 +450,7 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
           )}
 
           <button onClick={handleAccept} disabled={loading} style={primaryBtn(loading, sp)}>
-            {loading ? <><Spin sp={sp} /> Setting up…</> : 'Try SalesPlay AI Beta with Starter'}
+            {loading ? <><Spin sp={sp} /> Setting up…</> : 'Try SalesPlay AI with Starter'}
           </button>
 
           <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 10, lineHeight: 1.6 }}>
