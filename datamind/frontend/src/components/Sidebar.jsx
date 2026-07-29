@@ -284,7 +284,7 @@ function NavItem({ id, label, icon, active, setActive, badge }) {
   )
 }
 
-export default function Sidebar({ active, setActive, connection, cacheStatus, totalRows, theme, setTheme,
+export default function Sidebar({ active, setActive, connection, cacheStatus, theme, setTheme,
                                    conversations, activeConvId, onConvSelect, onConvCreate, onConvDelete }) {
   const cacheOk      = cacheStatus?.cached
   const cacheBuilding= cacheStatus?.build?.status === 'building'
@@ -325,9 +325,7 @@ export default function Sidebar({ active, setActive, connection, cacheStatus, to
                   ? '⚡ Building cache…'
                   : cacheOk
                     ? `⚡ ${cacheStatus.template_count} analytics ready`
-                    : totalRows > 0
-                      ? `${totalRows.toLocaleString()} records synced`
-                      : 'Connected'}
+                    : 'Connected'}
               </div>
             </div>
             <span style={{ fontSize:10, color:'var(--text3)' }}>›</span>

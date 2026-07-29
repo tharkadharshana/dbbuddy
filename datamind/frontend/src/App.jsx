@@ -13,7 +13,7 @@ import UsagePage         from './pages/UsagePage'
 import DocsPage          from './pages/DocsPage'
 import Sidebar           from './components/Sidebar'
 import UsageLimitBanner  from './components/UsageLimitBanner'
-import { fetchTables, fetchCacheStatus, fetchSettings, fetchConnectedProviders, fetchProviderStats, fetchSubscription, listConversations, ssoLogin } from './utils/api'
+import { fetchTables, fetchCacheStatus, fetchSettings, fetchConnectedProviders, fetchSubscription, listConversations, ssoLogin } from './utils/api'
 
 // URL <-> page/conversation sync so a refresh (or bookmark/back-forward) lands
 // back where the user was, instead of always resetting to a blank new chat.
@@ -40,7 +40,6 @@ export default function App() {
   const [connection, setConnection]   = useState(null) // active connection summary
   const [showOnboarding, setShowOnboarding] = useState(false)
   const [theme, setTheme]       = useState(() => localStorage.getItem('dm_theme') || 'light')
-  const [totalRows, setTotalRows] = useState(0)
   const [sub, setSub]             = useState(null)
   const [hasDB, setHasDB]         = useState(false)
   const [conversations, setConversations]   = useState([])
@@ -135,17 +134,14 @@ export default function App() {
 
   async function checkSetup({ suppressOnboarding = false } = {}) {
     try {
-      const [s, providers, stats] = await Promise.all([
+      const [s, providers] = await Promise.all([
         fetchSettings(),
         fetchConnectedProviders().catch(() => ({connections:[]})),
-        fetchProviderStats().catch(() => ({total_rows:0})),
       ])
       const hasDB       = s.db_configs?.length > 0
       setHasDB(hasDB)
       const hasKey      = !!s.has_llm_key
       const hasProvider = providers.connections?.length > 0
-
-      setTotalRows(stats.total_rows || 0)
 
       // Always update connection state — independent of whether a key is configured
       if (hasProvider) {
@@ -254,7 +250,6 @@ export default function App() {
         setActive={(p) => navigate(p, null)}
         connection={connection}
         cacheStatus={cacheStatus}
-        totalRows={totalRows}
         theme={theme}
         setTheme={setTheme}
         conversations={conversations}
