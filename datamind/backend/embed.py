@@ -22,12 +22,12 @@ from typing import Optional
 
 import mysql.connector
 import requests as _http
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Depends
 from pydantic import BaseModel, Field
 
 from logger import get_logger
-from auth import create_user, authenticate_user, create_token, update_user_settings
-from billing import start_trial
+from auth import create_user, authenticate_user, create_token, update_user_settings, current_user
+from billing import start_trial, subscribe_to_plan, cancel_subscription
 from integrations import connect_provider, connect_integration
 from pool import get_internal_conn as _get_conn
 
@@ -747,12 +747,16 @@ _SALESPLAY_SUBSCRIPTION_BASE = os.getenv("SALESPLAY_SUBSCRIPTION_BASE_URL", _SAL
 
 
 @router.get("/salesplay/subscription/info")
-def salesplay_subscription_info(request: Request, partner_key: str, aat: str):
+def salesplay_subscription_info(request: Request, partner_key: str, aat: str, user: dict = Depends(current_user)):
     """
     Proxy: GET {base}/subscriptions/get_ai_pos_info
-    Returns Salesplay's current AI POS subscription/trial/quota state
-    unchanged — the frontend decides access from it. Called on every widget
-    open (scenario: any user, paid/trial/unpaid, must be re-checked at start).
+    Returns Salesplay's raw state unchanged (frontend reads plans/card info
+    from it), but access itself is decided from DataMind's OWN billing
+    (trial days, tokens — see GET /billing/subscription) — Salesplay is the
+    payment gateway, not the source of truth for what the user can do here.
+    The one thing we do sync down from Salesplay: is_expired=1 means their
+    subscription is no longer valid (failed renewal, refund, chargeback) —
+    cancel our internal one immediately regardless of our own period_end.
     """
     _salesplay_guard(partner_key, request)
     url = f"{_SALESPLAY_SUBSCRIPTION_BASE}/subscriptions/get_ai_pos_info"
@@ -767,7 +771,14 @@ def salesplay_subscription_info(request: Request, partner_key: str, aat: str):
         if resp.status_code == 401:
             raise HTTPException(status_code=401, detail="Salesplay session expired. Please refresh the page.")
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
+        sub = (data.get("data") or {}).get("subscription") or []
+        if sub and sub[0].get("is_expired") == 1:
+            try:
+                cancel_subscription(user["email"])
+            except Exception as e:
+                log.warning("Internal subscription sync-down failed (non-fatal)", email=user["email"], error=str(e))
+        return data
     except HTTPException:
         raise
     except Exception as e:
@@ -794,19 +805,29 @@ class SalesplaySubscriptionPaymentRequest(BaseModel):
     # subscribe" on every attempt.
     payment_action: str = ""
     auth_payment_intent_id: str = ""
+    # DataMind's own plan to activate the moment Salesplay confirms the charge
+    # (id from subscription_plans — 1/2/3 for Starter/Growth/Pro) and how many
+    # days that purchase covers (30 monthly, 365 yearly). We don't wait on
+    # Salesplay's activation_status to flip before granting access — that lag
+    # is unbounded (confirmed: still 0 after 2.5+ minutes on predev2). The
+    # money already moved the instant Salesplay returned "success", so we
+    # activate our own side immediately and independently.
+    internal_plan_id: int
+    internal_period_days: int
 
 
 @router.post("/salesplay/subscription/payment")
-def salesplay_subscription_payment(request: Request, req: SalesplaySubscriptionPaymentRequest):
+def salesplay_subscription_payment(request: Request, req: SalesplaySubscriptionPaymentRequest, user: dict = Depends(current_user)):
     """
     Proxy: POST {base}/subscriptions/payment
-    Forwards Salesplay's response unchanged — on success the frontend follows
-    up with GET .../subscription/info to confirm activation; on error
-    Salesplay's response carries a redirect link the frontend must send the
-    user to.
+    Forwards Salesplay's response unchanged — but on success ALSO activates
+    the matching DataMind plan immediately (subscribe_to_plan), synchronously,
+    in this same request. This is what actually grants chat access; Salesplay
+    is the payment gateway, not the access gate. On error, Salesplay's
+    response carries a redirect link the frontend must send the user to.
     """
     _salesplay_guard(req.partner_key, request)
-    body = req.dict(exclude={"partner_key", "aat"}, exclude_none=True)
+    body = req.dict(exclude={"partner_key", "aat", "internal_plan_id", "internal_period_days"}, exclude_none=True)
     url = f"{_SALESPLAY_SUBSCRIPTION_BASE}/subscriptions/payment"
     log.debug("Salesplay subscription API request", method="POST", url=url, body=body)
     try:
@@ -822,7 +843,18 @@ def salesplay_subscription_payment(request: Request, req: SalesplaySubscriptionP
         log.debug("Salesplay subscription API response", url=url, status=resp.status_code, raw_body=resp.text)
         if resp.status_code == 401:
             raise HTTPException(status_code=401, detail="Salesplay session expired. Please refresh the page.")
-        return resp.json()
+        result = resp.json()
+        if result.get("status") == "success":
+            try:
+                subscribe_to_plan(user["email"], req.internal_plan_id, period_days=req.internal_period_days)
+            except Exception as e:
+                # The charge already succeeded on Salesplay's side — a failure here
+                # is a real inconsistency (paid but not activated), not something to
+                # silently swallow. Log loudly; still return the payment success so
+                # the frontend doesn't tell the user their card was charged for nothing.
+                log.error("Internal plan activation failed after successful Salesplay charge",
+                          email=user["email"], plan_id=req.internal_plan_id, error=str(e))
+        return result
     except HTTPException:
         raise
     except Exception as e:
