@@ -497,7 +497,7 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'center', gap: 14, fontSize: 11, color: sp ? SP.text3 : 'var(--text3)', marginBottom: 16 }}>
-            {syncRows > 0 && <span>{syncRows.toLocaleString()} rows synced</span>}
+            {syncRows > 0 && <span>{syncRows.toLocaleString()} records synced</span>}
             {syncPct > 0  && <span>{syncPct}%</span>}
           </div>
 

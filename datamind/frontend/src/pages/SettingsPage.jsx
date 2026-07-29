@@ -488,7 +488,7 @@ export default function SettingsPage({ user, onLogout, onNavigate, sub }) {
         <Card style={{ padding: '18px 20px' }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10, marginBottom: 16 }}>
             {[
-              { icon: '🗄', label: 'Data volume',    desc: 'More rows = more Tokens' },
+              { icon: '🗄', label: 'Data volume',    desc: 'More records = more Tokens' },
               { icon: '⚙️', label: 'Operation type', desc: 'AI & ML ops cost more than SQL templates' },
               { icon: '📅', label: 'Data history',   desc: 'Plan determines how far back you can query' },
             ].map(({ icon, label, desc }) => (
@@ -643,7 +643,7 @@ export default function SettingsPage({ user, onLogout, onNavigate, sub }) {
         <Card style={{ padding: '16px 18px' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {[
-              { step: '1', label: 'You add a database connection', desc: 'We read your schema, table names, column types, foreign keys, and sample rows.' },
+              { step: '1', label: 'You add a database connection', desc: 'We read your schema, table names, column types, foreign keys, and sample records.' },
               { step: '2', label: 'AI generates custom SQL (one time)', desc: 'The LLM writes optimised SQL for every analytics template — tailored to your exact table and column names.' },
               { step: '3', label: 'SQL is saved to disk', desc: 'Stored in backend/data/cache/. Every user+DB pair has its own cache file.' },
               { step: '4', label: 'All future requests use the cache', desc: 'Zero LLM tokens. Analytics load by running pre-generated SQL directly on your database.' },

@@ -250,7 +250,7 @@ function ResultPanel({ result, templateId }) {
 
       <Card style={{ overflow:'hidden' }}>
         <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'12px 16px', borderBottom:'1px solid var(--border)' }}>
-          <span style={{ fontSize:12, fontWeight:500, color:'var(--text2)' }}>Data · {tblCount} rows</span>
+          <span style={{ fontSize:12, fontWeight:500, color:'var(--text2)' }}>Data · {tblCount} records</span>
         </div>
         <DataTable columns={tblCols} data={tblData} maxHeight={320} />
       </Card>
