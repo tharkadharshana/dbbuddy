@@ -169,7 +169,7 @@ def enforce_tenant_isolation(sql: str, tenant_id: str) -> str:
     ctes = _cte_names(stmt)
 
     for select in stmt.find_all(exp.Select):
-        from_clause = select.args.get("from")
+        from_clause = select.find(exp.From)
         if from_clause is not None:
             table = from_clause.this
             if (isinstance(table, exp.Table) and _is_shared(table.name)
@@ -218,7 +218,7 @@ def enforce_date_filter(sql: str, history_months: int) -> str:
     months = int(history_months)
     for select in stmt.find_all(exp.Select):
         sources = []
-        from_clause = select.args.get("from")
+        from_clause = select.find(exp.From)
         if from_clause is not None:
             sources.append(from_clause.this)
         sources.extend(j.this for j in select.args.get("joins") or [])
