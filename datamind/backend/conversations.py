@@ -374,6 +374,64 @@ def get_history_for_prompt(conv_id: str) -> str:
         conn.close()
 
 
+def get_history_messages(conv_id: str) -> list:
+    """Prior turns as real chat messages: [{"role": "user"|"assistant",
+    "content": str}, ...], oldest first.
+
+    Same summary + window strategy as get_history_for_prompt, but the agent flow
+    needs actual message objects rather than a formatted "User: ... Assistant:
+    ..." blob — a model resolving its own follow-ups against real turns beats a
+    separate rewriter pass, which never saw the tool results and so could not
+    resolve "the second one" against a table it never read.
+
+    Deliberately omits sql_query and data_snapshot. _build_prompt injects
+    "[Previous SQL: ...]" and a column/sample dump, which puts raw table and
+    column names straight into the model's context — the direct cause of the 32
+    answers that leaked sp_* names in the July benchmark. A stored summary
+    becomes a leading system message instead of a User: line.
+    """
+    conn = _get_conn()
+    try:
+        cur = conn.cursor(dictionary=True)
+        cur.execute(
+            "SELECT summary_text, covers_up_to_id FROM conversation_summaries "
+            "WHERE conversation_id = %s ORDER BY covers_up_to_id DESC LIMIT 1",
+            (conv_id,),
+        )
+        summary_row = cur.fetchone()
+
+        if summary_row:
+            cur.execute(
+                "SELECT role, content FROM conversation_messages "
+                "WHERE conversation_id = %s AND id > %s "
+                "ORDER BY created_at ASC, id ASC LIMIT %s",
+                (conv_id, summary_row["covers_up_to_id"], _POST_SUMMARY_TAIL * 2),
+            )
+            rows = cur.fetchall()
+        else:
+            cur.execute(
+                "SELECT role, content FROM conversation_messages "
+                "WHERE conversation_id = %s ORDER BY created_at DESC, id DESC LIMIT %s",
+                (conv_id, _HISTORY_WINDOW),
+            )
+            rows = list(reversed(cur.fetchall()))
+    finally:
+        conn.close()
+
+    messages = []
+    if summary_row and summary_row["summary_text"]:
+        messages.append({
+            "role": "system",
+            "content": f"Earlier in this conversation: {summary_row['summary_text']}",
+        })
+    for row in rows:
+        role = row.get("role")
+        content = (row.get("content") or "").strip()
+        if role in ("user", "assistant") and content:
+            messages.append({"role": role, "content": content})
+    return messages
+
+
 def _build_prompt(summary: Optional[str], messages: list) -> str:
     """
     Format history into a compact multi-turn block for the LLM system prompt.

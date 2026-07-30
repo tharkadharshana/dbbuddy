@@ -1,4 +1,5 @@
 import React from 'react'
+import ResultChart from './ResultChart'
 
 // Minimal, safe markdown renderer for the assistant's analyst answers.
 // Escape-first: all HTML is escaped BEFORE any transform, so the model's text
@@ -18,6 +19,23 @@ function inline(text) {
   return t
 }
 
+// A ```chart fence lets the model put a picture inside its own answer, the same
+// way it puts a markdown table there — it decides when a visual helps instead of
+// us rendering one on every response that happened to return rows. Payload:
+//   { "kind": "line"|"bar"|"pie", "title": "...", "rows": [{...}, ...] }
+// Malformed JSON renders as nothing rather than breaking the answer around it.
+const _isChartFence = line => /^\s*```chart\s*$/i.test(line)
+const _isFenceEnd   = line => /^\s*```\s*$/.test(line)
+
+function _parseChart(body) {
+  try {
+    const spec = JSON.parse(body)
+    const rows = spec?.rows
+    if (!Array.isArray(rows) || rows.length < 2) return null
+    return { kind: spec.kind, title: spec.title, rows, columns: Object.keys(rows[0]) }
+  } catch { return null }
+}
+
 const _isTableRow = line => /^\s*\|.*\|\s*$/.test(line)
 const _isTableSep  = line => /^\s*\|?(\s*:?-+:?\s*\|)+\s*:?-+:?\s*\|?\s*$/.test(line)
 const _splitRow = line => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim())
@@ -31,6 +49,17 @@ export default function Markdown({ text, style }) {
   const lines = String(text).split('\n')
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
+    // ```chart fence — the model's own inline visual
+    if (_isChartFence(line)) {
+      flush()
+      let j = i + 1
+      const body = []
+      while (j < lines.length && !_isFenceEnd(lines[j])) { body.push(lines[j]); j++ }
+      const chart = _parseChart(body.join('\n'))
+      if (chart) blocks.push({ type: 'chart', ...chart })
+      i = j
+      continue
+    }
     // GFM table: a "| a | b |" row immediately followed by a "|---|---|" row
     if (_isTableRow(line) && i + 1 < lines.length && _isTableSep(lines[i + 1])) {
       flush()
@@ -64,6 +93,13 @@ export default function Markdown({ text, style }) {
         if (b.type === 'p')
           return <p key={i} style={{ margin: '0 0 8px' }}
                     dangerouslySetInnerHTML={{ __html: inline(b.text) }} />
+        if (b.type === 'chart')
+          return (
+            <div key={i} style={{ margin: '4px 0 10px' }}>
+              {b.title && <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 2 }}>{b.title}</div>}
+              <ResultChart columns={b.columns} data={b.rows} kind={b.kind} />
+            </div>
+          )
         if (b.type === 'table')
           return (
             <div key={i} style={{ overflowX: 'auto', margin: '4px 0 10px' }}>

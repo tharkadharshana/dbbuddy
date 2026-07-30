@@ -38,7 +38,10 @@ _CALL_GAP = float(os.getenv("REPORT_CACHE_MIN_CALL_INTERVAL", "1.0"))
 # report_tools happily accepted a month-40 query, the cache had nothing, and
 # every single ask for that month fell through to a live fetch, forever. Depth
 # belongs to plan_history_limits, not to a constant in this file.
-_BACKFILL_MONTHS_CAP = int(os.getenv("REPORT_CACHE_BACKFILL_MONTHS_CAP", "0")) or None
+# `or "0"` handles the var being present-but-empty (REPORT_CACHE_BACKFILL_MONTHS_CAP=
+# in .env), which os.getenv returns as "" rather than the default — int("") raises
+# and would crash the process at import.
+_BACKFILL_MONTHS_CAP = int(os.getenv("REPORT_CACHE_BACKFILL_MONTHS_CAP", "").strip() or "0") or None
 # Trailing closed months re-fetched on EVERY backfill run to catch late
 # refunds/voids that mutate an already-closed month (C4 re-finalization).
 _REFINALIZE_MONTHS = int(os.getenv("REPORT_CACHE_REFINALIZE_MONTHS", "2"))

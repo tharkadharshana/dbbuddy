@@ -197,8 +197,13 @@ function Message({ msg, theme, onVote }) {
           </div>
         ) : (
           <>
-            {/* Think Mode analysis — shown above the data */}
-            {msg.analysis && (
+            {/* agent_answer: `analysis` IS the answer — plain prose, no card.
+                Legacy Think Mode commentary keeps its own labelled card. */}
+            {msg.analysis && (msg.data?.agent_answer ? (
+              <div style={{ fontSize:13, lineHeight:1.65, color:'var(--text)' }}>
+                <Markdown text={msg.analysis} />
+              </div>
+            ) : (
               <div style={{
                 marginBottom:10, padding:'10px 12px', borderRadius:8, fontSize:13,
                 lineHeight:1.65, color:'var(--text)',
@@ -210,7 +215,7 @@ function Message({ msg, theme, onVote }) {
                 </div>
                 <Markdown text={msg.analysis} />
               </div>
-            )}
+            ))}
 
             {/* Advisory (prose-only) answers set show_data=false — hide the
                 "Found N results" summary and the unrelated chart/table. */}
