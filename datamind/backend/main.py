@@ -1554,6 +1554,61 @@ def _derive_period(question: str, history: dict):
     return period_label, plan_tier, over_range
 
 
+# Named calendar periods the LLM must not be left to reinterpret on its own —
+# "this month"/"last week"/etc. were previously left entirely to per-request
+# SQL generation, so the SAME question could silently scope a different date
+# range on every call. Longest phrases first so "this quarter" doesn't get
+# shadowed by a hypothetical shorter overlapping match.
+_RELATIVE_PERIOD_RE = re.compile(
+    r'\b(this quarter|last quarter|this month|last month|this week|last week|'
+    r'this year|last year|today|yesterday)\b', re.IGNORECASE)
+
+
+def _resolve_relative_period(question: str, today):
+    """Resolve a recognised relative-date phrase in `question` to an explicit
+    (start, end, label) tuple, or None if no such phrase is present. `today`
+    is a date already adjusted to the shop's timezone. Having ONE canonical
+    resolution point means the SQL date filter and the narrative's stated
+    period can never disagree with each other."""
+    from datetime import date, timedelta
+
+    m = _RELATIVE_PERIOD_RE.search(question)
+    if not m:
+        return None
+    phrase = m.group(1).lower()
+
+    if phrase == "today":
+        start = end = today
+    elif phrase == "yesterday":
+        start = end = today - timedelta(days=1)
+    elif phrase == "this week":
+        start, end = today - timedelta(days=today.weekday()), today
+    elif phrase == "last week":
+        this_monday = today - timedelta(days=today.weekday())
+        start, end = this_monday - timedelta(days=7), this_monday - timedelta(days=1)
+    elif phrase == "this month":
+        start, end = today.replace(day=1), today
+    elif phrase == "last month":
+        first_this_month = today.replace(day=1)
+        end = first_this_month - timedelta(days=1)
+        start = end.replace(day=1)
+    elif phrase == "this year":
+        start, end = date(today.year, 1, 1), today
+    elif phrase == "last year":
+        start, end = date(today.year - 1, 1, 1), date(today.year - 1, 12, 31)
+    elif phrase == "this quarter":
+        q_start_month = (today.month - 1) // 3 * 3 + 1
+        start, end = date(today.year, q_start_month, 1), today
+    else:  # last quarter
+        q_start_month = (today.month - 1) // 3 * 3 + 1
+        this_q_start = date(today.year, q_start_month, 1)
+        end = this_q_start - timedelta(days=1)
+        start = date(end.year, (end.month - 1) // 3 * 3 + 1, 1)
+
+    label = f"{phrase} ({start:%b %d} – {end:%b %d, %Y})"
+    return start, end, label
+
+
 _EMPTY_PERIOD_PHRASES = (
     "today", "yesterday", "this week", "last week", "this month", "last month",
     "this year", "last year", "this quarter", "last quarter", "so far this year",
@@ -1872,6 +1927,10 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
             f" Today's date is {_today:%A, %B %d, %Y} in the shop's timezone ({_ctx_tz}). "
             "If the user asks the current date or time, answer it directly — never refuse."
         )
+        # Resolve "this month"/"last week"/etc. to explicit dates ONCE here, so
+        # the SQL date filter and the narrative's stated period always agree —
+        # previously each was computed independently and could disagree.
+        _relative_period = _resolve_relative_period(nl_question, _today.date())
         classification = classify_question(
             nl_question, table_names_str, llm, api_key, user["email"],
             app_name=_APP_NAME, conversation_history=conv_history,
@@ -1920,6 +1979,13 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
             )
         profile_hint = " ".join(_profile_parts)
         extra_hints = " ".join(loyverse_hints + [profile_hint]) if loyverse_hints else profile_hint
+        if _relative_period:
+            _rp_start, _rp_end, _rp_label = _relative_period
+            extra_hints += (
+                f" The question refers to '{_rp_label}'. Use exactly this range, no other "
+                f"interpretation: WHERE <date_col> >= '{_rp_start.isoformat()}' AND <date_col> <= "
+                f"'{_rp_end.isoformat()} 23:59:59' on the most relevant date column."
+            )
         if nl_tenant_id:
             # SalesPlay: tell LLM to always include sku in product queries so the
             # frontend can use it as a short label in charts instead of long product names
