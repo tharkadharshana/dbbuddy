@@ -81,6 +81,15 @@ input, textarea { font-family: var(--font); }
   animation: dmVotePop .3s ease;
 }
 
+/* ── Header icon buttons (minimize / open app / history) ────────────────────── */
+.dm-header-icon-btn {
+  border-radius: 8px;
+  transition: background-color .12s ease;
+}
+.dm-header-icon-btn:hover {
+  background: rgba(15,23,42,0.08);
+}
+
 /* ── Collapsed bar → full chat entrance (?layout=bar) ───────────────────────── */
 /* The iframe snaps to its full size instantly; the panel itself grows from
    height:0 up to full height, anchored to the bottom edge so it visually
