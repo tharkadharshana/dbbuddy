@@ -450,26 +450,27 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, on
 
       {/* Header */}
       {isSalesplay ? (
-        <div style={{ padding: isNarrow ? '10px 12px 10px' : '14px 16px 12px', borderBottom:'1px solid rgba(15,23,42,0.05)', flexShrink:0 }}>
+        <div style={{ padding: isNarrow ? '10px 12px 10px' : '14px 16px 12px', flexShrink:0 }}>
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap: isNarrow ? 6 : 8 }}>
             <div style={{ display:'flex', alignItems:'center', gap: isNarrow ? 6 : 8, minWidth:0 }}>
               <Logo size={50} radius={9} style={{ flexShrink:0 }} />
               <span style={{ fontSize: isNarrow ? 15 : 18, fontWeight:800, color:'#191C1E', letterSpacing:'-0.02em', fontFamily:"'Manrope', 'Plus Jakarta Sans', sans-serif", overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{/* {productTitle} */}Ask AI</span>
             </div>
-            <div style={{ display:'flex', alignItems:'center', gap: isNarrow ? 6 : 8, flexShrink:0 }}>
+            <div style={{ display:'flex', alignItems:'center', gap: isNarrow ? 4 : 6, flexShrink:0 }}>
               {/* Minimize back to the collapsed search bar (?layout=bar only) */}
               {onCollapse && (
                 <button
                   onClick={onCollapse}
                   title="Minimize"
+                  className="dm-header-icon-btn"
                   style={{
-                    width:34, height:34, borderRadius:'50%',
-                    background:'#fff', border:'1.5px solid #191C1E', cursor:'pointer',
+                    width:28, height:28,
+                    background:'none', border:'none', cursor:'pointer',
                     display:'flex', alignItems:'center', justifyContent:'center',
                     color:'#191C1E', flexShrink:0,
                   }}
                 >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M6 9l6 6 6-6" />
                   </svg>
                 </button>
@@ -477,24 +478,29 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, on
               {/* Open in main DataMind app — leaves the partner iframe in a new tab */}
               <button
                 onClick={openMainApp}
-                title={`Open ${productTitle} in a new tab`}
+                title="Open SalesPlayAI"
+                className="dm-header-icon-btn"
                 style={{
-                  background:'#fff', border:'1.5px solid #191C1E',
-                  borderRadius:9999, cursor:'pointer',
-                  padding: isNarrow ? '7px 10px' : '7px 14px',
-                  display:'flex', alignItems:'center', gap:5,
-                  fontSize:12, fontWeight:700, color:'#191C1E', whiteSpace:'nowrap',
+                  width:28, height:28,
+                  background:'none', border:'none', cursor:'pointer',
+                  display:'flex', alignItems:'center', justifyContent:'center',
+                  color:'#191C1E', flexShrink:0,
                 }}
               >
-                {isNarrow ? <span style={{ fontSize:13 }}>↗</span> : <>Open App <span style={{ fontSize:13 }}>↗</span></>}
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                  <path d="M15 3h6v6" />
+                  <path d="M10 14 21 3" />
+                </svg>
               </button>
               {/* Chat history toggle */}
               <button
                 onClick={() => setHistoryOpen(true)}
                 title="Chat history"
+                className="dm-header-icon-btn"
                 style={{
-                  width:34, height:34, borderRadius:'50%',
-                  background:'#fff', border:'1.5px solid #191C1E', cursor:'pointer',
+                  width:28, height:28,
+                  background:'none', border:'none', cursor:'pointer',
                   display:'flex', alignItems:'center', justifyContent:'center',
                   color:'#191C1E', flexShrink:0,
                 }}
@@ -723,7 +729,6 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, on
             display:'flex', alignItems:'center', gap:10,
             background:'#FFFFFF', borderRadius:9999,
             padding:'8px 8px 8px 14px',
-            boxShadow: '0 10px 40px rgba(0,0,0,0.12)',
             border: `1.5px solid ${inputFocused ? accent : 'transparent'}`,
             transition:'border-color .15s',
           }}>
