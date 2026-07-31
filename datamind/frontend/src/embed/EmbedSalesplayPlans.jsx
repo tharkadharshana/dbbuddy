@@ -66,6 +66,8 @@ const TIER_FEATURES = {
   ],
 }
 
+const SUPPORT_EMAIL = 'support@datamind.ai'
+
 const REASON_COPY = {
   trial_expired:  (days) => `Your ${days}-day free trial has ended.`,
   quota_exceeded: () => "You've used up your plan's quota.",
@@ -99,17 +101,26 @@ function yearlySavingsPct(tier) {
 const CARD_POLL_INTERVAL_MS = Number(import.meta.env.VITE_SALESPLAY_CARD_POLL_INTERVAL_MS) || 3000
 const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 
-// ponytail: tier index → DataMind subscription_plans.id. Matches the current
-// DB seed (Starter=1, Growth=2, Pro=3, sort_order 1/2/3 — same order as
-// ascending price, same order Salesplay's tiers are grouped in above).
+// ponytail: tier index → DataMind subscription_plans.id/name. Matches the
+// current DB seed (Starter=1, Growth=2, Pro=3, sort_order 1/2/3 — same order
+// as ascending price, same order Salesplay's tiers are grouped in above).
 // Revisit if subscription_plans is ever reseeded with different ids/order.
 const TIER_TO_INTERNAL_PLAN_ID = [1, 2, 3]
+const TIER_TO_PLAN_NAME = ['Starter', 'Growth', 'Pro']
+
+// Salesplay's own product_name ("Access To Unlimited AI POS Data Module
+// Monthly/Yearly") is their internal SKU label, not a name a merchant should
+// see here — show our own plan name instead.
+function displayPlanName(tierIndex, billingType) {
+  const name = TIER_TO_PLAN_NAME[tierIndex] || 'Plan'
+  return `${name} — ${billingType === 'YEARLY' ? 'Yearly' : 'Monthly'}`
+}
 
 function Spin({ color = '#fff' }) {
   return <div style={{ width:13, height:13, border:`2px solid ${color === '#fff' ? 'rgba(255,255,255,0.3)' : 'rgba(0,88,190,0.25)'}`, borderTopColor:color, borderRadius:'50%', animation:'spin 0.7s linear infinite' }} />
 }
 
-export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, trialAvailable, blockReason, trialDays = 14, billingDetailsAdded, cardAddUrl, cardLabel, onTrialSelected, onSubscribed, onRefreshAccess, onClose }) {
+export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, trialAvailable, blockReason, isPaidQuotaBlocked, trialDays = 14, billingDetailsAdded, cardAddUrl, cardLabel, onTrialSelected, onSubscribed, onRefreshAccess, onClose }) {
   const [selectedPlan, setSelectedPlan] = useState(null) // { ...plan, _tierIndex } under review on the receipt screen
   const [checking, setChecking] = useState(false) // re-checking access after returning from card_add_url (manual "Continue")
   const [awaitingCard, setAwaitingCard] = useState(false) // polling for a card add — grays out the screen
@@ -260,7 +271,35 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
         }}>✕</button>
       )}
 
-      {selectedPlan ? (
+      {isPaidQuotaBlocked && !selectedPlan ? (
+        // ── Paid plan, quota used up ─────────────────────────────────────
+        // Salesplay's subscription is already active this cycle — nothing to
+        // buy here. Extra usage is an addon, not sold through this screen.
+        <div style={{ textAlign: 'center', paddingTop: 24 }}>
+          <BrandLogo size={40} radius={11} shadow="0 4px 16px rgba(0,88,190,0.3)" style={{ marginBottom: 10 }} />
+          <h2 style={{
+            fontFamily: "'Manrope', 'Plus Jakarta Sans', sans-serif",
+            fontSize: 22, lineHeight: '30px', letterSpacing: '-0.02em', fontWeight: 800,
+            color: SP.heading, margin: '0 0 10px',
+          }}>
+            You've used up your plan's usage
+          </h2>
+          <p style={{ fontSize: 13, lineHeight: '20px', color: SP.text, margin: '0 auto 20px', maxWidth: 280 }}>
+            Your subscription is still active, so there's no plan to re-subscribe to.
+            To get more usage added to your current plan, contact support.
+          </p>
+          <a
+            href={`mailto:${SUPPORT_EMAIL}`}
+            style={{
+              display: 'inline-block', padding: '12px 22px', borderRadius: 9999,
+              fontSize: 13, fontWeight: 700, background: SP.blue, color: '#fff',
+              textDecoration: 'none', boxShadow: '0 4px 12px rgba(0,88,190,0.35)',
+            }}
+          >
+            Contact support → {SUPPORT_EMAIL}
+          </a>
+        </div>
+      ) : selectedPlan ? (
         // ── Receipt / confirm screen ──────────────────────────────────────
         <div style={{ opacity: grayedOut ? 0.4 : 1, pointerEvents: grayedOut ? 'none' : 'auto' }}>
           <div style={{ textAlign: 'center', marginBottom: 18 }}>
@@ -276,7 +315,7 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
 
           <div style={{ background: SP.card, borderRadius: 14, boxShadow: SP.shadow, padding: 16, marginBottom: 16 }}>
             {[
-              ['Plan', selectedPlan.product_name || selectedPlan.subscription_name],
+              ['Plan', displayPlanName(selectedPlan._tierIndex, selectedPlan.billing_type)],
               ['Billing', selectedPlan.billing_type === 'YEARLY' ? 'Yearly' : 'Monthly'],
               ['Card', cardLabel || 'On file'],
               ['Total', `$${Number(selectedPlan.product_price).toFixed(0)} / ${selectedPlan.billing_type === 'YEARLY' ? 'yr' : 'mo'}`],
@@ -423,7 +462,7 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
 
                   <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginTop: isLowest ? 6 : 0 }}>
                     <span style={{ fontSize: 15, fontWeight: 700, color: SP.heading }}>
-                      {plan.product_name || plan.subscription_name}
+                      {displayPlanName(i, plan.billing_type)}
                     </span>
                     <span style={{ fontSize: 18, fontWeight: 800, color: SP.heading }}>
                       ${Number(plan.product_price).toFixed(0)}
