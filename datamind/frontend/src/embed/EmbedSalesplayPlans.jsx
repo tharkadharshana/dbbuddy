@@ -99,11 +99,20 @@ function yearlySavingsPct(tier) {
 const CARD_POLL_INTERVAL_MS = Number(import.meta.env.VITE_SALESPLAY_CARD_POLL_INTERVAL_MS) || 3000
 const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 
-// ponytail: tier index → DataMind subscription_plans.id. Matches the current
-// DB seed (Starter=1, Growth=2, Pro=3, sort_order 1/2/3 — same order as
-// ascending price, same order Salesplay's tiers are grouped in above).
+// ponytail: tier index → DataMind subscription_plans.id/name. Matches the
+// current DB seed (Starter=1, Growth=2, Pro=3, sort_order 1/2/3 — same order
+// as ascending price, same order Salesplay's tiers are grouped in above).
 // Revisit if subscription_plans is ever reseeded with different ids/order.
 const TIER_TO_INTERNAL_PLAN_ID = [1, 2, 3]
+const TIER_TO_PLAN_NAME = ['Starter', 'Growth', 'Pro']
+
+// Salesplay's own product_name ("Access To Unlimited AI POS Data Module
+// Monthly/Yearly") is their internal SKU label, not a name a merchant should
+// see here — show our own plan name instead.
+function displayPlanName(tierIndex, billingType) {
+  const name = TIER_TO_PLAN_NAME[tierIndex] || 'Plan'
+  return `${name} — ${billingType === 'YEARLY' ? 'Yearly' : 'Monthly'}`
+}
 
 function Spin({ color = '#fff' }) {
   return <div style={{ width:13, height:13, border:`2px solid ${color === '#fff' ? 'rgba(255,255,255,0.3)' : 'rgba(0,88,190,0.25)'}`, borderTopColor:color, borderRadius:'50%', animation:'spin 0.7s linear infinite' }} />
@@ -276,7 +285,7 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
 
           <div style={{ background: SP.card, borderRadius: 14, boxShadow: SP.shadow, padding: 16, marginBottom: 16 }}>
             {[
-              ['Plan', selectedPlan.product_name || selectedPlan.subscription_name],
+              ['Plan', displayPlanName(selectedPlan._tierIndex, selectedPlan.billing_type)],
               ['Billing', selectedPlan.billing_type === 'YEARLY' ? 'Yearly' : 'Monthly'],
               ['Card', cardLabel || 'On file'],
               ['Total', `$${Number(selectedPlan.product_price).toFixed(0)} / ${selectedPlan.billing_type === 'YEARLY' ? 'yr' : 'mo'}`],
@@ -423,7 +432,7 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
 
                   <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginTop: isLowest ? 6 : 0 }}>
                     <span style={{ fontSize: 15, fontWeight: 700, color: SP.heading }}>
-                      {plan.product_name || plan.subscription_name}
+                      {displayPlanName(i, plan.billing_type)}
                     </span>
                     <span style={{ fontSize: 18, fontWeight: 800, color: SP.heading }}>
                       ${Number(plan.product_price).toFixed(0)}
