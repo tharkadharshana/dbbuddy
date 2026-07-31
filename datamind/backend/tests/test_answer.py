@@ -168,7 +168,10 @@ def test_partial_range_uses_cache_for_daily_grain(monkeypatch):
 
 
 def test_live_only_report_never_cached(monkeypatch):
-    assert _decision("stock_summary", LAST_CLOSED_START, LAST_CLOSED_END,
+    # 'stock-history' is a real endpoint; the previous id here ('stock_summary')
+    # was never served by the API at all. Point-in-time stock reports stay
+    # cacheable=False — a "June summary" of a stock level is meaningless.
+    assert _decision("stock-history", LAST_CLOSED_START, LAST_CLOSED_END,
                      monkeypatch=monkeypatch) is False
 
 
