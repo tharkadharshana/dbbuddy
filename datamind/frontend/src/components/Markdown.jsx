@@ -71,12 +71,26 @@ export default function Markdown({ text, style }) {
       i = j - 1
       continue
     }
+    // #, ##, ### headings — the answer prompt encourages markdown, and models
+    // routinely emit these (e.g. "### Insights:"). Previously unhandled, so
+    // the raw "### " landed in a <p> as literal text.
+    const heading = line.match(/^\s*(#{1,6})\s+(.*)$/)
     const bullet   = line.match(/^\s*[-*•]\s+(.*)$/)
     const numbered = line.match(/^\s*\d+[.)]\s+(.*)$/)
-    if (bullet) {
+    if (heading) {
+      flush(); blocks.push({ type: 'h', level: heading[1].length, text: heading[2] })
+    } else if (bullet) {
       if (!list || list.type !== 'ul') { flush(); list = { type: 'ul', items: [] } }
       list.items.push(bullet[1])
     } else if (numbered) {
+      // Renumber ourselves rather than relying on <ol>'s auto-numbering: a
+      // model that writes "1." for every item (common — it isn't tracking a
+      // running count) would otherwise render every line as "1." since we
+      // pass the model's own list-item text straight through and <ol> only
+      // auto-numbers when EVERY <li> comes from one contiguous list in DOM
+      // order, which breaks the moment a non-list line (e.g. a blank line
+      // the model left between "steps") splits it into two adjacent <ol>s
+      // that both restart at 1.
       if (!list || list.type !== 'ol') { flush(); list = { type: 'ol', items: [] } }
       list.items.push(numbered[1])
     } else if (line.trim() === '') {
@@ -93,6 +107,12 @@ export default function Markdown({ text, style }) {
         if (b.type === 'p')
           return <p key={i} style={{ margin: '0 0 8px' }}
                     dangerouslySetInnerHTML={{ __html: inline(b.text) }} />
+        if (b.type === 'h') {
+          const Tag = `h${Math.min(b.level + 2, 6)}`   // model's # -> our h3, so it never outsizes the answer bubble
+          const size = { 3: 16, 4: 15, 5: 14, 6: 14 }[Math.min(b.level + 2, 6)]
+          return <Tag key={i} style={{ margin: '10px 0 6px', fontSize: size, fontWeight: 600, color: 'var(--text)' }}
+                      dangerouslySetInnerHTML={{ __html: inline(b.text) }} />
+        }
         if (b.type === 'chart')
           return (
             <div key={i} style={{ margin: '4px 0 10px' }}>
@@ -125,11 +145,28 @@ export default function Markdown({ text, style }) {
               </table>
             </div>
           )
-        const items = b.items.map((it, j) =>
-          <li key={j} dangerouslySetInnerHTML={{ __html: inline(it) }} />)
-        return b.type === 'ul'
-          ? <ul key={i} style={{ margin: '4px 0 8px', paddingLeft: 20 }}>{items}</ul>
-          : <ol key={i} style={{ margin: '4px 0 8px', paddingLeft: 20 }}>{items}</ol>
+        if (b.type === 'ul') {
+          const items = b.items.map((it, j) =>
+            <li key={j} dangerouslySetInnerHTML={{ __html: inline(it) }} />)
+          return <ul key={i} style={{ margin: '4px 0 8px', paddingLeft: 20 }}>{items}</ul>
+        }
+        // Ordered list: number ourselves rather than relying on <ol>'s native
+        // auto-numbering. Models frequently write "1." for every item (they
+        // aren't tracking a running count, especially mid-stream) — CSS
+        // counter-based auto-numbering follows the SOURCE markers in some
+        // renderers and would print "1. 1. 1." verbatim, which is exactly
+        // what was reported. Rendering an explicit "{j+1}." span makes the
+        // displayed number independent of whatever digit the model wrote.
+        return (
+          <ol key={i} style={{ margin: '4px 0 8px', paddingLeft: 0, listStyle: 'none' }}>
+            {b.items.map((it, j) => (
+              <li key={j} style={{ display: 'flex', gap: 6, margin: '2px 0' }}>
+                <span style={{ flexShrink: 0, color: 'var(--text3)' }}>{j + 1}.</span>
+                <span dangerouslySetInnerHTML={{ __html: inline(it) }} />
+              </li>
+            ))}
+          </ol>
+        )
       })}
     </div>
   )
