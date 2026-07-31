@@ -66,6 +66,8 @@ const TIER_FEATURES = {
   ],
 }
 
+const SUPPORT_EMAIL = 'support@datamind.ai'
+
 const REASON_COPY = {
   trial_expired:  (days) => `Your ${days}-day free trial has ended.`,
   quota_exceeded: () => "You've used up your plan's quota.",
@@ -118,7 +120,7 @@ function Spin({ color = '#fff' }) {
   return <div style={{ width:13, height:13, border:`2px solid ${color === '#fff' ? 'rgba(255,255,255,0.3)' : 'rgba(0,88,190,0.25)'}`, borderTopColor:color, borderRadius:'50%', animation:'spin 0.7s linear infinite' }} />
 }
 
-export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, trialAvailable, blockReason, trialDays = 14, billingDetailsAdded, cardAddUrl, cardLabel, onTrialSelected, onSubscribed, onRefreshAccess, onClose }) {
+export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, trialAvailable, blockReason, isPaidQuotaBlocked, trialDays = 14, billingDetailsAdded, cardAddUrl, cardLabel, onTrialSelected, onSubscribed, onRefreshAccess, onClose }) {
   const [selectedPlan, setSelectedPlan] = useState(null) // { ...plan, _tierIndex } under review on the receipt screen
   const [checking, setChecking] = useState(false) // re-checking access after returning from card_add_url (manual "Continue")
   const [awaitingCard, setAwaitingCard] = useState(false) // polling for a card add — grays out the screen
@@ -269,7 +271,35 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
         }}>✕</button>
       )}
 
-      {selectedPlan ? (
+      {isPaidQuotaBlocked && !selectedPlan ? (
+        // ── Paid plan, quota used up ─────────────────────────────────────
+        // Salesplay's subscription is already active this cycle — nothing to
+        // buy here. Extra usage is an addon, not sold through this screen.
+        <div style={{ textAlign: 'center', paddingTop: 24 }}>
+          <BrandLogo size={40} radius={11} shadow="0 4px 16px rgba(0,88,190,0.3)" style={{ marginBottom: 10 }} />
+          <h2 style={{
+            fontFamily: "'Manrope', 'Plus Jakarta Sans', sans-serif",
+            fontSize: 22, lineHeight: '30px', letterSpacing: '-0.02em', fontWeight: 800,
+            color: SP.heading, margin: '0 0 10px',
+          }}>
+            You've used up your plan's usage
+          </h2>
+          <p style={{ fontSize: 13, lineHeight: '20px', color: SP.text, margin: '0 auto 20px', maxWidth: 280 }}>
+            Your subscription is still active, so there's no plan to re-subscribe to.
+            To get more usage added to your current plan, contact support.
+          </p>
+          <a
+            href={`mailto:${SUPPORT_EMAIL}`}
+            style={{
+              display: 'inline-block', padding: '12px 22px', borderRadius: 9999,
+              fontSize: 13, fontWeight: 700, background: SP.blue, color: '#fff',
+              textDecoration: 'none', boxShadow: '0 4px 12px rgba(0,88,190,0.35)',
+            }}
+          >
+            Contact support → {SUPPORT_EMAIL}
+          </a>
+        </div>
+      ) : selectedPlan ? (
         // ── Receipt / confirm screen ──────────────────────────────────────
         <div style={{ opacity: grayedOut ? 0.4 : 1, pointerEvents: grayedOut ? 'none' : 'auto' }}>
           <div style={{ textAlign: 'center', marginBottom: 18 }}>

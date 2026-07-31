@@ -38,10 +38,20 @@ export function evaluateSalesplayAccess(salesplayInfo, internalSub) {
     blockReason = (isLive && !tokensOk) ? 'quota_exceeded' : 'trial_expired'
   }
 
+  // Paid plan, quota used up: Salesplay's own subscription is still active
+  // (already charged this cycle) — re-running /subscriptions/payment isn't a
+  // real option, there's nothing left to buy there. Only extra AI credits
+  // (an addon, not a new plan) fix this, and that's not sold through this
+  // screen — send the merchant to support instead of the plan picker.
+  // Trial users hitting quota are unaffected: they haven't paid yet, so
+  // subscribing to a paid plan is still the right, unblocked next step.
+  const isPaidQuotaBlocked = status === 'active' && !tokensOk
+
   return {
     hasAccess,
     trialAvailable,
     blockReason,
+    isPaidQuotaBlocked,
     plans,
     trialDays: 14, // subscription_plans.trial_days — same for all 3 plans
     billingDetailsAdded,
