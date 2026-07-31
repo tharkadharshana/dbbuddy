@@ -300,6 +300,21 @@ app.add_middleware(
 app.include_router(embed_router)   # /embed/* — kept unversioned (live in partner iframes)
 app.include_router(feedback_router)  # /embed/feedback — widget rating + comment
 app.include_router(partner_router)  # /v1/partner/* — Partner API
+
+# /qa/* — development-only billing/cache test harness. is_qa_enabled() checks
+# QA_ROUTES_ENABLED, refuses on any production signal (FORCE_HTTPS, prod-looking
+# DB host), and requires a non-empty QA_ROUTES_EMAILS allowlist. When any check
+# fails the router is never mounted, so the paths 404 exactly as if it did not
+# exist. Every request re-checks all three (see qa_routes.qa_user).
+try:
+    from qa_routes import is_qa_enabled as _qa_enabled, router as _qa_router
+    if _qa_enabled():
+        app.include_router(_qa_router)
+        log.warning("QA ROUTES MOUNTED at /qa — development only. "
+                    "These endpoints mutate billing state.")
+except Exception as _qa_err:
+    log.error("QA router failed to load (ignored)", error=str(_qa_err))
+
 # All user-facing routes are registered on this router and included under /v1
 v1 = APIRouter(prefix="/v1", tags=["v1"])
 

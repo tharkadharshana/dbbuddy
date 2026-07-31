@@ -14,6 +14,14 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: path => path.replace(/^\/api/, '')
       },
+      // QA dev routes are unversioned (/qa/*) — like /embed, must precede /api.
+      // Dev-server only; there is no production equivalent of this rule, and
+      // the backend refuses to mount /qa outside a dev box anyway.
+      '/api/qa': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        rewrite: path => path.replace(/^\/api/, '')
+      },
       // All other API calls go to the versioned backend (/v1/*)
       '/api': {
         target: 'http://localhost:8000',
