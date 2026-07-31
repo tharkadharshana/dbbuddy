@@ -19,10 +19,10 @@ export function evaluateSalesplayAccess(salesplayInfo, internalSub) {
   const sub   = salesplayInfo?.data?.subscription?.[0]
   const plans = sub?.pricing_plans || []
 
-  // billing_details_added is unreliable — confirmed on predev2 it stays false
-  // even after a card is successfully attached. payment_methods.payment_method_id
-  // is the field that actually reflects reality.
-  const billingDetailsAdded = !!salesplayInfo?.data?.billing_details_added || !!salesplayInfo?.data?.payment_methods?.payment_method_id
+  // billing_details_added was unreliable (confirmed on predev2: stayed false
+  // even after a card was successfully attached) — is_valid_card_added is
+  // Salesplay's authoritative replacement for this same check.
+  const billingDetailsAdded = !!salesplayInfo?.data?.is_valid_card_added
   const cardAddUrl = salesplayInfo?.data?.card_add_url || null
   const card = salesplayInfo?.data?.payment_methods
   const cardLabel = card?.payment_method_id ? `${(card.brand || 'card').toUpperCase()} ····${card.last4 || ''}` : null
