@@ -405,6 +405,7 @@ function EmbedApp() {
         plans={subAccess?.plans || []}
         trialAvailable={!!subAccess?.trialAvailable}
         blockReason={subAccess?.blockReason}
+        isPaidQuotaBlocked={!!subAccess?.isPaidQuotaBlocked}
         trialDays={subAccess?.trialDays || 14}
         billingDetailsAdded={!!subAccess?.billingDetailsAdded}
         cardAddUrl={subAccess?.cardAddUrl}
