@@ -11,6 +11,11 @@ import ConnectionsPage   from './pages/ConnectionsPage'
 import BillingPage       from './pages/BillingPage'
 import UsagePage         from './pages/UsagePage'
 import DocsPage          from './pages/DocsPage'
+// Dev-only QA dashboard. `import.meta.env.DEV` is a compile-time constant, so
+// Vite eliminates both the import and the route from any production build.
+const QAPage = import.meta.env.DEV
+  ? React.lazy(() => import('./pages/QAPage'))
+  : null
 import Sidebar           from './components/Sidebar'
 import UsageLimitBanner  from './components/UsageLimitBanner'
 import { fetchTables, fetchCacheStatus, fetchSettings, fetchConnectedProviders, fetchSubscription, listConversations, ssoLogin } from './utils/api'
@@ -20,7 +25,8 @@ import { fetchTables, fetchCacheStatus, fetchSettings, fetchConnectedProviders, 
 // Plain History API — no react-router — the rest of the app already navigates
 // via onNavigate(page) callbacks, not <Link>/useNavigate, so a full router
 // migration would be a much bigger diff for the same result.
-const KNOWN_PAGES = ['chat', 'discover', 'forecast', 'anomaly', 'reports', 'connections', 'settings', 'billing', 'docs']
+const KNOWN_PAGES = ['chat', 'discover', 'forecast', 'anomaly', 'reports', 'connections', 'settings', 'billing', 'docs',
+                     ...(import.meta.env.DEV ? ['qa'] : [])]
 
 function parseLocation() {
   const [first, second] = window.location.pathname.split('/').filter(Boolean)
@@ -241,6 +247,9 @@ export default function App() {
     settings:    <SettingsPage user={user} onLogout={handleLogout} onNavigate={navigate} sub={sub} />,
     billing:     <BillingPage onSubChange={loadSub} />,
     docs:        <DocsPage />,
+    ...(import.meta.env.DEV && QAPage
+      ? { qa: <React.Suspense fallback={<div style={{ padding: 24 }}>Loading QA…</div>}><QAPage /></React.Suspense> }
+      : {}),
   }[page] ?? <ChatPage llm={llm} setLlm={setLlm} connection={connection} />
 
   return (

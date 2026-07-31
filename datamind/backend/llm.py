@@ -1015,12 +1015,45 @@ def _internal_hits(text: str, slugs: tuple) -> list:
     return hits
 
 
+# Business labels for the internal names most likely to slip out. Substituting
+# beats deleting: dropping a whole sentence was survivable when the answer was a
+# regenerated table narrative, but in the agent flow the model's own text IS the
+# product, and cutting a sentence out of a good analytical answer mangles it.
+_BUSINESS_LABELS = {
+    "sp_receipt_line_items": "your sales lines",
+    "ly_receipt_line_items": "your sales lines",
+    "sp_payment_types": "your payment methods",
+    "sp_receipts": "your receipts",
+    "ly_receipts": "your receipts",
+    "sp_products": "your products",
+    "ly_products": "your products",
+    "sp_categories": "your categories",
+    "ly_categories": "your categories",
+    "sp_customers": "your customers",
+    "ly_customers": "your customers",
+    "sp_shops": "your shops",
+    "sales_by_products": "your product sales",
+    "sales_by_category": "your category sales",
+    "sales_summary": "your sales summary",
+    "credit_notes": "your credit notes",
+}
+# Longest first so sp_receipt_line_items is not eaten by sp_receipts.
+_LABEL_RE = re.compile(
+    r"\b(" + "|".join(sorted((re.escape(k) for k in _BUSINESS_LABELS),
+                             key=len, reverse=True)) + r")\b",
+    re.IGNORECASE)
+
+
 def sanitise_answer(text, fallback: str = ""):
     """Strip internal identifiers from a user-facing answer.
 
-    Returns (cleaned_text, found). Drops any sentence containing an internal
-    identifier; if that empties the answer entirely, returns `fallback` (intended
-    to be the capabilities message). Pure — no LLM call, no DB.
+    Returns (cleaned_text, found). Substitutes every known internal name with
+    its business label first, then drops any sentence still carrying one; if
+    that empties the answer entirely, returns `fallback` (intended to be the
+    capabilities message). Pure — no LLM call, no DB.
+
+    A hit means the PROMPT is leaking and the prompt is what should be fixed —
+    callers log every hit for exactly that reason.
     """
     if not text or not isinstance(text, str):
         return text, []
@@ -1028,6 +1061,9 @@ def sanitise_answer(text, fallback: str = ""):
     found = _internal_hits(text, slugs)
     if not found:
         return text, []
+    text = _LABEL_RE.sub(lambda m: _BUSINESS_LABELS[m.group(0).lower()], text)
+    if not _internal_hits(text, slugs):
+        return text, found            # substitution alone made it clean
     kept = [s for s in _SENTENCE_SPLIT_RE.split(text)
             if s.strip() and not _internal_hits(s, slugs)]
     cleaned = " ".join(p.strip() for p in kept).strip()

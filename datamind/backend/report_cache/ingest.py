@@ -33,10 +33,28 @@ log = get_logger(__name__)
 
 _MAX_PAGES = int(os.getenv("REPORT_API_MAX_PAGE_CAP", "50"))
 _CALL_GAP = float(os.getenv("REPORT_CACHE_MIN_CALL_INTERVAL", "1.0"))
-_BACKFILL_MONTHS_CAP = int(os.getenv("REPORT_CACHE_BACKFILL_MONTHS_CAP", "24"))
-# Trailing closed months re-fetched on each backfill run to catch late
+# Ops safety valve only — UNSET by default. It used to default to 24, which
+# silently truncated every paid plan: Pro's window is 200 months, so
+# report_tools happily accepted a month-40 query, the cache had nothing, and
+# every single ask for that month fell through to a live fetch, forever. Depth
+# belongs to plan_history_limits, not to a constant in this file.
+# `or "0"` handles the var being present-but-empty (REPORT_CACHE_BACKFILL_MONTHS_CAP=
+# in .env), which os.getenv returns as "" rather than the default — int("") raises
+# and would crash the process at import.
+_BACKFILL_MONTHS_CAP = int(os.getenv("REPORT_CACHE_BACKFILL_MONTHS_CAP", "").strip() or "0") or None
+# Trailing closed months re-fetched on EVERY backfill run to catch late
 # refunds/voids that mutate an already-closed month (C4 re-finalization).
 _REFINALIZE_MONTHS = int(os.getenv("REPORT_CACHE_REFINALIZE_MONTHS", "2"))
+
+# Deep re-finalization: any cached month whose figures are older than this is
+# re-fetched too, however far back it sits in the plan window.
+#
+# _REFINALIZE_MONTHS=2 alone means a refund posted in July against an APRIL
+# receipt is never picked up — April's cached total stays permanently too high
+# and permanently disagrees with what the merchant sees in SalesPlay. Deriving
+# staleness from report_sync_state.fetched_at needs no new state, self-heals,
+# and naturally spreads the work: a month re-fetched yesterday is skipped.
+_DEEP_REFINALIZE_DAYS = int(os.getenv("REPORT_CACHE_DEEP_REFINALIZE_DAYS", "7"))
 
 
 # ── periods ──────────────────────────────────────────────────────────────────
@@ -103,6 +121,26 @@ def is_month_cached(conn, tenant_id: str, report_id: str, ym: str,
     return cursor.fetchone() is not None
 
 
+def stale_months(conn, tenant_id: str, report_id: str, ym_list: list,
+                 max_age_days: int = None) -> set:
+    """Cached months whose figures were last fetched more than `max_age_days`
+    ago. These get force-refetched so refunds/voids posted against an
+    already-closed month eventually correct it."""
+    max_age_days = _DEEP_REFINALIZE_DAYS if max_age_days is None else max_age_days
+    if not ym_list or max_age_days <= 0:
+        return set()
+    starts = [month_start(ym) for ym in ym_list]
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT month FROM report_sync_state WHERE tenant_id=%s AND report_id=%s "
+        "AND shop_id='all' AND status='final' "
+        f"AND month IN ({','.join(['%s'] * len(starts))}) "
+        "AND fetched_at < DATE_SUB(NOW(), INTERVAL %s DAY)",
+        (tenant_id, report_id, *starts, max_age_days),
+    )
+    return {f"{r[0].year:04d}-{r[0].month:02d}" for r in cursor.fetchall()}
+
+
 def ingest_month(conn, tenant_id: str, report_id: str, ym: str, token: str,
                  number_format=None, force: bool = False) -> str:
     """Cache one closed month of one report. Returns 'cached'|'skipped'.
@@ -162,18 +200,51 @@ def ingest_month(conn, tenant_id: str, report_id: str, ym: str, token: str,
 
 # ── onboarding backfill (runs on a daemon thread, never a request thread) ────
 
+# In-flight dedupe keys. Deliberately FINE-GRAINED: a backfill holds
+# ("backfill", tenant) and a month-warm holds (tenant, report_id, ym).
+#
+# This used to be keyed on tenant_id alone, which meant that for the several
+# minutes an onboarding backfill was running (it sleeps _CALL_GAP between every
+# month × every core report), EVERY warm_months_async call from the answer path
+# returned False and was dropped — no log, no retry, never queued. Two reports
+# warming concurrently collided for the same reason. Combined with answer.py
+# answering live and relying on the warm to populate the cache for next time,
+# a month requested during a backfill could stay uncached indefinitely while
+# every ask for it went live — and went live-and-failed once the POS token
+# expired. Every drop is logged now.
 _inflight: set = set()
 _inflight_lock = threading.Lock()
+
+
+def _claim(keys: list) -> list:
+    """Atomically claim the keys not already in flight. Returns the claimed
+    subset; logs the rest as drops."""
+    with _inflight_lock:
+        claimed = [k for k in keys if k not in _inflight]
+        _inflight.update(claimed)
+    dropped = [k for k in keys if k not in claimed]
+    if dropped:
+        log.info("Report cache: skipped already-in-flight work", keys=str(dropped))
+    return claimed
+
+
+def _release(keys) -> None:
+    with _inflight_lock:
+        for k in keys:
+            _inflight.discard(k)
 
 
 def backfill(tenant_id: str, token: str, months: int) -> dict:
     """Cache the core reports for the tenant's plan window. Idempotent —
     cached months are skipped, so the widget-open trigger is cheap after the
     first run. Returns {cached, skipped, failed} counts."""
-    months = min(int(months or 3), _BACKFILL_MONTHS_CAP)
+    months = int(months)
+    if _BACKFILL_MONTHS_CAP:
+        months = min(months, _BACKFILL_MONTHS_CAP)
     stats = {"cached": 0, "skipped": 0, "failed": 0}
     # The most-recent closed months are re-fetched even if already final, to
     # catch late refunds/voids that mutate a closed month (C4 re-finalization).
+    window = closed_months(months)
     trailing = set(closed_months(min(_REFINALIZE_MONTHS, months)))
     conn = get_internal_conn()
     try:
@@ -182,11 +253,15 @@ def backfill(tenant_id: str, token: str, months: int) -> dict:
                        (tenant_id,))
         row = cursor.fetchone()
         nf = row["number_format"] if row else None
-        for ym in closed_months(months):
+        for ym in window:
             for report_id in CORE_REPORTS:
                 try:
+                    # Deep pass: anything cached longer ago than
+                    # _DEEP_REFINALIZE_DAYS is refreshed too, so a refund posted
+                    # against a months-old receipt eventually corrects it.
+                    stale = stale_months(conn, tenant_id, report_id, [ym])
                     result = ingest_month(conn, tenant_id, report_id, ym, token, nf,
-                                          force=(ym in trailing))
+                                          force=(ym in trailing or ym in stale))
                     stats[result] += 1
                     if result == "cached":
                         time.sleep(_CALL_GAP)
@@ -201,11 +276,11 @@ def backfill(tenant_id: str, token: str, months: int) -> dict:
 
 
 def start_backfill_async(tenant_id: str, token: str, months: int) -> bool:
-    """Kick backfill on a daemon thread; at most one per tenant per process."""
-    with _inflight_lock:
-        if tenant_id in _inflight:
-            return False
-        _inflight.add(tenant_id)
+    """Kick backfill on a daemon thread; at most one per tenant per process.
+    Does NOT block month-warms for this tenant (see _inflight)."""
+    key = ("backfill", tenant_id)
+    if not _claim([key]):
+        return False
 
     def _run():
         try:
@@ -213,8 +288,7 @@ def start_backfill_async(tenant_id: str, token: str, months: int) -> bool:
         except Exception as e:
             log.error("Backfill crashed", tenant=tenant_id, error=str(e))
         finally:
-            with _inflight_lock:
-                _inflight.discard(tenant_id)
+            _release([key])
 
     threading.Thread(target=_run, name=f"report-backfill-{tenant_id}", daemon=True).start()
     return True
@@ -225,14 +299,15 @@ def warm_months_async(tenant_id: str, report_id: str, ym_list: list, token: str,
     """Background-cache specific closed months for one report — used by the
     answer path when a cached range has gaps, so the chat request is answered
     LIVE now and the cache is populated for next time (never fetched inline).
-    Deduped per tenant per process; runs on a daemon thread."""
+    Deduped per (tenant, report, month) so a running backfill — or another
+    report warming at the same time — no longer swallows it."""
     ym_list = [ym for ym in (ym_list or [])]
     if not ym_list or not token:
         return False
-    with _inflight_lock:
-        if tenant_id in _inflight:
-            return False
-        _inflight.add(tenant_id)
+    keys = _claim([(tenant_id, report_id, ym) for ym in ym_list])
+    if not keys:
+        return False
+    months = [k[2] for k in keys]
 
     def _run():
         conn = get_internal_conn()
@@ -244,7 +319,7 @@ def warm_months_async(tenant_id: str, report_id: str, ym_list: list, token: str,
                             (tenant_id,))
                 r = cur.fetchone()
                 nf = r["number_format"] if r else None
-            for ym in ym_list:
+            for ym in months:
                 try:
                     ingest_month(conn, tenant_id, report_id, ym, token, nf)
                     time.sleep(_CALL_GAP)
@@ -255,8 +330,7 @@ def warm_months_async(tenant_id: str, report_id: str, ym_list: list, token: str,
             log.error("Month warm crashed", tenant=tenant_id, error=str(e))
         finally:
             conn.close()
-            with _inflight_lock:
-                _inflight.discard(tenant_id)
+            _release(keys)
 
     threading.Thread(target=_run, name=f"report-warm-{tenant_id}", daemon=True).start()
     return True

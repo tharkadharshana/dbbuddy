@@ -1,5 +1,5 @@
 import React from 'react'
-import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts'
+import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, PieChart, Pie, Cell } from 'recharts'
 
 // Shared result chart for the chat surfaces (main app + embed). One copy so the
 // two can't diverge again. Round 2 Issue A fixes:
@@ -12,7 +12,12 @@ const PER_CAT = 40                 // px of horizontal space per category
 const MAX_CATS = 366               // a year of daily points — effectively "all"
 const TT = { background: '#1c1e2e', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, fontSize: 12, color: '#f0f1fa' }
 
-export default function ResultChart({ columns, data, theme, height = 240 }) {
+// `kind` is optional: omitted (the auto-derived table chart) keeps the original
+// bar+line composed shape. The agent flow passes 'line' | 'bar' | 'pie' from its
+// ```chart block, so the model picks the form that fits what it's showing.
+const PIE_COLORS = ['#4f8cff', '#41c99e', '#f2a33c', '#e0607e', '#9a7cf5', '#4bc0d9']
+
+export default function ResultChart({ columns, data, theme, height = 240, kind }) {
   if (!data?.length || !columns?.length) return null
   const numCols = columns.filter(c => typeof data[0]?.[c] === 'number')
   const strCols = columns.filter(c => typeof data[0]?.[c] === 'string')
@@ -47,18 +52,34 @@ export default function ResultChart({ columns, data, theme, height = 240 }) {
     )
   }
 
-  return (
+  const wrap = inner => (
     <div style={{ marginTop: 10, background: 'var(--bg2)', borderRadius: 8, padding: 10, border: '1px solid var(--border)', overflowX: 'auto', overflowY: 'hidden' }}>
-      <ComposedChart width={chartWidth} height={height} data={chartData}
-                     margin={{ top: 10, right: 12, left: 0, bottom: 64 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
-        <XAxis dataKey="name" interval={0} angle={-45} textAnchor="end" height={70}
-               tick={{ fontSize: 10, fill: tickColor }} tickLine={false} axisLine={false} />
-        <YAxis tick={{ fontSize: 9, fill: tickColor }} axisLine={false} tickLine={false} />
-        <Tooltip content={<CustomTooltip />} />
-        <Bar dataKey={y1} fill="var(--blue)" radius={[3, 3, 0, 0]} barSize={barSize} />
-        {y2 && <Line dataKey={y2} stroke="var(--green)" strokeWidth={1.5} dot={false} />}
-      </ComposedChart>
+      {inner}
     </div>
+  )
+
+  if (kind === 'pie') return wrap(
+    <PieChart width={Math.max(320, height + 200)} height={height}>
+      <Pie data={chartData} dataKey={y1} nameKey="name" outerRadius={height / 2 - 20} label>
+        {chartData.map((_, k) => <Cell key={k} fill={PIE_COLORS[k % PIE_COLORS.length]} />)}
+      </Pie>
+      <Tooltip content={<CustomTooltip />} />
+    </PieChart>
+  )
+
+  return wrap(
+    <ComposedChart width={chartWidth} height={height} data={chartData}
+                   margin={{ top: 10, right: 12, left: 0, bottom: 64 }}>
+      <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
+      <XAxis dataKey="name" interval={0} angle={-45} textAnchor="end" height={70}
+             tick={{ fontSize: 10, fill: tickColor }} tickLine={false} axisLine={false} />
+      <YAxis tick={{ fontSize: 9, fill: tickColor }} axisLine={false} tickLine={false} />
+      <Tooltip content={<CustomTooltip />} />
+      {kind !== 'line' &&
+        <Bar dataKey={y1} fill="var(--blue)" radius={[3, 3, 0, 0]} barSize={barSize} />}
+      {kind === 'line' &&
+        <Line dataKey={y1} stroke="var(--blue)" strokeWidth={1.8} dot={false} />}
+      {y2 && <Line dataKey={y2} stroke="var(--green)" strokeWidth={1.5} dot={false} />}
+    </ComposedChart>
   )
 }

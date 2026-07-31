@@ -8,6 +8,7 @@ import os
 import time as _time
 import threading as _threading
 from typing import Optional, Dict, List, Tuple
+from calendar import monthrange as _monthrange
 from datetime import date, timedelta
 import mysql.connector
 from logger import get_logger
@@ -825,27 +826,59 @@ def check_plan_feature(user_email: str, feature: str) -> Tuple[bool, str]:
         return True, ""
 
 
+def window_start(months: int, today=None):
+    """First date covered by a `months`-long history window, counted in CALENDAR
+    months rather than 30-day blocks.
+
+    The single source of truth for "how far back can this user see". The old
+    `months * 30` approximation refused ~5 days of data a Growth merchant had
+    paid for ("same month last year" is 365 days back, not 360), and it drifted
+    from the SQL path, which uses MySQL's calendar-correct INTERVAL n MONTH —
+    so the same question got a different answer depending on which tool the
+    model happened to pick.
+    """
+    from datetime import date as _date
+    today = today or _date.today()
+    y, m = today.year, today.month - int(months)
+    while m <= 0:
+        y, m = y - 1, m + 12
+    return today.replace(year=y, month=m,
+                         day=min(today.day, _monthrange(y, m)[1]))
+
+
 def get_plan_history_limit(user_email: str) -> dict:
     """Return the data-history window for the user's current plan.
 
     Returns a dict with keys:
       months      — how far back to filter date columns
       row_limit   — max rows to return when no date column is available
-      cutoff_date — concrete date object (today minus months*30 days)
+      cutoff_date — concrete date object (today minus `months` calendar months)
     """
     # Re-use the cached subscription rather than a separate DB query.
     # get_user_subscription() is already called by check_ai_limit() on the same request,
     # so this hits the in-process cache (no DB round-trip).
-    from datetime import date, timedelta
     try:
         sub = get_user_subscription(user_email)
         plan_name = sub.get("plan_name") or "Starter"
     except Exception:
         plan_name = "Starter"
     plan_history = _load_billing_config()["plan_history"]
-    limits = plan_history.get(plan_name, plan_history.get("Starter", _PLAN_HISTORY["Starter"]))
-    cutoff = date.today() - timedelta(days=limits["months"] * 30)
-    return {**limits, "plan_name": plan_name, "cutoff_date": cutoff}
+    limits = plan_history.get(plan_name)
+    if limits is None:
+        # A plan name with no configured window is a config bug, not a reason to
+        # silently bill someone for Pro and serve them Starter's 3 months — the
+        # ONE fallback, and it is logged. Callers must not add their own `or 3`.
+        log.warning("No history limits configured for plan, falling back to Starter",
+                    email=user_email, plan_name=plan_name)
+        limits = plan_history.get("Starter", _PLAN_HISTORY["Starter"])
+    return {**limits, "plan_name": plan_name,
+            "cutoff_date": window_start(limits["months"])}
+
+
+def plan_window_start(user_email: str):
+    """First date this user's plan covers (calendar-correct). Thin alias over
+    get_plan_history_limit for callers that only need the boundary."""
+    return get_plan_history_limit(user_email)["cutoff_date"]
 
 
 def check_ai_limit(user_email: str) -> Tuple[bool, str]:

@@ -18,13 +18,14 @@ a `shop` it passes is resolved and authorized against the tenant's own shops.
 """
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 from typing import Any, List, Optional
 
 from fastmcp import FastMCP
 
 from llm import strip_internal_fields
 from logger import get_logger
+from report_cache.answer import NO_SESSION_MSG as _NO_SESSION_MSG
 from report_cache.answer import answer_metric_query
 from report_cache.client import ReportAPIClient
 from report_cache.registry import REPORTS
@@ -115,20 +116,37 @@ def _unknown_report_error(report_id: str) -> ValueError:
 
 
 def _window_start(history_months: int) -> date:
-    return date.today() - timedelta(days=(history_months or 3) * 30)
+    """First date the plan covers. Delegates to billing so the report path, the
+    SQL path and cutoff_date can never drift apart again (they previously used
+    three different computations, two of them `months * 30`)."""
+    from billing import window_start
+    return window_start(history_months)
 
 
 def _plan_limit_error(history_months: int) -> ValueError:
-    """The refusal the model relays when a question needs data older than the
-    plan window — always an upgrade prompt, never a technical limit message."""
-    months = history_months or 3
+    """Raised only when the ENTIRE requested range predates the plan window —
+    a partial overlap is clamped instead (see _clamp_to_window). Plain fact; the
+    model decides how to say it."""
     return ValueError(
-        f"The user's current subscription includes the last {months} months of "
-        f"data (from {_window_start(history_months).isoformat()}). Tell the user, "
-        f"in a friendly tone: their current plan covers the last {months} months "
-        "of insights, and to unlock insights beyond that they can upgrade to a "
-        "higher subscription plan. If part of the asked range IS within the "
-        f"{months}-month window, offer to answer for that part.")
+        f"This merchant's subscription covers data from "
+        f"{_window_start(history_months).isoformat()} onward ({history_months} "
+        "months). The requested range is entirely before that, so there are no "
+        "figures to return for it. A higher plan covers more history.")
+
+
+def _clamp_to_window(history_months: int, start: date, end: date):
+    """Apply the plan window by CLAMPING the range, not rejecting the call.
+
+    Previously any range whose start fell outside the window raised, so a
+    merchant on a 3-month plan asking about "April" when their window opened on
+    April 20 got "no data" — even though April 20–30 was fully covered. The
+    tool returned an error, so the model had no figures to offer and could only
+    apologise. Now it gets the covered portion plus the clamp facts and explains
+    the gap itself. Returns (effective_start, clamped)."""
+    ws = _window_start(history_months)
+    if end < ws:
+        raise _plan_limit_error(history_months)
+    return max(start, ws), start < ws
 
 
 def _set_last_result(rctx: ReportToolContext, label: str, rows: list, metrics: dict):
@@ -166,15 +184,21 @@ def build_report_mcp(rctx: ReportToolContext) -> FastMCP:
         came from the monthly cache or a live POS fetch."""
         if report_id not in REPORTS:
             raise _unknown_report_error(report_id)
-        start, end = date.fromisoformat(start_date), date.fromisoformat(end_date)
-        if start < _window_start(ctx.history_months):
-            raise _plan_limit_error(ctx.history_months)
+        requested, end = date.fromisoformat(start_date), date.fromisoformat(end_date)
+        start, clamped = _clamp_to_window(ctx.history_months, requested, end)
         result = answer_metric_query(
             ctx.conn, rctx.tenant_id, report_id, start, end,
             shop_id=_resolve_shop(rctx, shop), cashier=cashier,
             metrics=metrics, token=rctx.token,
             number_format=rctx.number_format, top_n=top_n)
-        _set_last_result(rctx, f"report:{report_id} {start_date}..{end_date}",
+        if clamped:
+            result["period"] = {
+                "requested_start": requested.isoformat(),
+                "effective_start": start.isoformat(),
+                "clamped": True,
+                "plan_months": ctx.history_months,
+            }
+        _set_last_result(rctx, f"report:{report_id} {start.isoformat()}..{end_date}",
                          result.get("rows"), result.get("metrics"))
         return result
 
@@ -188,11 +212,9 @@ def build_report_mcp(rctx: ReportToolContext) -> FastMCP:
         if report_id not in REPORTS:
             raise _unknown_report_error(report_id)
         if not rctx.token:
-            raise ValueError("Row detail needs a live POS session, which isn't "
-                             "available right now — offer the cached totals instead.")
-        start, end = date.fromisoformat(start_date), date.fromisoformat(end_date)
-        if start < _window_start(ctx.history_months):
-            raise _plan_limit_error(ctx.history_months)
+            raise ValueError(_NO_SESSION_MSG)
+        requested, end = date.fromisoformat(start_date), date.fromisoformat(end_date)
+        start, _clamped = _clamp_to_window(ctx.history_months, requested, end)
         client = ReportAPIClient(rctx.token)
         report = REPORTS[report_id]
         rows, page = [], 1
@@ -211,7 +233,7 @@ def build_report_mcp(rctx: ReportToolContext) -> FastMCP:
         # surrogate ids) with no business meaning — strip before this reaches
         # the model's answer or any UI table.
         rows = strip_internal_fields(rows[:ctx.row_limit])
-        _set_last_result(rctx, f"report-detail:{report_id} {start_date}..{end_date}",
+        _set_last_result(rctx, f"report-detail:{report_id} {start.isoformat()}..{end_date}",
                          rows, {})
         return rows
 
@@ -223,9 +245,10 @@ def report_system_prompt(rctx: ReportToolContext) -> str:
     shops = ", ".join(s["shop_name"] for s in rctx.shops) or "one shop"
     live = ("Live POS fetches are available for current/open periods."
             if rctx.token else
-            "No live POS session right now — only cached past months are "
-            "available; say so if asked about today/this month.")
-    months = rctx.business.history_months or 3
+            "The merchant's POS connection has expired, so only fully closed "
+            "months can be read right now. This is a connection problem, not "
+            "missing data — never tell them their data does not exist.")
+    months = rctx.business.history_months
     return (
         f"Today's date is {date.today().isoformat()}. "
         "PREFER the report tools (list_reports -> get_report_metrics) over SQL for "
@@ -238,10 +261,10 @@ def report_system_prompt(rctx: ReportToolContext) -> str:
         "Never re-add numbers from the `rows` yourself; manual re-summation is "
         "how totals drift from the dashboard. "
         f"The merchant's shops are: {shops}. {live} "
-        f"The user's subscription covers the last {months} months of data. If they "
-        "ask about anything older, do not just say the data is unavailable — tell "
-        f"them their current plan includes {months} months of insights and that "
-        "upgrading to a higher subscription plan unlocks more history, then answer "
-        "for the part of the range their plan covers if any. "
+        f"Their subscription covers data from {_window_start(months).isoformat()} "
+        f"onward ({months} months). A range that starts before that is answered "
+        "for the covered part automatically — when a result comes back with "
+        "'clamped', state the range you actually covered and mention that a "
+        "higher plan unlocks more history. Never just say the data is unavailable. "
         "Never mention tools, reports, SQL, queries, databases, or caching to the "
         "user — you are their business analyst, not a query system.")

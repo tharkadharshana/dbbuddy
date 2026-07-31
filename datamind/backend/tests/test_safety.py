@@ -194,9 +194,15 @@ def test_date_filter_applies_to_joined_transactional_table():
     assert "p.created_at" not in out  # reference tables are never date-filtered
 
 
-def test_date_filter_trusts_existing_created_at():
+def test_date_filter_does_not_trust_an_existing_created_at():
+    """Reversed deliberately. This used to return the SQL untouched, which let a
+    model write its own `created_at >= '2019-01-01'` and read straight past the
+    plan window — a billing-integrity hole, not just an answer-quality one. The
+    plan bound is now always AND-ed on top; the narrower of the two wins."""
     sql = "SELECT * FROM sp_receipts WHERE created_at >= '2026-01-01'"
-    assert safety.enforce_date_filter(sql, 3) == sql
+    out = safety.enforce_date_filter(sql, 3)
+    assert "2026-01-01" in out
+    assert "INTERVAL '3' MONTH" in out
 
 
 def test_date_filter_skips_reference_tables():

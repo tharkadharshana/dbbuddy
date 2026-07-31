@@ -196,10 +196,17 @@ def enforce_date_filter(sql: str, history_months: int) -> str:
     date-filtered — their created_at reflects record creation in the POS, not
     a transaction date, and for products it's often NULL entirely.
 
-    If the query already filters on created_at anywhere, it is trusted as-is.
-    Otherwise every transactional table reference gets
-    `alias.created_at >= DATE_SUB(CURDATE(), INTERVAL n MONTH)` AND-ed into its
+    The plan bound is ALWAYS AND-ed in, on top of whatever the model wrote:
+    every transactional table reference gets
+    `alias.created_at >= DATE_SUB(CURDATE(), INTERVAL n MONTH)` added to its
     SELECT's WHERE clause. Returns the rewritten SQL.
+
+    This used to return early — "if the query already filters on created_at
+    anywhere, it is trusted as-is" — which meant a model that wrote its own
+    `created_at >= '2019-01-01'` silently escaped the plan window entirely.
+    That is a billing-integrity hole, not just an answer-quality one: a
+    model-supplied bound is never a substitute for the plan bound. ANDing both
+    is always correct — the narrower of the two wins.
     """
     if not history_months:
         return sql
@@ -207,13 +214,6 @@ def enforce_date_filter(sql: str, history_months: int) -> str:
 
     if not any(t.name.lower() in _TRANSACTIONAL_TABLES for t in _real_tables(stmt)):
         return sql
-
-    # LLM already applied a date filter on created_at — trust it.
-    for node in _walk(stmt):
-        if isinstance(node, (exp.GT, exp.GTE, exp.LT, exp.LTE, exp.EQ, exp.Between)):
-            for side in (node.this, node.args.get("expression"), node.args.get("low")):
-                if isinstance(side, exp.Column) and side.name.lower() == "created_at":
-                    return sql
 
     months = int(history_months)
     for select in stmt.find_all(exp.Select):

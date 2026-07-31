@@ -170,3 +170,16 @@ export const purchaseAddon      = (addon_type, quantity) => api.post('/billing/a
 export const fetchBillingUsage  = () => api.get('/billing/usage').then(r => r.data)
 export const fetchBillingConfig = () => api.get('/billing/config').then(r => r.data)
 export const setBillingConfig   = (patch) => api.post('/billing/config', patch).then(r => r.data)
+
+// ── QA dev routes (/qa/*, unversioned) ───────────────────────────────────────
+// Dev-only. These 404 unless the backend was started with QA_ROUTES_ENABLED=true
+// on a non-production host with the caller in QA_ROUTES_EMAILS. Uses its own
+// axios instance because `api` rewrites /api -> /v1 and /qa is unversioned.
+const qaApi = axios.create({ baseURL: '/api/qa' })
+qaApi.interceptors.request.use(cfg => {
+  const token = localStorage.getItem('dm_token')
+  if (token) cfg.headers.Authorization = `Bearer ${token}`
+  return cfg
+})
+export const qaGet  = (path, params = {}) => qaApi.get(path, { params })
+export const qaPost = (path, body = {}) => qaApi.post(path, body)

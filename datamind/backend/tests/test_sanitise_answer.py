@@ -55,9 +55,22 @@ def test_plain_business_words_not_flagged():
     out, found = sanitise_answer(txt, FALLBACK)
     assert found == [] and out == txt
 
-def test_all_internal_collapses_to_fallback():
+def test_known_names_are_substituted_rather_than_the_answer_destroyed():
+    """Changed deliberately: this used to collapse to FALLBACK. In the agent
+    flow the model's own text IS the answer, so deleting sentences mangles a
+    good analysis — substitute the business label and keep the sentence. The
+    leak is still reported in `found` so the prompt gets fixed."""
     txt = "Here are the available tables: sp_receipts, sp_products, sp_categories, sp_shops."
     out, found = sanitise_answer(txt, FALLBACK)
+    assert found
+    assert "sp_" not in out
+    assert "your receipts" in out and "your products" in out
+
+
+def test_unmappable_internals_still_collapse_to_fallback():
+    """Raw SQL has no business label, so the sentence is dropped and — with
+    nothing left — the fallback is returned."""
+    out, found = sanitise_answer("SELECT total FROM some_table WHERE x = 1", FALLBACK)
     assert found and out == FALLBACK
 
 def test_empty_input():
