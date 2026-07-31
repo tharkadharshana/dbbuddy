@@ -526,14 +526,8 @@ def get_plan_by_id(plan_id) -> Optional[Dict]:
         conn.close()
 
 
-def subscribe_to_plan(user_email: str, plan_id: int, period_days: Optional[int] = None):
-    """Cancel existing subscription and start a new active one.
-
-    period_days overrides the plan's default validity_days — needed for
-    external payment gateways (e.g. Salesplay) that sell the same plan on
-    different billing cycles (monthly vs yearly) at different prices; the
-    period we grant here must match what was actually paid for there.
-    """
+def subscribe_to_plan(user_email: str, plan_id: int):
+    """Cancel existing subscription and start a new active one."""
     conn = _get_conn()
     conn.autocommit = False
     cur = conn.cursor(dictionary=True)
@@ -550,42 +544,15 @@ def subscribe_to_plan(user_email: str, plan_id: int, period_days: Optional[int] 
             raise ValueError(f"Plan {plan_id} not found")
 
         today = date.today()
-        days = period_days if period_days else plan["validity_days"]
-        period_end = today + timedelta(days=days)
+        period_end = today + timedelta(days=plan["validity_days"])
         cur.execute("""
             INSERT INTO user_subscriptions (user_email, plan_id, status, period_start, period_end)
             VALUES (%s, %s, 'active', %s, %s)
         """, (user_email, plan_id, today, period_end))
         conn.commit()
         invalidate_sub_cache(user_email)  # force fresh read on next request
-        log.info("Subscription activated", email=user_email, plan_id=plan_id, period_days=days)
+        log.info("Subscription activated", email=user_email, plan_id=plan_id)
     except Exception as e:
-        conn.rollback()
-        raise
-    finally:
-        cur.close()
-        conn.close()
-
-
-def cancel_subscription(user_email: str):
-    """Immediately cancel any active/trial subscription — used to sync down
-    when an external payment gateway (Salesplay) reports the subscription is
-    no longer valid there (failed renewal, refund, chargeback), regardless of
-    what our own period_end says."""
-    conn = _get_conn()
-    conn.autocommit = False
-    cur = conn.cursor()
-    try:
-        cur.execute("""
-            UPDATE user_subscriptions
-            SET status = 'cancelled'
-            WHERE user_email = %s AND status IN ('trial', 'active')
-        """, (user_email,))
-        conn.commit()
-        if cur.rowcount:
-            invalidate_sub_cache(user_email)
-            log.info("Subscription cancelled (external sync)", email=user_email)
-    except Exception:
         conn.rollback()
         raise
     finally:

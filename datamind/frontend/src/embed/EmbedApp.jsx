@@ -10,27 +10,13 @@
 import React, { useState, useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
 import './embed.css'
-import { embedValidateContext, salesplayGetProfile, salesplayCheckUser, salesplayOnboard, salesplaySubscriptionInfo, embedGetSubscription, embedSubmitFeedback, embedGetFeedbackStatus } from './embedApi'
-import { evaluateSalesplayAccess } from './embedSalesplaySubscription'
+import { embedValidateContext, salesplayGetProfile, salesplayCheckUser, salesplayOnboard, embedSubmitFeedback, embedGetFeedbackStatus } from './embedApi'
 import EmbedOnboarding from './EmbedOnboarding'
 import EmbedChat from './EmbedChat'
 import EmbedSalesplayAutoInit from './EmbedSalesplayAutoInit'
-import EmbedSalesplayPlans from './EmbedSalesplayPlans'
 import EmbedSearchBar from './EmbedSearchBar'
 import EmbedFeedbackModal from './EmbedFeedbackModal'
 import { appName } from './embedBranding'
-
-// Combines Salesplay's raw subscription state (card/plans — it's the payment
-// gateway) with DataMind's own billing (trial days, tokens — the actual
-// access gate) into one access decision. Used at every widget open (returning
-// + new merchants) and again right after a payment attempt.
-async function checkSalesplayAccess(partnerKey, aat) {
-  const [info, sub] = await Promise.all([
-    salesplaySubscriptionInfo(partnerKey, aat),
-    embedGetSubscription(),
-  ])
-  return evaluateSalesplayAccess(info, sub)
-}
 
 // "Remind me later" cooldown, jittered like App Store / Play Store review
 // prompts so users aren't all re-asked on the same schedule. Whether the user
@@ -98,7 +84,6 @@ function EmbedApp() {
   const [context, setContext]   = useState(null)
   const [errorMsg, setError]    = useState('')
   const [aatToken, setAatToken] = useState('')
-  const [subAccess, setSubAccess] = useState(null) // { hasAccess, trialAvailable, blockReason, plans }
 
   const layoutBar = params.get('layout') === 'bar'
   const [expanded, setExpanded]         = useState(!layoutBar)
@@ -168,32 +153,15 @@ function EmbedApp() {
             const check = await salesplayCheckUser(partnerKey, profile.email)
 
             if (check.has_credentials) {
-              // Returning merchant — silently refresh the JWT.
+              // Returning merchant — silently refresh the JWT and go straight to chat.
               // salesplayOnboard is safe here: for existing users it skips all setup steps
               // and just issues a new token (sync = "skipped").
               const result = await salesplayOnboard(partnerKey, aat)
               localStorage.setItem('dm_embed_token', result.token)
               localStorage.setItem('dm_sp_email', profile.email)
               if (result.user) localStorage.setItem('dm_embed_user', JSON.stringify(result.user))
-
-              // Any user — paid, trial, or unpaid — gets re-checked at the start
-              // of every session against Salesplay's own subscription state.
-              try {
-                const access = await checkSalesplayAccess(partnerKey, aat)
-                if (access.hasAccess) {
-                  setState('chat')
-                  notifyParent('dm:chat_open')
-                } else {
-                  setSubAccess(access)
-                  setState('salesplay_plans')
-                  notifyParent('dm:onboarding_start')
-                }
-              } catch {
-                // Subscription check unreachable — fail open so a Salesplay outage
-                // doesn't lock paying merchants out of chat entirely.
-                setState('chat')
-                notifyParent('dm:chat_open')
-              }
+              setState('chat')
+              notifyParent('dm:chat_open')
             } else {
               // New merchant — show consent screen before doing anything.
               setState('salesplay_init')
@@ -233,67 +201,11 @@ function EmbedApp() {
     return () => window.removeEventListener('message', handleIncoming)
   }, [partnerKey])
 
-  async function handleOnboardingComplete(token, userData) {
+  function handleOnboardingComplete(token, userData) {
     localStorage.setItem('dm_embed_token', token)
     if (userData) localStorage.setItem('dm_embed_user', JSON.stringify(userData))
-
-    // Salesplay: show the plans screen once for every brand-new merchant —
-    // informational (their 14-day DataMind trial is already silently active
-    // from onboarding's start_trial() call, so hasAccess is already true and
-    // wouldn't otherwise trigger this screen), and thereafter only when
-    // access is actually blocked. Non-Salesplay embeds are unaffected —
-    // straight to chat, as before.
-    if (context?.provider_id === 'salesplay' && aatToken) {
-      try {
-        const access = await checkSalesplayAccess(partnerKey, aatToken)
-        if (userData?.is_new_user || !access.hasAccess) {
-          setSubAccess(access)
-          setState('salesplay_plans')
-          notifyParent('dm:onboarding_start')
-          return
-        }
-      } catch {
-        // Subscription check unreachable — fail open to chat.
-      }
-    }
-
     setState('chat')
     notifyParent('dm:chat_open')
-  }
-
-  // Plans screen: user picked the free trial — the DataMind trial already
-  // started during onboarding, so this just unlocks chat, no payment call.
-  function handleTrialSelected() {
-    setState('chat')
-    notifyParent('dm:chat_open')
-  }
-
-  // Plans screen: payment succeeded — re-confirm with Salesplay before
-  // unlocking chat. Throws on failure so the plans screen shows the error
-  // and re-enables its "Proceed" button (see EmbedSalesplayPlans's catch).
-  async function handlePlanSubscribed() {
-    const access = await checkSalesplayAccess(partnerKey, aatToken)
-    if (access.hasAccess) {
-      setState('chat')
-      notifyParent('dm:chat_open')
-      return
-    }
-    setSubAccess(access)
-    throw new Error('Subscription could not be confirmed yet. Please try again in a moment.')
-  }
-
-  // Plans screen: polls this after sending the user to card_add_url, so a card
-  // added there shows up here without a widget reopen. Just refreshes
-  // subAccess — no state transition, no throw (the caller loops on the
-  // returned value instead).
-  async function handleRefreshAccess() {
-    try {
-      const access = await checkSalesplayAccess(partnerKey, aatToken)
-      setSubAccess(access)
-      return access
-    } catch {
-      return null
-    }
   }
 
   function handleExpired() {
@@ -393,26 +305,6 @@ function EmbedApp() {
         aatToken={aatToken}
         onComplete={handleOnboardingComplete}
         onError={(msg) => { setError(msg); setState('error') }}
-        onClose={handleClose}
-      />
-    )
-  } else if (state === 'salesplay_plans') {
-    content = (
-      <EmbedSalesplayPlans
-        context={context}
-        partnerKey={partnerKey}
-        aat={aatToken}
-        plans={subAccess?.plans || []}
-        trialAvailable={!!subAccess?.trialAvailable}
-        blockReason={subAccess?.blockReason}
-        isPaidQuotaBlocked={!!subAccess?.isPaidQuotaBlocked}
-        trialDays={subAccess?.trialDays || 14}
-        billingDetailsAdded={!!subAccess?.billingDetailsAdded}
-        cardAddUrl={subAccess?.cardAddUrl}
-        cardLabel={subAccess?.cardLabel}
-        onTrialSelected={handleTrialSelected}
-        onSubscribed={handlePlanSubscribed}
-        onRefreshAccess={handleRefreshAccess}
         onClose={handleClose}
       />
     )

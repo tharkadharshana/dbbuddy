@@ -159,15 +159,6 @@ export const salesplayGetProfile = (partnerKey, aat) =>
 export const salesplayCheckUser = (partnerKey, email) =>
   api.post('/embed/salesplay/check-user', { partner_key: partnerKey, email }).then(r => r.data)
 
-// AI POS subscription state — trial/quota/plans, sourced from Salesplay's own
-// billing system. Called on every widget open to decide chat vs. plans screen.
-export const salesplaySubscriptionInfo = (partnerKey, aat) =>
-  api.get('/embed/salesplay/subscription/info', { params: { partner_key: partnerKey, aat } }).then(r => r.data)
-
-// Activate/renew the AI POS addon subscription for a paid plan.
-export const salesplaySubscriptionPayment = (payload) =>
-  api.post('/embed/salesplay/subscription/payment', payload).then(r => r.data)
-
 // Widget rating (1-5 stars) + optional free-text comment, asked when the user closes the widget.
 export const embedSubmitFeedback = (rating, comment = '') =>
   api.post('/embed/feedback', { rating, comment }).then(r => r.data)
