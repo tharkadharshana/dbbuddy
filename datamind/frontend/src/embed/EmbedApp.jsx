@@ -32,6 +32,18 @@ async function checkSalesplayAccess(partnerKey, aat) {
   return evaluateSalesplayAccess(info, sub)
 }
 
+// Currency symbol to show for plan prices — from the Salesplay profile
+// (locale.currency, saved alongside the account at onboarding), not a
+// hardcoded USD "$". Falls back to "$" only if nothing was ever saved.
+function getEmbedCurrency() {
+  try {
+    const user = JSON.parse(localStorage.getItem('dm_embed_user') || 'null')
+    return user?.locale?.currency || '$'
+  } catch {
+    return '$'
+  }
+}
+
 // "Remind me later" cooldown, jittered like App Store / Play Store review
 // prompts so users aren't all re-asked on the same schedule. Whether the user
 // has ever submitted a rating is checked server-side (GET /embed/feedback/status)
@@ -401,6 +413,7 @@ function EmbedApp() {
         partnerKey={partnerKey}
         aat={aatToken}
         plans={subAccess?.plans || []}
+        currency={getEmbedCurrency()}
         trialAvailable={!!subAccess?.trialAvailable}
         blockReason={subAccess?.blockReason}
         isPaidQuotaBlocked={!!subAccess?.isPaidQuotaBlocked}

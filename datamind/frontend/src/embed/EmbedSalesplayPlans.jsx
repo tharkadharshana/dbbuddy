@@ -120,7 +120,7 @@ function Spin({ color = '#fff' }) {
   return <div style={{ width:13, height:13, border:`2px solid ${color === '#fff' ? 'rgba(255,255,255,0.3)' : 'rgba(0,88,190,0.25)'}`, borderTopColor:color, borderRadius:'50%', animation:'spin 0.7s linear infinite' }} />
 }
 
-export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, trialAvailable, blockReason, isPaidQuotaBlocked, trialDays = 14, billingDetailsAdded, cardAddUrl, cardLabel, onTrialSelected, onSubscribed, onRefreshAccess, onClose }) {
+export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, currency = '$', trialAvailable, blockReason, isPaidQuotaBlocked, trialDays = 14, billingDetailsAdded, cardAddUrl, cardLabel, onTrialSelected, onSubscribed, onRefreshAccess, onClose }) {
   const [selectedPlan, setSelectedPlan] = useState(null) // { ...plan, _tierIndex } under review on the receipt screen
   const [checking, setChecking] = useState(false) // re-checking access after returning from card_add_url (manual "Continue")
   const [awaitingCard, setAwaitingCard] = useState(false) // polling for a card add — grays out the screen
@@ -330,7 +330,7 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
               ['Plan', displayPlanName(selectedPlan._tierIndex, selectedPlan.billing_type)],
               ['Billing', selectedPlan.billing_type === 'YEARLY' ? 'Yearly' : 'Monthly'],
               ['Card', cardLabel || 'On file'],
-              ['Total', `$${Number(selectedPlan.product_price).toFixed(0)} / ${selectedPlan.billing_type === 'YEARLY' ? 'yr' : 'mo'}`],
+              ['Total', `${currency}${Number(selectedPlan.product_price).toFixed(0)} / ${selectedPlan.billing_type === 'YEARLY' ? 'yr' : 'mo'}`],
             ].map(([k, v], i, arr) => (
               <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '9px 0', borderBottom: i < arr.length - 1 ? '1px solid rgba(15,23,42,0.06)' : 'none' }}>
                 <span style={{ fontSize: 12, color: SP.text3 }}>{k}</span>
@@ -477,7 +477,7 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
                       {displayPlanName(i, plan.billing_type)}
                     </span>
                     <span style={{ fontSize: 18, fontWeight: 800, color: SP.heading }}>
-                      ${Number(plan.product_price).toFixed(0)}
+                      {currency}{Number(plan.product_price).toFixed(0)}
                       <span style={{ fontSize: 11, fontWeight: 500, color: SP.text3 }}>
                         /{plan.billing_type === 'YEARLY' ? 'yr' : 'mo'}
                       </span>
