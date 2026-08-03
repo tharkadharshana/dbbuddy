@@ -249,7 +249,7 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, c
     try {
       await onSubscribed()
     } catch (e) {
-      setError(e.message || 'Still not seeing an active subscription. Please try again.')
+      setError(e.response?.data?.detail || e.message || 'Still not seeing an active subscription. Please try again.')
       setChecking(false)
     }
   }
