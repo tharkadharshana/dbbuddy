@@ -19,10 +19,12 @@ export function evaluateSalesplayAccess(salesplayInfo, internalSub) {
   const sub   = salesplayInfo?.data?.subscription?.[0]
   const plans = sub?.pricing_plans || []
 
-  // billing_details_added is unreliable — confirmed on predev2 it stays false
-  // even after a card is successfully attached. payment_methods.payment_method_id
-  // is the field that actually reflects reality.
-  const billingDetailsAdded = !!salesplayInfo?.data?.billing_details_added || !!salesplayInfo?.data?.payment_methods?.payment_method_id
+  // is_valid_card_added is Salesplay's authoritative "there is a usable card
+  // on file" flag — the only one that gates whether /subscriptions/payment can
+  // succeed. billing_details_added is NOT a substitute: it flips true as soon
+  // as a billing address is saved, so trusting it showed "Subscribe" to
+  // merchants with no card and sent them into a payment that always failed.
+  const billingDetailsAdded = !!salesplayInfo?.data?.is_valid_card_added
   const cardAddUrl = salesplayInfo?.data?.card_add_url || null
   const card = salesplayInfo?.data?.payment_methods
   const cardLabel = card?.payment_method_id ? `${(card.brand || 'card').toUpperCase()} ····${card.last4 || ''}` : null
