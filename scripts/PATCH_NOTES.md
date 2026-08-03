@@ -6,15 +6,6 @@
 <!-- ponytail: the auto env-key diff supersedes hand-written ".ENV CHANGES"; drop
      that section once you trust it. -->
 
-MANUAL DEPLOY FILES
-───────────────────
-The following files are .gitignored on the production server and must be
-applied manually from the manual_deploy/ folder. Do NOT overwrite blindly —
-diff against the live server copy first.
-
-  * manual_deploy/main.py
-  * manual_deploy/llm.py
-
 CHANGES IN THIS PATCH
 ─────────────────────
 
@@ -89,7 +80,7 @@ F. style(embed): flattened SalesPlay chat header icons
    FIX     : Borderless 28px icon buttons with a hover highlight.
    FILES   : datamind/frontend/src/embed/EmbedChat.jsx, embed.css
 
-G. QA harness for billing state (development only — NOT shipped)
+G. QA harness for billing state (development only — inert on the server)
    PROBLEM : Testing trial/quota/plan transitions required hand-editing
              the database.
    FIX     : Added /qa routes and a QA dashboard page that mutate billing
@@ -99,11 +90,12 @@ G. QA harness for billing state (development only — NOT shipped)
              router is never mounted and the paths 404.
    FILES   : datamind/backend/qa_routes.py,
              datamind/frontend/src/pages/QAPage.jsx
-   NOTE    : qa_routes.py is deliberately NOT in this zip's backend/ folder
-             and Vite strips QAPage from production builds. main.py imports
-             it inside a try/except, so its absence is safe — it logs
-             "QA router failed to load (ignored)" once at boot and mounts
-             nothing. Do not add QA_ROUTES_* to the production .env.
+   NOTE    : qa_routes.py ships in this zip's backend/ like every other file
+             (no more per-file exclusions), but stays inert unless
+             QA_ROUTES_ENABLED + a real QA_ROUTES_EMAILS allowlist are set —
+             which they must never be in production. Vite still strips
+             QAPage from the production frontend build. Do not add
+             QA_ROUTES_* to the production .env.
 
 DB CHANGES  : None
 

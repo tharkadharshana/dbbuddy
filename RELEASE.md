@@ -58,17 +58,18 @@ Add `--no-tag` for a throwaway test build from any branch.
 ```
 datamind-v3.2.0/
   frontend/          full production build - delete the live frontend, drop this in
-  backend/           full backend source   - overwrite the live files
-  manual_deploy/     main.py, llm.py       - DIFF FIRST, never overwrite blindly
+  backend/           full backend source   - overwrite the live files, no exceptions
   PATCH_NOTES.txt    env-key changes, grouped commits, changed files
   BUILD_INFO.json    version, commit sha, branch, build time
   MANIFEST.sha256    checksum per file
 ```
 
 `backend/` is everything under `datamind/backend/` except `__pycache__`, `data`,
-`logs`, `dist`, `docs`, `scratch`, `tests`, any `.env`/`.env.production`, the
-manual-deploy files, and `qa_routes.py` (dev-only). New backend modules ship
-automatically — there is no allowlist to maintain.
+`logs`, `dist`, `docs`, `scratch`, `tests`, and any `.env`/`.env.production`. Every
+backend file, including `main.py`, `llm.py` and `qa_routes.py`, ships and gets
+overwritten wholesale — no allowlist, no manual-deploy split, nothing to remember.
+`qa_routes.py` stays inert without `QA_ROUTES_ENABLED` + a real allowlist in the
+server's own `.env.production`; never set those in production.
 
 ## Applying on the server
 
@@ -76,10 +77,8 @@ automatically — there is no allowlist to maintain.
 2. Read the **ENV KEYS** section of `PATCH_NOTES.txt`. Add every `+` key to the
    server's `datamind/backend/.env.production` before restarting.
 3. Delete the live frontend directory, copy `frontend/` in its place.
-4. Copy `backend/` over the live backend.
-5. `diff` each file in `manual_deploy/` against the live copy and apply only the
-   changed sections. If the folder is empty, neither file changed.
-6. Restart the backend (`python start.py --prod`) and check `/health`.
+4. Overwrite the live backend with `backend/` wholesale.
+5. Restart the backend (`python start.py --prod`) and check `/health`.
 
 The frontend needs no server-side env: `VITE_*` values are baked in at build time
 from the tracked [datamind/frontend/.env.production](datamind/frontend/.env.production).

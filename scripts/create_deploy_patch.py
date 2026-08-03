@@ -2,10 +2,8 @@
 """
 Build a deployable patch zip containing:
   <patch_name>/frontend/          - production frontend build (vite build)
-  <patch_name>/backend/           - backend source (everything except EXCLUDE_NAMES,
-                                    DEV_ONLY_FILES and the manual-deploy files)
-  <patch_name>/manual_deploy/     - files git-ignored on prod (main.py, llm.py);
-                                    copy these manually - do NOT overwrite blindly.
+  <patch_name>/backend/           - full backend source, minus EXCLUDE_NAMES only.
+                                    Overwrite the server's backend/ wholesale.
   <patch_name>/PATCH_NOTES.txt    - optional hand-written prose from
                                     scripts/PATCH_NOTES.md, plus auto-generated
                                     sections: env-key diff, changed files, commits.
@@ -40,14 +38,6 @@ VERSION_FILE = ROOT / "VERSION"
 # as a baseline so the first semver release can diff against the last manual patch.
 RELEASE_TAG_PREFIX = "v"
 LEGACY_TAG_PREFIX = "patch-"
-
-# These files are .gitignored on the production server, so they must be applied
-# manually by an admin. They are placed in manual_deploy/ inside the zip -
-# NOT in backend/ - to make this explicit.
-MANUAL_DEPLOY_FILES = ["main.py", "llm.py"]
-
-# Backend files that must never ship to production (dev/QA-only entry points).
-DEV_ONLY_FILES = {"qa_routes.py"}
 
 # Files/dirs to skip wherever they're found. The backend is copied wholesale minus
 # these - an allowlist used to silently drop every newly added backend module.
@@ -130,61 +120,10 @@ def copy_frontend(dist_dir, dest):
 
 
 def copy_backend(dest):
-    """Copy the whole backend tree minus excludes, dev-only files and manual-deploy files."""
+    """Copy the whole backend tree minus EXCLUDE_NAMES. Nothing else is special-cased -
+    overwrite the server's backend/ directory wholesale."""
     print("==> Copying backend source...")
-    skip_at_root = set(MANUAL_DEPLOY_FILES) | DEV_ONLY_FILES
-
-    def ignore_backend(directory, names):
-        skipped = set(ignore_excluded(directory, names))
-        if Path(directory) == BACKEND_DIR:
-            skipped |= {n for n in names if n in skip_at_root}
-        return list(skipped)
-
-    shutil.copytree(BACKEND_DIR, dest, ignore=ignore_backend)
-    for name in sorted(skip_at_root):
-        if (BACKEND_DIR / name).exists():
-            print(f"    (excluded) {name}")
-
-
-def copy_manual_files(dest, baseline):
-    """Copy git-ignored prod files to manual_deploy/ - must be applied by hand on the server.
-
-    Only includes files that actually changed since the baseline tag, so an admin
-    doesn't get main.py/llm.py in every patch when neither actually differs from
-    what's already deployed.
-    """
-    print("==> Copying manual deploy files (only those changed since baseline)...")
-    dest.mkdir(parents=True, exist_ok=True)
-    changed = None
-    if baseline is not None:
-        try:
-            changed = set(_git("diff", "--name-only", f"{baseline}..HEAD").splitlines())
-        except subprocess.CalledProcessError:
-            changed = None  # fall back to "include all" if git diff fails
-
-    found = []
-    for name in MANUAL_DEPLOY_FILES:
-        src = BACKEND_DIR / name
-        rel_path = str((BACKEND_DIR / name).relative_to(ROOT)).replace("\\", "/")
-        if not src.exists():
-            print(f"    (skip, not found) {name}")
-            continue
-        if changed is not None and rel_path not in changed:
-            print(f"    (skip, unchanged since {baseline}) {name}")
-            continue
-        shutil.copy2(src, dest / name)
-        found.append(name)
-    if found:
-        readme = (
-            "MANUAL DEPLOY REQUIRED\n"
-            "======================\n"
-            "These files are .gitignored on the production server.\n"
-            "Do NOT copy them blindly - diff against the live file first,\n"
-            "then apply only the sections that changed.\n\n"
-            "Files in this folder:\n"
-            + "".join(f"  * {n}\n" for n in found)
-        )
-        write_text(dest / "README.txt", readme)
+    shutil.copytree(BACKEND_DIR, dest, ignore=ignore_excluded)
 
 
 # ------------------------------------------------------------------------ baseline
@@ -433,7 +372,6 @@ def main():
     dist_dir = FRONTEND_DIR / "dist" if args.no_build else build_frontend()
     copy_frontend(dist_dir, patch_dir / "frontend")
     copy_backend(patch_dir / "backend")
-    copy_manual_files(patch_dir / "manual_deploy", baseline)
     write_patch_notes(patch_dir, version, baseline)
     write_build_info(patch_dir, version, baseline)
     write_manifest(patch_dir)
@@ -451,8 +389,7 @@ def main():
         tag_release(version)
 
     print(f"\nDone: {zip_path}")
-    print("\nWARNING: apply manual_deploy/ files by hand on the server (diff first).")
-    print("WARNING: apply the 'ENV KEYS' section of PATCH_NOTES.txt to the server .env.production.")
+    print("\nWARNING: apply the 'ENV KEYS' section of PATCH_NOTES.txt to the server .env.production.")
 
 
 if __name__ == "__main__":
