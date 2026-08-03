@@ -88,6 +88,20 @@ function groupPlansByTier(plans) {
   return monthly.map((m, i) => ({ monthly: m, yearly: yearly[i] }))
 }
 
+// Salesplay ships each plan a fully-formatted price string
+// (product_price_text: "LKR 16,537.30") plus its own product_currency_symbol.
+// Take the digits from the text — it already carries the merchant's real
+// separators and decimals, which Number(...).toFixed(0) was rounding away —
+// and the symbol from the plan itself, so neither is ever a hardcoded "$".
+// `fallbackSymbol` is the profile locale currency, used only if Salesplay
+// omits the per-plan symbol.
+function planPrice(plan, fallbackSymbol = '$') {
+  const symbol = String(plan?.product_currency_symbol || fallbackSymbol || '').trim()
+  const amount = (String(plan?.product_price_text || '').match(/[\d.,]+/) || [])[0]
+    || Number(plan?.product_price || 0).toFixed(2)
+  return `${symbol}${amount}`
+}
+
 function yearlySavingsPct(tier) {
   if (!tier?.monthly || !tier?.yearly) return null
   const monthlyAnnualized = Number(tier.monthly.product_price) * 12
@@ -330,7 +344,7 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, c
               ['Plan', displayPlanName(selectedPlan._tierIndex, selectedPlan.billing_type)],
               ['Billing', selectedPlan.billing_type === 'YEARLY' ? 'Yearly' : 'Monthly'],
               ['Card', cardLabel || 'On file'],
-              ['Total', `${currency}${Number(selectedPlan.product_price).toFixed(0)} / ${selectedPlan.billing_type === 'YEARLY' ? 'yr' : 'mo'}`],
+              ['Total', `${planPrice(selectedPlan, currency)} / ${selectedPlan.billing_type === 'YEARLY' ? 'yr' : 'mo'}`],
             ].map(([k, v], i, arr) => (
               <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '9px 0', borderBottom: i < arr.length - 1 ? '1px solid rgba(15,23,42,0.06)' : 'none' }}>
                 <span style={{ fontSize: 12, color: SP.text3 }}>{k}</span>
@@ -477,7 +491,7 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, c
                       {displayPlanName(i, plan.billing_type)}
                     </span>
                     <span style={{ fontSize: 18, fontWeight: 800, color: SP.heading }}>
-                      {currency}{Number(plan.product_price).toFixed(0)}
+                      {planPrice(plan, currency)}
                       <span style={{ fontSize: 11, fontWeight: 500, color: SP.text3 }}>
                         /{plan.billing_type === 'YEARLY' ? 'yr' : 'mo'}
                       </span>
