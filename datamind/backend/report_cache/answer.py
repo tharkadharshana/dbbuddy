@@ -33,6 +33,21 @@ from .registry import REPORTS
 
 log = get_logger(__name__)
 
+# The POS session token expires after 12h (profile.get_session_token). When it
+# is gone we can still read the cache, but we cannot fetch anything live.
+#
+# This message exists because the old wording ("there is no active POS session")
+# was relayed by the model to the merchant as "I don't have data for that
+# range" — for data that plainly existed. A CONNECTION problem must never read
+# as a DATA problem. Says what is true, and what the merchant can do about it.
+NO_SESSION_MSG = (
+    "CONNECTION ISSUE, NOT MISSING DATA: the merchant's POS connection has "
+    "expired, so live figures cannot be fetched right now. Their data exists — "
+    "do NOT tell them there is no data for this period. If cached figures were "
+    "returned for part of the range, use those and note how fresh they are. "
+    "Otherwise tell them to reopen their dashboard to reconnect, and offer to "
+    "answer for fully past months, which are still available.")
+
 
 def months_covering(start: date, end: date) -> list:
     out, y, m = [], start.year, start.month
@@ -130,10 +145,7 @@ def _live_params(start: date, end: date, shop_id: str, cashier: str = None) -> d
 def _answer_live(conn, tenant_id, report, start, end, shop_id, cashier, token,
                  number_format, requested, top_n):
     if not token:
-        raise ValueError(
-            "This question needs a live report fetch, but there is no active "
-            "POS session right now. Cached monthly summaries are still available "
-            "for fully past months with no shop/cashier filter.")
+        raise ValueError(NO_SESSION_MSG)
     dec, thou = separators(number_format)
     client = ReportAPIClient(token)
     if report.kind == "dimensional":
@@ -209,6 +221,22 @@ def answer_metric_query(conn, tenant_id: str, report_id: str, start: date,
 
     shop_id = shop_id or "all"
     closed_cutoff = last_closed_day(today)
+
+    # No live session (token expired — 12h lifetime) but the range only *touches*
+    # the open month: trim to the closed portion and answer from cache rather
+    # than failing the whole call. Failing here is what merchants saw as "I don't
+    # have data for that range" while their data sat in the cache. Partial and
+    # labelled beats nothing.
+    degraded = None
+    if not token and end > closed_cutoff and start <= closed_cutoff:
+        log.info("No live session — trimming range to last closed month",
+                 tenant=tenant_id, report=report_id,
+                 requested_end=end.isoformat(), effective_end=closed_cutoff.isoformat())
+        end = closed_cutoff
+        degraded = ("Live POS figures were unavailable, so this covers only "
+                    f"through {end.isoformat()} — the last fully closed month. "
+                    "Recent days are not included.")
+
     month_aligned = (report.grain == "day" or
                      (start.day == 1 and end == month_end(f"{end.year:04d}-{end.month:02d}")))
     ym_list = months_covering(start, end)
@@ -252,10 +280,15 @@ def answer_metric_query(conn, tenant_id: str, report_id: str, start: date,
         result = {"metrics": summary,
                   "rows": [{"month": ym, **m} for ym, m in sorted(monthly.items())]}
 
+    notes = []
     if dropped:
-        result["notes"] = (
+        notes.append(
             f"Metrics {dropped} cannot be summed across periods (distinct counts "
             "/ unit values) — ask for a single month, or the exact range live.")
+    if degraded:
+        notes.append(degraded)
+    if notes:
+        result["notes"] = " ".join(notes)
     result.update({"report_id": report_id, "start_date": start.isoformat(),
                    "end_date": end.isoformat(), "source": source, "shop_id": shop_id})
     return result

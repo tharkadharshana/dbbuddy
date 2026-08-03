@@ -65,7 +65,7 @@ function ResultTable({ columns, data, rowCount, moneyCols }) {
       </div>
       {data.length > 5 && (
         <div onClick={() => setExpanded(e => !e)} style={{ padding:'8px 12px', textAlign:'center', fontSize:11, color:'var(--blue)', cursor:'pointer', borderTop:'1px solid var(--border)', background:'rgba(255,255,255,0.01)' }}>
-          {expanded ? `▲ Show less` : `▼ Show all ${rowCount} rows`}
+          {expanded ? `▲ Show less` : `▼ Show all ${rowCount} records`}
         </div>
       )}
     </div>
@@ -149,8 +149,13 @@ function Message({ msg, llm, onVote }) {
           </div>
         ) : (
           <>
-            {/* Think Mode analysis */}
-            {msg.analysis && (
+            {/* agent_answer: `analysis` IS the answer — plain prose, no card.
+                Legacy Think Mode commentary keeps its own labelled card. */}
+            {msg.analysis && (msg.data?.agent_answer ? (
+              <div style={{ fontSize:14, color:'var(--text)', lineHeight:1.7 }}>
+                <Markdown text={msg.analysis} />
+              </div>
+            ) : (
               <div style={{
                 marginBottom:12, padding:'12px 16px', borderRadius:10,
                 background:'var(--bg2)', border:'1px solid var(--border2)',
@@ -162,7 +167,7 @@ function Message({ msg, llm, onVote }) {
                 </div>
                 <Markdown text={msg.analysis} />
               </div>
-            )}
+            ))}
 
             {/* Advisory (prose-only) answers set show_data=false — hide the
                 "Found N results" summary and the unrelated chart/table. */}

@@ -136,9 +136,9 @@ export default function UsagePage({ sub }) {
             <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                  {['Date', 'Operation', 'Tokens', 'AI Tokens', 'Rows'].map(h => (
+                  {['Date', 'Operation', 'Tokens', 'AI Tokens', 'Records'].map(h => (
                     <th key={h} style={{
-                      textAlign: ['Tokens', 'AI Tokens', 'Rows'].includes(h) ? 'right' : 'left',
+                      textAlign: ['Tokens', 'AI Tokens', 'Records'].includes(h) ? 'right' : 'left',
                       padding: '8px 12px', fontWeight: 600, color: 'var(--text2)',
                     }}>{h}</th>
                   ))}

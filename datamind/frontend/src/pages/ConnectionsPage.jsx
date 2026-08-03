@@ -29,7 +29,7 @@ function ProviderCard({ provider, onConnect, canUseDB }) {
       <p style={{ fontSize:12, color:'var(--text3)', lineHeight:1.6 }}>{provider.description}</p>
       <div style={{ display:'flex', gap:8, marginTop:'auto' }}>
         <Btn onClick={onConnect} disabled={canUseDB === false} style={{ flex:1, justifyContent:'center' }}
-          title={canUseDB === false ? 'DB row limit reached — upgrade or purchase add-on rows to connect' : undefined}>
+          title={canUseDB === false ? 'DB record limit reached — upgrade or purchase add-on records to connect' : undefined}>
           Connect
         </Btn>
         <a href={provider.docs_url} target="_blank" rel="noreferrer" style={{ padding:'9px 14px', background:'var(--bg3)', border:'1px solid var(--border)', borderRadius:'var(--r-md)', fontSize:12, color:'var(--text3)', textDecoration:'none', display:'flex', alignItems:'center' }}>Docs ↗</a>
@@ -66,7 +66,7 @@ function SyncProgress({ progress }) {
       <div style={{ display:'flex', justifyContent:'space-between', fontSize:11, color:'var(--amber)' }}>
         <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'65%' }}>{msg}</span>
         <span style={{ flexShrink:0 }}>
-          {rows > 0 && `${rows.toLocaleString()} rows`}{etaStr && ` · ${etaStr}`}
+          {rows > 0 && `${rows.toLocaleString()} records`}{etaStr && ` · ${etaStr}`}
         </span>
       </div>
     </div>
@@ -349,7 +349,7 @@ export default function ConnectionsPage({ onConnectionChange, sub }) {
         <>
           {!canUseDB && connected.length > 0 && (
             <div style={{ marginBottom:12, padding:'10px 14px', borderRadius:'var(--r-md)', fontSize:13, color:'var(--red)', background:'rgba(239,68,68,0.08)', border:'1px solid rgba(239,68,68,0.25)' }}>
-              DB row limit reached — syncing is paused. Purchase add-on rows or upgrade to resume.
+              DB record limit reached — syncing is paused. Purchase add-on records or upgrade to resume.
             </div>
           )}
           {connected.length === 0 ? (
@@ -375,7 +375,7 @@ export default function ConnectionsPage({ onConnectionChange, sub }) {
         <>
           {!canUseDB && (
             <div style={{ marginBottom:16, padding:'10px 14px', borderRadius:'var(--r-md)', fontSize:13, color:'var(--red)', background:'rgba(239,68,68,0.08)', border:'1px solid rgba(239,68,68,0.25)' }}>
-              You've reached your DB row limit. Connecting or syncing integrations is paused. You can still read and export your existing data. <strong>Purchase add-on rows or upgrade your plan</strong> to continue.
+              You've reached your DB record limit. Connecting or syncing integrations is paused. You can still read and export your existing data. <strong>Purchase add-on records or upgrade your plan</strong> to continue.
             </div>
           )}
           {/* BYODB option — temporarily hidden. Bring Your Own Database will return as a

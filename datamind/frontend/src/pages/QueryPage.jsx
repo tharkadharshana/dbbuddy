@@ -108,7 +108,7 @@ export default function QueryPage({ llm, setLlm }) {
                 const total = vals.reduce((a,b)=>a+b,0)
                 const display = result.data.length===1 ? result.data[0][col] : (col.includes('avg')||col.includes('pct')||col.includes('rate') ? (total/vals.length) : total)
                 return <KPICard key={col} label={col.replace(/_/g,' ')} value={typeof display==='number'?display.toLocaleString(undefined,{maximumFractionDigits:1}):display} color={['var(--blue)','var(--green)','var(--purple)','var(--amber)'][i%4]} />
-              }) : <KPICard label="Rows" value={result.row_count} />}
+              }) : <KPICard label="Records" value={result.row_count} />}
             </div>
 
             {/* Chart */}
@@ -121,7 +121,7 @@ export default function QueryPage({ llm, setLlm }) {
 
             {/* Table */}
             <Card style={{ overflow:'hidden' }}>
-              <div style={{ padding:'11px 16px', borderBottom:'1px solid var(--border)', fontSize:12, fontWeight:500, color:'var(--text2)' }}>Results · {result.row_count} rows</div>
+              <div style={{ padding:'11px 16px', borderBottom:'1px solid var(--border)', fontSize:12, fontWeight:500, color:'var(--text2)' }}>Results · {result.row_count} records</div>
               <DataTable columns={result.columns} data={result.data} maxHeight={360} />
             </Card>
           </div>

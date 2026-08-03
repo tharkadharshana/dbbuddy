@@ -21,9 +21,10 @@ export function evaluateSalesplayAccess(salesplayInfo, internalSub) {
 
   // is_valid_card_added is Salesplay's authoritative "there is a usable card
   // on file" flag — the only one that gates whether /subscriptions/payment can
-  // succeed. billing_details_added is NOT a substitute: it flips true as soon
-  // as a billing address is saved, so trusting it showed "Subscribe" to
-  // merchants with no card and sent them into a payment that always failed.
+  // succeed. billing_details_added is no substitute in either direction:
+  // confirmed on predev2 it stayed false with a card successfully attached,
+  // and it flips true on a saved billing address with no card at all, which
+  // showed "Subscribe" to merchants who could only ever hit a failed payment.
   const billingDetailsAdded = !!salesplayInfo?.data?.is_valid_card_added
   const cardAddUrl = salesplayInfo?.data?.card_add_url || null
   const card = salesplayInfo?.data?.payment_methods

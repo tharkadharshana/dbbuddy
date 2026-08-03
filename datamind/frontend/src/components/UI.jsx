@@ -229,7 +229,7 @@ export function AIQuotaWall() { return null }
 // ── Data Table ────────────────────────────────────────────────────────────────
 
 export function DataTable({ columns, data, maxHeight=320 }) {
-  if (!data?.length) return <Empty icon="📋" title="No rows returned" />
+  if (!data?.length) return <Empty icon="📋" title="No records returned" />
   const isNum = v => typeof v === 'number'
   const isPos = (col, v) => isNum(v) && (col.includes('growth') || col.includes('pct')) && v > 0
   const isNeg = (col, v) => isNum(v) && (col.includes('growth') || col.includes('pct')) && v < 0

@@ -11,16 +11,22 @@ import ConnectionsPage   from './pages/ConnectionsPage'
 import BillingPage       from './pages/BillingPage'
 import UsagePage         from './pages/UsagePage'
 import DocsPage          from './pages/DocsPage'
+// Dev-only QA dashboard. `import.meta.env.DEV` is a compile-time constant, so
+// Vite eliminates both the import and the route from any production build.
+const QAPage = import.meta.env.DEV
+  ? React.lazy(() => import('./pages/QAPage'))
+  : null
 import Sidebar           from './components/Sidebar'
 import UsageLimitBanner  from './components/UsageLimitBanner'
-import { fetchTables, fetchCacheStatus, fetchSettings, fetchConnectedProviders, fetchProviderStats, fetchSubscription, listConversations, ssoLogin } from './utils/api'
+import { fetchTables, fetchCacheStatus, fetchSettings, fetchConnectedProviders, fetchSubscription, listConversations, ssoLogin } from './utils/api'
 
 // URL <-> page/conversation sync so a refresh (or bookmark/back-forward) lands
 // back where the user was, instead of always resetting to a blank new chat.
 // Plain History API — no react-router — the rest of the app already navigates
 // via onNavigate(page) callbacks, not <Link>/useNavigate, so a full router
 // migration would be a much bigger diff for the same result.
-const KNOWN_PAGES = ['chat', 'discover', 'forecast', 'anomaly', 'reports', 'connections', 'settings', 'billing', 'docs']
+const KNOWN_PAGES = ['chat', 'discover', 'forecast', 'anomaly', 'reports', 'connections', 'settings', 'billing', 'docs',
+                     ...(import.meta.env.DEV ? ['qa'] : [])]
 
 function parseLocation() {
   const [first, second] = window.location.pathname.split('/').filter(Boolean)
@@ -40,7 +46,6 @@ export default function App() {
   const [connection, setConnection]   = useState(null) // active connection summary
   const [showOnboarding, setShowOnboarding] = useState(false)
   const [theme, setTheme]       = useState(() => localStorage.getItem('dm_theme') || 'light')
-  const [totalRows, setTotalRows] = useState(0)
   const [sub, setSub]             = useState(null)
   const [hasDB, setHasDB]         = useState(false)
   const [conversations, setConversations]   = useState([])
@@ -135,17 +140,14 @@ export default function App() {
 
   async function checkSetup({ suppressOnboarding = false } = {}) {
     try {
-      const [s, providers, stats] = await Promise.all([
+      const [s, providers] = await Promise.all([
         fetchSettings(),
         fetchConnectedProviders().catch(() => ({connections:[]})),
-        fetchProviderStats().catch(() => ({total_rows:0})),
       ])
       const hasDB       = s.db_configs?.length > 0
       setHasDB(hasDB)
       const hasKey      = !!s.has_llm_key
       const hasProvider = providers.connections?.length > 0
-
-      setTotalRows(stats.total_rows || 0)
 
       // Always update connection state — independent of whether a key is configured
       if (hasProvider) {
@@ -245,6 +247,9 @@ export default function App() {
     settings:    <SettingsPage user={user} onLogout={handleLogout} onNavigate={navigate} sub={sub} />,
     billing:     <BillingPage onSubChange={loadSub} />,
     docs:        <DocsPage />,
+    ...(import.meta.env.DEV && QAPage
+      ? { qa: <React.Suspense fallback={<div style={{ padding: 24 }}>Loading QA…</div>}><QAPage /></React.Suspense> }
+      : {}),
   }[page] ?? <ChatPage llm={llm} setLlm={setLlm} connection={connection} />
 
   return (
@@ -254,7 +259,6 @@ export default function App() {
         setActive={(p) => navigate(p, null)}
         connection={connection}
         cacheStatus={cacheStatus}
-        totalRows={totalRows}
         theme={theme}
         setTheme={setTheme}
         conversations={conversations}

@@ -57,7 +57,9 @@ def _sync_report_profile(table_prefix: Optional[str], email: str, aat: str) -> N
     try:
         from billing import get_plan_history_limit
         from report_cache.ingest import start_backfill_async
-        months = get_plan_history_limit(email).get("months") or 3
+        # No `or 3` — get_plan_history_limit owns the one logged fallback. A
+        # second one here silently downgraded a Pro tenant to Starter depth.
+        months = get_plan_history_limit(email)["months"]
         start_backfill_async(table_prefix, aat, months)
     except Exception as e:
         log.warning("Report cache: backfill kick skipped", email=email, error=str(e))
