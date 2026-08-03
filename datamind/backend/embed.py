@@ -456,6 +456,36 @@ class SalesplayCreateTokenRequest(BaseModel):
     aat:         str
 
 
+def _salesplay_error(resp, fallback: str) -> str:
+    """Salesplay's own error text for a failed response, verbatim.
+
+    The embed shows the merchant whatever Salesplay actually said (e.g.
+    "Payment requires additional authentication...", or a raw PHP fault like
+    "Undefined variable $systemCheckingErrorStatus") instead of a generic
+    line of ours — a merchant reporting a problem then quotes something
+    Salesplay's own support can act on. `fallback` is only used when the body
+    carries nothing usable (empty body, HTML error page, network failure).
+    """
+    try:
+        body = resp.json()
+    except Exception:
+        text = (resp.text or "").strip()
+        # Guard against an HTML error page landing in the widget's error box.
+        return text[:300] if text and not text.lstrip().startswith("<") else fallback
+
+    if isinstance(body, dict):
+        err = body.get("error")
+        candidates = [body.get("message")]
+        if isinstance(err, dict):
+            candidates += [err.get("message"), err.get("code")]
+        elif isinstance(err, str):
+            candidates.append(err)
+        for c in candidates:
+            if isinstance(c, str) and c.strip():
+                return c.strip()[:300]
+    return fallback
+
+
 def _extract_salesplay_locale(data: dict) -> dict:
     """Extract locale fields from a Salesplay /profile response dict."""
     raw    = data.get("user") or data.get("data") or data
@@ -491,7 +521,8 @@ def salesplay_proxy_profile(request: Request, req: SalesplayProfileRequest):
         )
         if resp.status_code == 401:
             raise HTTPException(status_code=401, detail="Salesplay session expired. Please refresh the page.")
-        resp.raise_for_status()
+        if not resp.ok:
+            raise HTTPException(status_code=502, detail=_salesplay_error(resp, "Could not reach Salesplay API. Please try again."))
         data = resp.json()
         # Salesplay profile response: { "status": "success", "user": { "email": ..., "full_name": ... } }
         raw  = data.get("user") or data.get("data") or data
@@ -533,7 +564,8 @@ def salesplay_proxy_create_token(request: Request, req: SalesplayCreateTokenRequ
         )
         if resp.status_code == 401:
             raise HTTPException(status_code=401, detail="Salesplay session expired. Please refresh the page.")
-        resp.raise_for_status()
+        if not resp.ok:
+            raise HTTPException(status_code=502, detail=_salesplay_error(resp, "Could not create Salesplay API token. Please try again."))
         data  = resp.json()
         token = (data.get("data") or {}).get("token")
         if not token:
@@ -563,8 +595,13 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
       2. Check if a DataMind account + credentials already exist
       3. If no credentials: create a Salesplay API token (server-to-server)
       4. Create DataMind account if new, or issue JWT for existing account
-      5. Start free trial, connect provider, trigger sync
+      5. Connect provider, trigger sync
       6. Return JWT + sync status
+
+    Does NOT start a trial/subscription — that only happens when the user
+    explicitly picks "Start free trial" on the plans screen (POST
+    /embed/salesplay/start-trial), so reopening the widget never silently
+    grants access nobody asked for.
     """
     _check_rate(_client_ip(request))
 
@@ -585,7 +622,8 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
         )
         if resp.status_code == 401:
             raise HTTPException(status_code=401, detail="Salesplay session expired. Please refresh the page.")
-        resp.raise_for_status()
+        if not resp.ok:
+            raise HTTPException(status_code=502, detail=_salesplay_error(resp, "Could not reach Salesplay API. Please try again."))
         data  = resp.json()
         raw   = data.get("user") or data.get("data") or data
         email = (raw.get("email") or "").strip().lower()
@@ -649,7 +687,8 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
             )
             if resp.status_code == 401:
                 raise HTTPException(status_code=401, detail="Salesplay session expired. Please refresh the page.")
-            resp.raise_for_status()
+            if not resp.ok:
+                raise HTTPException(status_code=502, detail=_salesplay_error(resp, "Could not create Salesplay API token. Please try again."))
             token_data        = resp.json()
             salesplay_api_token = (token_data.get("data") or {}).get("token")
             if not salesplay_api_token:
@@ -673,12 +712,6 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
             log.info("Salesplay onboard: existing user", email=email)
         else:
             raise
-
-    # ── 5. Start trial (non-fatal) ────────────────────────────────────────────
-    try:
-        start_trial(email)
-    except Exception as _te:
-        log.warning("Salesplay onboard: trial start skipped", email=email, error=str(_te))
 
     # ── 5b. Persist locale from Salesplay profile (non-fatal) ─────────────────
     try:
@@ -772,7 +805,8 @@ def salesplay_subscription_info(request: Request, partner_key: str, aat: str, us
         log.debug("Salesplay subscription API response", url=url, status=resp.status_code, raw_body=resp.text)
         if resp.status_code == 401:
             raise HTTPException(status_code=401, detail="Salesplay session expired. Please refresh the page.")
-        resp.raise_for_status()
+        if not resp.ok:
+            raise HTTPException(status_code=502, detail=_salesplay_error(resp, "Could not reach Salesplay API. Please try again."))
         data = resp.json()
         sub = (data.get("data") or {}).get("subscription") or []
         if sub and sub[0].get("is_expired") == 1:
@@ -845,7 +879,12 @@ def salesplay_subscription_payment(request: Request, req: SalesplaySubscriptionP
         log.debug("Salesplay subscription API response", url=url, status=resp.status_code, raw_body=resp.text)
         if resp.status_code == 401:
             raise HTTPException(status_code=401, detail="Salesplay session expired. Please refresh the page.")
-        result = resp.json()
+        try:
+            result = resp.json()
+        except ValueError:
+            # Non-JSON body — a raw PHP fatal or HTML error page from Salesplay.
+            # Surface what they actually said; it's the only diagnostic anyone has.
+            raise HTTPException(status_code=502, detail=_salesplay_error(resp, "Payment could not be completed. Please try again."))
         if result.get("status") == "success":
             try:
                 subscribe_to_plan(user["email"], req.internal_plan_id, period_days=req.internal_period_days)
@@ -862,3 +901,12 @@ def salesplay_subscription_payment(request: Request, req: SalesplaySubscriptionP
     except Exception as e:
         log.error("Salesplay proxy: subscription payment failed", error=str(e))
         raise HTTPException(status_code=502, detail="Could not reach Salesplay API. Please try again.")
+
+
+@router.post("/salesplay/start-trial")
+def salesplay_start_trial(user: dict = Depends(current_user)):
+    """Explicitly start the free trial — only called from the plans screen's
+    "Start free trial" button. Never implicit at onboarding, so reopening the
+    widget never silently grants a trial nobody asked for."""
+    start_trial(user["email"])
+    return {"ok": True}

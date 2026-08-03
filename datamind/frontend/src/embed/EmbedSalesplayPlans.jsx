@@ -88,6 +88,16 @@ function groupPlansByTier(plans) {
   return monthly.map((m, i) => ({ monthly: m, yearly: yearly[i] }))
 }
 
+// Salesplay already formats each plan's price in the merchant's own currency
+// ("LKR 1,654.93") — show that string verbatim, no symbol logic of ours.
+// Building it ourselves was wrong twice over: product_price is Salesplay's
+// base amount (5/10/25), not what the merchant is charged, and
+// product_currency_symbol reads "$" even on LKR accounts.
+function planPrice(plan) {
+  return String(plan?.show_price_text || plan?.product_price_text || '').trim()
+    || String(plan?.show_price ?? plan?.product_price ?? '')
+}
+
 function yearlySavingsPct(tier) {
   if (!tier?.monthly || !tier?.yearly) return null
   const monthlyAnnualized = Number(tier.monthly.product_price) * 12
@@ -169,10 +179,15 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
   function handleChoosePlan(plan, tierIndex) {
     setError('')
     const withTier = { ...plan, _tierIndex: tierIndex }
-    // No card on file — Salesplay's own hosted page collects it. We can't call
-    // /subscriptions/payment without one (confirmed: it errors with no card),
-    // so send them there instead of guessing at a payload that's bound to fail.
-    if (!billingDetailsAdded && cardAddUrl) {
+    // No usable card (is_valid_card_added false) — never reach the payment
+    // screen. Salesplay's own hosted page collects the card; with no
+    // card_add_url to send them to there is nothing we can do but say so,
+    // which beats letting them into a charge that can only fail.
+    if (!billingDetailsAdded) {
+      if (!cardAddUrl) {
+        setError('Add a payment method in Salesplay before subscribing.')
+        return
+      }
       notifyParent('dm:redirect', { url: cardAddUrl })
       window.open(cardAddUrl, '_blank', 'noopener,noreferrer')
       pollForCard(withTier)
@@ -184,6 +199,15 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
   async function handleConfirmSubscribe() {
     const plan = selectedPlan
     if (!plan) return
+    // The one place that charges a card. is_valid_card_added is the only thing
+    // that says a charge can succeed, so re-check it here rather than trusting
+    // that the screen we came from checked — a refresh poll can flip it while
+    // this screen is open.
+    if (!billingDetailsAdded) {
+      setError('Add a payment method in Salesplay before subscribing.')
+      setSelectedPlan(null) // back to the plans list, which offers the card-add route
+      return
+    }
     setError('')
     setConfirmBusy(true)
     try {
@@ -235,13 +259,25 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
     try {
       await onSubscribed()
     } catch (e) {
-      setError(e.message || 'Still not seeing an active subscription. Please try again.')
+      setError(e.response?.data?.detail || e.message || 'Still not seeing an active subscription. Please try again.')
       setChecking(false)
     }
   }
 
+  const [trialBusy, setTrialBusy] = useState(false)
+  async function handleStartTrial() {
+    setError('')
+    setTrialBusy(true)
+    try {
+      await onTrialSelected()
+    } catch (e) {
+      setError(e.response?.data?.detail || e.message || 'Could not start your trial. Please try again.')
+      setTrialBusy(false)
+    }
+  }
+
   const grayedOut = awaitingCard
-  const busy = confirmBusy || checking || awaitingCard
+  const busy = confirmBusy || checking || awaitingCard || trialBusy
 
   return (
     <div style={{
@@ -318,7 +354,7 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
               ['Plan', displayPlanName(selectedPlan._tierIndex, selectedPlan.billing_type)],
               ['Billing', selectedPlan.billing_type === 'YEARLY' ? 'Yearly' : 'Monthly'],
               ['Card', cardLabel || 'On file'],
-              ['Total', `$${Number(selectedPlan.product_price).toFixed(0)} / ${selectedPlan.billing_type === 'YEARLY' ? 'yr' : 'mo'}`],
+              ['Total', `${planPrice(selectedPlan)} / ${selectedPlan.billing_type === 'YEARLY' ? 'yr' : 'mo'}`],
             ].map(([k, v], i, arr) => (
               <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '9px 0', borderBottom: i < arr.length - 1 ? '1px solid rgba(15,23,42,0.06)' : 'none' }}>
                 <span style={{ fontSize: 12, color: SP.text3 }}>{k}</span>
@@ -343,7 +379,12 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
                   boxShadow: '0 4px 12px rgba(0,88,190,0.35)', marginBottom: 8,
                 }}
               >
-                {checking ? <><Spin /> Checking…</> : 'Check again →'}
+                {/* busy, not checking: setPaidPending(true) renders this branch
+                    while the post-payment confirm is still in flight
+                    (confirmBusy), so keying off `checking` alone flashed the
+                    idle "Check again" for a frame before the parent switched to
+                    chat. It only reads as a retry once everything has settled. */}
+                {busy ? <><Spin /> Checking…</> : 'Check again →'}
               </button>
             </>
           ) : (
@@ -465,7 +506,7 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
                       {displayPlanName(i, plan.billing_type)}
                     </span>
                     <span style={{ fontSize: 18, fontWeight: 800, color: SP.heading }}>
-                      ${Number(plan.product_price).toFixed(0)}
+                      {planPrice(plan)}
                       <span style={{ fontSize: 11, fontWeight: 500, color: SP.text3 }}>
                         /{plan.billing_type === 'YEARLY' ? 'yr' : 'mo'}
                       </span>
@@ -483,15 +524,15 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
 
                   {showTrial && (
                     <button
-                      onClick={() => onTrialSelected()}
+                      onClick={handleStartTrial}
                       disabled={busy}
                       style={{
                         width: '100%', padding: '11px', borderRadius: 9999, fontSize: 13, fontWeight: 700,
-                        background: SP.blue, color: '#fff', border: 'none', cursor: 'pointer', marginTop: 12,
+                        background: SP.blue, color: '#fff', border: 'none', cursor: busy ? 'not-allowed' : 'pointer', marginTop: 12,
                         boxShadow: '0 4px 12px rgba(0,88,190,0.35)',
                       }}
                     >
-                      Start {trialDays}-day free trial →
+                      {trialBusy ? <><Spin /> Starting…</> : `Start ${trialDays}-day free trial →`}
                     </button>
                   )}
 

@@ -12,16 +12,19 @@
  *
  * account is active   when internal status is 'trial' or 'active' AND tokens remain
  * account is inactive when internal status is 'expired'/'cancelled'/'no_subscription'
- *   ('no_subscription' also covers a brand-new user before onboarding's
- *    start_trial() call has run, though in practice that always runs first)
+ *   ('no_subscription' is the normal state for a brand-new user — nothing
+ *    starts a trial until they explicitly click "Start free trial")
  */
 export function evaluateSalesplayAccess(salesplayInfo, internalSub) {
   const sub   = salesplayInfo?.data?.subscription?.[0]
   const plans = sub?.pricing_plans || []
 
-  // billing_details_added was unreliable (confirmed on predev2: stayed false
-  // even after a card was successfully attached) — is_valid_card_added is
-  // Salesplay's authoritative replacement for this same check.
+  // is_valid_card_added is Salesplay's authoritative "there is a usable card
+  // on file" flag — the only one that gates whether /subscriptions/payment can
+  // succeed. billing_details_added is no substitute in either direction:
+  // confirmed on predev2 it stayed false with a card successfully attached,
+  // and it flips true on a saved billing address with no card at all, which
+  // showed "Subscribe" to merchants who could only ever hit a failed payment.
   const billingDetailsAdded = !!salesplayInfo?.data?.is_valid_card_added
   const cardAddUrl = salesplayInfo?.data?.card_add_url || null
   const card = salesplayInfo?.data?.payment_methods
@@ -31,11 +34,13 @@ export function evaluateSalesplayAccess(salesplayInfo, internalSub) {
   const isLive = status === 'trial' || status === 'active'
   const tokensOk = internalSub?.can_use_ai !== false
   const hasAccess = isLive && tokensOk
-  const trialAvailable = status === 'trial' // silently auto-started at onboarding — this just reflects "still in it"
+  // Never subscribed yet — the only state where the "Start free trial" CTA
+  // should show. Once trial/active/expired/cancelled, the trial offer is used up.
+  const trialAvailable = status === 'no_subscription'
 
   let blockReason = null
   if (!hasAccess) {
-    blockReason = (isLive && !tokensOk) ? 'quota_exceeded' : 'trial_expired'
+    blockReason = trialAvailable ? null : (isLive && !tokensOk) ? 'quota_exceeded' : 'trial_expired'
   }
 
   // Paid plan, quota used up: Salesplay's own subscription is still active

@@ -869,10 +869,6 @@ def register(request: Request, req: RegisterRequest):
     log.info("Register attempt", email=req.email)
     user = create_user(req.name, req.email, req.password)
     token = create_token(req.email)
-    try:
-        start_trial(req.email)
-    except Exception as _te:
-        log.warning("Trial start skipped", email=req.email, error=str(_te))
     log.info("User registered", email=req.email)
     locale = user.get("settings", {}).get("locale", {})
     return JSONResponse(status_code=201, content={"token": token, "user": {"name": user["name"], "email": user["email"], "locale": locale}})
@@ -3985,6 +3981,15 @@ def billing_subscribe(request: Request, req: SubscribeRequest, user: dict = Depe
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
     subscribe_to_plan(user["email"], req.plan_id)
+    return {"ok": True}
+
+
+@v1.post("/billing/trial")
+@_limiter.limit(RL_WRITE)
+def billing_start_trial(request: Request, user: dict = Depends(current_user)):
+    """Explicitly start the free trial. Never called implicitly at registration —
+    a subscription only exists once the user picks it on the plan screen."""
+    start_trial(user["email"])
     return {"ok": True}
 
 

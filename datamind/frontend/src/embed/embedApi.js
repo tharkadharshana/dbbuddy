@@ -168,6 +168,11 @@ export const salesplaySubscriptionInfo = (partnerKey, aat) =>
 export const salesplaySubscriptionPayment = (payload) =>
   api.post('/embed/salesplay/subscription/payment', payload).then(r => r.data)
 
+// Explicitly starts the free trial — only called from the plans screen's
+// "Start free trial" button, never implicitly at onboarding.
+export const salesplayStartTrial = () =>
+  api.post('/embed/salesplay/start-trial').then(r => r.data)
+
 // Widget rating (1-5 stars) + optional free-text comment, asked when the user closes the widget.
 export const embedSubmitFeedback = (rating, comment = '') =>
   api.post('/embed/feedback', { rating, comment }).then(r => r.data)

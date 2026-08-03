@@ -891,7 +891,11 @@ def check_ai_limit(user_email: str) -> Tuple[bool, str]:
         tokens_total = sub.get("tokens_total_available", sub.get("tokens_limit", 0))
         tokens_used  = sub.get("tokens_used",  0)
         if tokens_total > 0 and tokens_used >= tokens_total:
-            return False, "You've used all your tokens for this billing period."
+            return False, (
+                "Your tokens for this billing period have expired. "
+                "You can upgrade your package for more, or contact support if you'd "
+                "just like to add extra tokens to your current plan."
+            )
         return True, ""
     except Exception as e:
         log.warning("check_ai_limit failed open", email=user_email, error=str(e))
