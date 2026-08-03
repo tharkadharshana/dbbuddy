@@ -1,0 +1,19 @@
+name: Guard main source branch
+
+# main only ever advances from dev, so the pipeline (VERSION/RELEASE.md/tags)
+# stays consistent. Fails any PR into main whose head isn't dev; wired as a
+# required status check in main's branch protection.
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  check-source:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require PR source to be dev
+        if: github.head_ref != 'dev'
+        run: |
+          echo "::error::PRs into main must come from dev (got '${{ github.head_ref }}')."
+          exit 1
