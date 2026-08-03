@@ -369,7 +369,12 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, c
                   boxShadow: '0 4px 12px rgba(0,88,190,0.35)', marginBottom: 8,
                 }}
               >
-                {checking ? <><Spin /> Checking…</> : 'Check again →'}
+                {/* busy, not checking: setPaidPending(true) renders this branch
+                    while the post-payment confirm is still in flight
+                    (confirmBusy), so keying off `checking` alone flashed the
+                    idle "Check again" for a frame before the parent switched to
+                    chat. It only reads as a retry once everything has settled. */}
+                {busy ? <><Spin /> Checking…</> : 'Check again →'}
               </button>
             </>
           ) : (
