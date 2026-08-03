@@ -179,10 +179,15 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
   function handleChoosePlan(plan, tierIndex) {
     setError('')
     const withTier = { ...plan, _tierIndex: tierIndex }
-    // No card on file — Salesplay's own hosted page collects it. We can't call
-    // /subscriptions/payment without one (confirmed: it errors with no card),
-    // so send them there instead of guessing at a payload that's bound to fail.
-    if (!billingDetailsAdded && cardAddUrl) {
+    // No usable card (is_valid_card_added false) — never reach the payment
+    // screen. Salesplay's own hosted page collects the card; with no
+    // card_add_url to send them to there is nothing we can do but say so,
+    // which beats letting them into a charge that can only fail.
+    if (!billingDetailsAdded) {
+      if (!cardAddUrl) {
+        setError('Add a payment method in Salesplay before subscribing.')
+        return
+      }
       notifyParent('dm:redirect', { url: cardAddUrl })
       window.open(cardAddUrl, '_blank', 'noopener,noreferrer')
       pollForCard(withTier)
@@ -194,6 +199,15 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
   async function handleConfirmSubscribe() {
     const plan = selectedPlan
     if (!plan) return
+    // The one place that charges a card. is_valid_card_added is the only thing
+    // that says a charge can succeed, so re-check it here rather than trusting
+    // that the screen we came from checked — a refresh poll can flip it while
+    // this screen is open.
+    if (!billingDetailsAdded) {
+      setError('Add a payment method in Salesplay before subscribing.')
+      setSelectedPlan(null) // back to the plans list, which offers the card-add route
+      return
+    }
     setError('')
     setConfirmBusy(true)
     try {
