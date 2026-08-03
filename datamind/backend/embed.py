@@ -561,8 +561,13 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
       2. Check if a DataMind account + credentials already exist
       3. If no credentials: create a Salesplay API token (server-to-server)
       4. Create DataMind account if new, or issue JWT for existing account
-      5. Start free trial, connect provider, trigger sync
+      5. Connect provider, trigger sync
       6. Return JWT + sync status
+
+    Does NOT start a trial/subscription — that only happens when the user
+    explicitly picks "Start free trial" on the plans screen (POST
+    /embed/salesplay/start-trial), so reopening the widget never silently
+    grants access nobody asked for.
     """
     _check_rate(_client_ip(request))
 
@@ -671,12 +676,6 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
             log.info("Salesplay onboard: existing user", email=email)
         else:
             raise
-
-    # ── 5. Start trial (non-fatal) ────────────────────────────────────────────
-    try:
-        start_trial(email)
-    except Exception as _te:
-        log.warning("Salesplay onboard: trial start skipped", email=email, error=str(_te))
 
     # ── 5b. Persist locale from Salesplay profile (non-fatal) ─────────────────
     try:
@@ -860,3 +859,12 @@ def salesplay_subscription_payment(request: Request, req: SalesplaySubscriptionP
     except Exception as e:
         log.error("Salesplay proxy: subscription payment failed", error=str(e))
         raise HTTPException(status_code=502, detail="Could not reach Salesplay API. Please try again.")
+
+
+@router.post("/salesplay/start-trial")
+def salesplay_start_trial(user: dict = Depends(current_user)):
+    """Explicitly start the free trial — only called from the plans screen's
+    "Start free trial" button. Never implicit at onboarding, so reopening the
+    widget never silently grants a trial nobody asked for."""
+    start_trial(user["email"])
+    return {"ok": True}

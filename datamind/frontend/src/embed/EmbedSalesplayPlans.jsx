@@ -240,8 +240,20 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
     }
   }
 
+  const [trialBusy, setTrialBusy] = useState(false)
+  async function handleStartTrial() {
+    setError('')
+    setTrialBusy(true)
+    try {
+      await onTrialSelected()
+    } catch (e) {
+      setError(e.response?.data?.detail || e.message || 'Could not start your trial. Please try again.')
+      setTrialBusy(false)
+    }
+  }
+
   const grayedOut = awaitingCard
-  const busy = confirmBusy || checking || awaitingCard
+  const busy = confirmBusy || checking || awaitingCard || trialBusy
 
   return (
     <div style={{
@@ -483,15 +495,15 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
 
                   {showTrial && (
                     <button
-                      onClick={() => onTrialSelected()}
+                      onClick={handleStartTrial}
                       disabled={busy}
                       style={{
                         width: '100%', padding: '11px', borderRadius: 9999, fontSize: 13, fontWeight: 700,
-                        background: SP.blue, color: '#fff', border: 'none', cursor: 'pointer', marginTop: 12,
+                        background: SP.blue, color: '#fff', border: 'none', cursor: busy ? 'not-allowed' : 'pointer', marginTop: 12,
                         boxShadow: '0 4px 12px rgba(0,88,190,0.35)',
                       }}
                     >
-                      Start {trialDays}-day free trial →
+                      {trialBusy ? <><Spin /> Starting…</> : `Start ${trialDays}-day free trial →`}
                     </button>
                   )}
 

@@ -10,7 +10,7 @@
 import React, { useState, useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
 import './embed.css'
-import { embedValidateContext, salesplayGetProfile, salesplayCheckUser, salesplayOnboard, salesplaySubscriptionInfo, embedGetSubscription, embedSubmitFeedback, embedGetFeedbackStatus } from './embedApi'
+import { embedValidateContext, salesplayGetProfile, salesplayCheckUser, salesplayOnboard, salesplaySubscriptionInfo, salesplayStartTrial, embedGetSubscription, embedSubmitFeedback, embedGetFeedbackStatus } from './embedApi'
 import { evaluateSalesplayAccess } from './embedSalesplaySubscription'
 import EmbedOnboarding from './EmbedOnboarding'
 import EmbedChat from './EmbedChat'
@@ -237,16 +237,13 @@ function EmbedApp() {
     localStorage.setItem('dm_embed_token', token)
     if (userData) localStorage.setItem('dm_embed_user', JSON.stringify(userData))
 
-    // Salesplay: show the plans screen once for every brand-new merchant —
-    // informational (their 14-day DataMind trial is already silently active
-    // from onboarding's start_trial() call, so hasAccess is already true and
-    // wouldn't otherwise trigger this screen), and thereafter only when
-    // access is actually blocked. Non-Salesplay embeds are unaffected —
-    // straight to chat, as before.
+    // Salesplay: onboarding no longer starts a trial by itself, so a brand-new
+    // merchant has no subscription yet — checkSalesplayAccess reports
+    // hasAccess: false and this naturally routes to the plans screen.
     if (context?.provider_id === 'salesplay' && aatToken) {
       try {
         const access = await checkSalesplayAccess(partnerKey, aatToken)
-        if (userData?.is_new_user || !access.hasAccess) {
+        if (!access.hasAccess) {
           setSubAccess(access)
           setState('salesplay_plans')
           notifyParent('dm:onboarding_start')
@@ -261,9 +258,10 @@ function EmbedApp() {
     notifyParent('dm:chat_open')
   }
 
-  // Plans screen: user picked the free trial — the DataMind trial already
-  // started during onboarding, so this just unlocks chat, no payment call.
-  function handleTrialSelected() {
+  // Plans screen: user explicitly picked the free trial — start it now, then
+  // unlock chat. Throws on failure so the plans screen surfaces the error.
+  async function handleTrialSelected() {
+    await salesplayStartTrial()
     setState('chat')
     notifyParent('dm:chat_open')
   }
