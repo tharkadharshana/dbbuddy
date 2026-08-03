@@ -1,5 +1,20 @@
 # Branching and releases
 
+## What triggers a build — read this first
+
+**Nothing builds automatically except a `v*` tag pushed to `main`.**
+
+| Action | Builds a zip? |
+|---|---|
+| Push commits to a feature branch | No |
+| PR / merge into `dev` | No |
+| PR / merge into `main` | No |
+| `git push origin v3.2.0` (tag on `main`) | **Yes** — this is the only trigger |
+
+`dev` has no automation attached at all — it exists purely so you can run/test
+merged-together features before they're production-ready. A release only happens
+when you explicitly cut a version and push the tag (see "Cutting a release" below).
+
 ## Branches
 
 | Branch | Role | Cut from | Merges into |
