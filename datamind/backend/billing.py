@@ -623,8 +623,24 @@ def get_user_subscription(user_email: str) -> Dict:
         sub = cur.fetchone()
 
         if not sub:
+            # No live row — either this user never subscribed, or their last
+            # subscription lapsed (expired/cancelled). Those need different
+            # copy client-side ("start your trial" vs "your plan expired"),
+            # so look up the most recent row regardless of status instead of
+            # collapsing both cases into a bare "no_subscription".
+            cur.execute("""
+                SELECT us.status, sp.price_cents
+                FROM user_subscriptions us
+                JOIN subscription_plans sp ON sp.id = us.plan_id
+                WHERE us.user_email = %s
+                ORDER BY us.id DESC
+                LIMIT 1
+            """, (user_email,))
+            last = cur.fetchone()
+            status = last["status"] if last else "no_subscription"
             return {
-                "status": "no_subscription",
+                "status": status,
+                "was_paid_plan": bool(last and last["price_cents"] > 0),
                 "plan_name": None, "plan_id": None, "price_cents": 0,
                 "ai_base_used": 0, "ai_base_limit": 0, "ai_addon_balance": 0, "ai_total_available": 0,
                 "db_base_used": 0, "db_base_limit": 0, "db_addon_balance": 0, "db_total_available": 0,

@@ -70,6 +70,7 @@ const SUPPORT_EMAIL = 'support@datamind.ai'
 
 const REASON_COPY = {
   trial_expired:  (days) => `Your ${days}-day free trial has ended.`,
+  plan_expired:   () => 'Your subscription has expired.',
   quota_exceeded: () => "You've used up your plan's quota.",
 }
 
