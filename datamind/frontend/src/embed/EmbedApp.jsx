@@ -32,6 +32,21 @@ async function checkSalesplayAccess(partnerKey, aat) {
   return evaluateSalesplayAccess(info, sub)
 }
 
+const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+
+// One retry before giving up — a backgrounded tab (e.g. user switches tabs
+// mid-onboarding) can throttle/delay this call enough to fail transiently.
+// Callers must NOT fail open to chat on the remaining error: that skips the
+// plans screen entirely for a merchant who never actually subscribed.
+async function checkSalesplayAccessRetrying(partnerKey, aat) {
+  try {
+    return await checkSalesplayAccess(partnerKey, aat)
+  } catch {
+    await sleep(800)
+    return await checkSalesplayAccess(partnerKey, aat)
+  }
+}
+
 // "Remind me later" cooldown, jittered like App Store / Play Store review
 // prompts so users aren't all re-asked on the same schedule. Whether the user
 // has ever submitted a rating is checked server-side (GET /embed/feedback/status)
@@ -179,7 +194,7 @@ function EmbedApp() {
               // Any user — paid, trial, or unpaid — gets re-checked at the start
               // of every session against Salesplay's own subscription state.
               try {
-                const access = await checkSalesplayAccess(partnerKey, aat)
+                const access = await checkSalesplayAccessRetrying(partnerKey, aat)
                 if (access.hasAccess) {
                   setState('chat')
                   notifyParent('dm:chat_open')
@@ -189,10 +204,13 @@ function EmbedApp() {
                   notifyParent('dm:onboarding_start')
                 }
               } catch {
-                // Subscription check unreachable — fail open so a Salesplay outage
-                // doesn't lock paying merchants out of chat entirely.
-                setState('chat')
-                notifyParent('dm:chat_open')
+                // Still unreachable after a retry — don't fail open to chat,
+                // that would skip the plans screen for a merchant who never
+                // actually subscribed. Show plans with no data; its own
+                // "Continue" button lets them retry the check manually.
+                setSubAccess(null)
+                setState('salesplay_plans')
+                notifyParent('dm:onboarding_start')
               }
             } else {
               // New merchant — show consent screen before doing anything.
@@ -242,15 +260,18 @@ function EmbedApp() {
     // hasAccess: false and this naturally routes to the plans screen.
     if (context?.provider_id === 'salesplay' && aatToken) {
       try {
-        const access = await checkSalesplayAccess(partnerKey, aatToken)
-        if (!access.hasAccess) {
-          setSubAccess(access)
-          setState('salesplay_plans')
-          notifyParent('dm:onboarding_start')
-          return
-        }
+        const access = await checkSalesplayAccessRetrying(partnerKey, aatToken)
+        setSubAccess(access)
+        setState(access.hasAccess ? 'chat' : 'salesplay_plans')
+        notifyParent(access.hasAccess ? 'dm:chat_open' : 'dm:onboarding_start')
+        return
       } catch {
-        // Subscription check unreachable — fail open to chat.
+        // Still unreachable after a retry — don't fail open to chat, same
+        // reasoning as the returning-merchant check above.
+        setSubAccess(null)
+        setState('salesplay_plans')
+        notifyParent('dm:onboarding_start')
+        return
       }
     }
 
