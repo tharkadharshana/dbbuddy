@@ -40,7 +40,19 @@ export function evaluateSalesplayAccess(salesplayInfo, internalSub) {
 
   let blockReason = null
   if (!hasAccess) {
-    blockReason = trialAvailable ? null : (isLive && !tokensOk) ? 'quota_exceeded' : 'trial_expired'
+    // status is 'expired'/'cancelled' only for a merchant who previously had
+    // a subscription (see billing.py's get_user_subscription fallback query)
+    // — was_paid_plan distinguishes a lapsed paid plan from a used-up trial,
+    // which need different copy (never conflate with quota_exceeded, that's
+    // an active plan that's merely used up this cycle, not lapsed).
+    const lapsed = status === 'expired' || status === 'cancelled'
+    blockReason = trialAvailable
+      ? null
+      : (isLive && !tokensOk)
+        ? 'quota_exceeded'
+        : (lapsed && internalSub?.was_paid_plan)
+          ? 'plan_expired'
+          : 'trial_expired'
   }
 
   // Paid plan, quota used up: Salesplay's own subscription is still active

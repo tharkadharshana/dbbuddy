@@ -86,6 +86,22 @@ ADDON_PACKAGES = {
     "db_rows":    {"units_per_pack": 100_000,   "price_cents": 100, "label": "100K DB Rows"},
 }
 
+# Single package now — Starter/Growth/Pro tiers are gone. Every user (trial
+# and paid, $5/mo or $50/yr) gets this one plan: unlimited historical data,
+# every feature, same backend AI-usage cap.
+STANDARD_PLAN = "Standard"
+
+# Backend AI Usage Limit — anti-abuse hard cap, not a plan feature. Roughly
+# USD 1 worth of AI usage tokens. Applies to every user identically; never
+# surfaced to the user as a plan limit (see get_user_subscription callers).
+TOKEN_HARD_CAP = 25_000.0
+
+# No literal "unlimited" sentinel exists in get_plan_history_limit() (see its
+# docstring) — this is the same "big number stands in for unlimited" trick
+# the old Pro tier used (200 months as a stand-in for "since 2010"), just
+# pushed out further since it now has to cover every user, not just Pro.
+UNLIMITED_HISTORY_MONTHS = 1200
+
 # Flat Token cost per operation type (feature compute component).
 # T_total = (llm_tokens / 1000) + (rows_returned / 1000) + FEATURE_COST[op]
 # Minimum charge per operation: 0.1 Tokens.
@@ -382,37 +398,42 @@ def bootstrap_billing_tables():
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """)
 
-        # Seed plans  (name, price_usd, price_cents, ai_credits, db_rows, sort_order)
-        plans = [
-            ("Starter", "5.00",   500,   200,  2_000_000,    1),
-            ("Growth",  "10.00", 1000,   500,  5_000_000,    2),
-            ("Pro",     "25.00", 2500,  2000, 20_000_000,    3),
-        ]
-        for name, price_usd, price_cents, ai_credits, db_rows, sort_order in plans:
-            cur.execute("SELECT id FROM subscription_plans WHERE name = %s", (name,))
-            row = cur.fetchone()
-            if row:
-                cur.execute("""
-                    UPDATE subscription_plans
-                    SET price_usd=%s, price_cents=%s, ai_credits=%s, db_rows=%s,
-                        trial_days=14, validity_days=30, is_active=1, sort_order=%s
-                    WHERE id=%s
-                """, (price_usd, price_cents, ai_credits, db_rows, sort_order, row["id"]))
-            else:
-                cur.execute("""
-                    INSERT INTO subscription_plans
-                        (name, price_usd, price_cents, ai_credits,
-                         db_rows, trial_days, validity_days, is_active, sort_order)
-                    VALUES (%s,%s,%s,%s,%s,14,30,1,%s)
-                """, (name, price_usd, price_cents, ai_credits, db_rows, sort_order))
+        # ── Single package ─────────────────────────────────────────────────────
+        # SalesPlay sells this as $5/month or $50/year per shop — same DataMind
+        # plan, two billing cycles. We don't price it ourselves: SalesPlay's
+        # payment API is the source of truth for what the shop actually pays,
+        # we just activate this plan_id for validity_days=30 (monthly) or 365
+        # (yearly) via subscribe_to_plan's period_days override. price_usd here
+        # is informational only, not what gets charged.
+        #
+        # Everything unlimited: no Starter/Growth/Pro tiers anymore, one
+        # package covers every feature and all historical data.
+        cur.execute("SELECT id FROM subscription_plans WHERE name = %s", (STANDARD_PLAN,))
+        row = cur.fetchone()
+        if row:
+            cur.execute("""
+                UPDATE subscription_plans
+                SET price_usd=%s, price_cents=%s, ai_credits=%s, db_rows=%s,
+                    tokens_limit=%s, trial_days=14, validity_days=30,
+                    is_active=1, sort_order=1
+                WHERE id=%s
+            """, ("5.00", 500, TOKEN_HARD_CAP // 1000, 20_000_000, TOKEN_HARD_CAP, row["id"]))
+        else:
+            cur.execute("""
+                INSERT INTO subscription_plans
+                    (name, price_usd, price_cents, ai_credits, db_rows,
+                     tokens_limit, trial_days, validity_days, is_active, sort_order)
+                VALUES (%s,%s,%s,%s,%s,%s,14,30,1,1)
+            """, (STANDARD_PLAN, "5.00", 500, TOKEN_HARD_CAP // 1000,
+                  20_000_000, TOKEN_HARD_CAP))
 
-        # Seed unified token limits — must match _TOKEN_LIMITS dict below
-        _TOKEN_LIMITS_SEED = {"Starter": 200.0, "Growth": 500.0, "Pro": 2000.0}
-        for _pname, _tlimit in _TOKEN_LIMITS_SEED.items():
-            cur.execute(
-                "UPDATE subscription_plans SET tokens_limit=%s WHERE name=%s",
-                (_tlimit, _pname),
-            )
+        # Retire the old tiers — existing subscribers already on them keep
+        # working (subscription rows join by plan_id, not is_active), new
+        # signups only ever see STANDARD_PLAN via get_subscription_plans().
+        cur.execute("""
+            UPDATE subscription_plans SET is_active=0
+            WHERE name IN ('Starter', 'Growth', 'Pro')
+        """)
 
         conn.commit()
         log.info("Billing tables bootstrapped")
@@ -464,8 +485,12 @@ def _get_period_usage(cur, user_email: str, period_start) -> dict:
 
 # ── Public functions ──────────────────────────────────────────────────────────
 
-def start_trial(user_email: str, plan_name: str = "Starter"):
-    """Start a 14-day trial for a newly registered user. No-op if subscription exists."""
+def start_trial(user_email: str, plan_name: str = STANDARD_PLAN):
+    """Start a 14-day trial for a newly registered user. No-op if subscription exists.
+
+    Trial gets the same STANDARD_PLAN row as paid subscribers — 25,000-token
+    hard cap, unlimited historical data — for the plan's trial_days (14)
+    instead of validity_days."""
     conn = _get_conn()
     conn.autocommit = False
     cur = conn.cursor(dictionary=True)
@@ -623,8 +648,24 @@ def get_user_subscription(user_email: str) -> Dict:
         sub = cur.fetchone()
 
         if not sub:
+            # No live row — either this user never subscribed, or their last
+            # subscription lapsed (expired/cancelled). Those need different
+            # copy client-side ("start your trial" vs "your plan expired"),
+            # so look up the most recent row regardless of status instead of
+            # collapsing both cases into a bare "no_subscription".
+            cur.execute("""
+                SELECT us.status, sp.price_cents
+                FROM user_subscriptions us
+                JOIN subscription_plans sp ON sp.id = us.plan_id
+                WHERE us.user_email = %s
+                ORDER BY us.id DESC
+                LIMIT 1
+            """, (user_email,))
+            last = cur.fetchone()
+            status = last["status"] if last else "no_subscription"
             return {
-                "status": "no_subscription",
+                "status": status,
+                "was_paid_plan": bool(last and last["price_cents"] > 0),
                 "plan_name": None, "plan_id": None, "price_cents": 0,
                 "ai_base_used": 0, "ai_base_limit": 0, "ai_addon_balance": 0, "ai_total_available": 0,
                 "db_base_used": 0, "db_base_limit": 0, "db_addon_balance": 0, "db_total_available": 0,
@@ -696,24 +737,24 @@ def get_user_subscription(user_email: str) -> Dict:
 
 
 # In-memory token limit enforcement — must stay in sync with the bootstrap seed above.
-_TOKEN_LIMITS: dict = {"Starter": 200.0, "Growth": 500.0, "Pro": 2000.0}
+_TOKEN_LIMITS: dict = {STANDARD_PLAN: TOKEN_HARD_CAP}
 
-# Plans that include each gated feature.
+# One plan now, so every gated feature is available to it — kept as a dict
+# (not deleted) so an admin can still restrict a feature per-plan later via
+# the plan_feature_gates table without a code change.
 _PLAN_FEATURE_GATE: dict = {
-    "forecast":          {"Growth", "Pro"},
-    "anomaly_detection": {"Growth", "Pro"},
-    "external_api":      {"Pro"},           # Partner / External API — Pro only
-    "partner_api":       {"Pro"},           # Partner API endpoints — Pro only
-    "web_widget":        {"Pro"},           # Embed iframe widget — Pro only
+    "forecast":          {STANDARD_PLAN},
+    "anomaly_detection": {STANDARD_PLAN},
+    "external_api":      {STANDARD_PLAN},
+    "partner_api":       {STANDARD_PLAN},
+    "web_widget":        {STANDARD_PLAN},
 }
 
 # Data-history window per plan: months to look back, and row fallback when no date column.
-# Pro's 200 months (~16.7yr) is a practical stand-in for "all historical data since 2010" —
-# get_plan_history_limit() only ever produces a concrete cutoff_date, there's no "unlimited" sentinel.
+# get_plan_history_limit() only ever produces a concrete cutoff_date, there's no "unlimited"
+# sentinel — UNLIMITED_HISTORY_MONTHS is the practical stand-in for "all historical data".
 _PLAN_HISTORY: dict = {
-    "Starter": {"months": 3,   "row_limit": 3000},
-    "Growth":  {"months": 12,  "row_limit": 12000},
-    "Pro":     {"months": 200, "row_limit": 50000},
+    STANDARD_PLAN: {"months": UNLIMITED_HISTORY_MONTHS, "row_limit": 50000},
 }
 
 
@@ -859,18 +900,18 @@ def get_plan_history_limit(user_email: str) -> dict:
     # so this hits the in-process cache (no DB round-trip).
     try:
         sub = get_user_subscription(user_email)
-        plan_name = sub.get("plan_name") or "Starter"
+        plan_name = sub.get("plan_name") or STANDARD_PLAN
     except Exception:
-        plan_name = "Starter"
+        plan_name = STANDARD_PLAN
     plan_history = _load_billing_config()["plan_history"]
     limits = plan_history.get(plan_name)
     if limits is None:
         # A plan name with no configured window is a config bug, not a reason to
-        # silently bill someone for Pro and serve them Starter's 3 months — the
-        # ONE fallback, and it is logged. Callers must not add their own `or 3`.
-        log.warning("No history limits configured for plan, falling back to Starter",
+        # silently serve a narrower window than the plan grants — the ONE
+        # fallback, and it is logged. Callers must not add their own `or 3`.
+        log.warning("No history limits configured for plan, falling back to Standard",
                     email=user_email, plan_name=plan_name)
-        limits = plan_history.get("Starter", _PLAN_HISTORY["Starter"])
+        limits = plan_history.get(STANDARD_PLAN, _PLAN_HISTORY[STANDARD_PLAN])
     return {**limits, "plan_name": plan_name,
             "cutoff_date": window_start(limits["months"])}
 
