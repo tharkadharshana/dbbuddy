@@ -92,9 +92,9 @@ ADDON_PACKAGES = {
 STANDARD_PLAN = "Standard"
 
 # Backend AI Usage Limit — anti-abuse hard cap, not a plan feature. Roughly
-# USD 2 worth of AI usage tokens. Applies to every user identically; never
+# USD 1 worth of AI usage tokens. Applies to every user identically; never
 # surfaced to the user as a plan limit (see get_user_subscription callers).
-TOKEN_HARD_CAP = 50_000.0
+TOKEN_HARD_CAP = 25_000.0
 
 # No literal "unlimited" sentinel exists in get_plan_history_limit() (see its
 # docstring) — this is the same "big number stands in for unlimited" trick
@@ -488,7 +488,7 @@ def _get_period_usage(cur, user_email: str, period_start) -> dict:
 def start_trial(user_email: str, plan_name: str = STANDARD_PLAN):
     """Start a 14-day trial for a newly registered user. No-op if subscription exists.
 
-    Trial gets the same STANDARD_PLAN row as paid subscribers — 50,000-token
+    Trial gets the same STANDARD_PLAN row as paid subscribers — 25,000-token
     hard cap, unlimited historical data — for the plan's trial_days (14)
     instead of validity_days."""
     conn = _get_conn()
