@@ -17,6 +17,8 @@ env/
 .env.production
 .env.front.dev
 .env.front.prod
+.env.front.beta
+
 # Frontend prod build config holds no secrets (app name + public URLs) and must be
 # tracked so CI can build the production bundle without any repo secrets.
 !datamind/frontend/.env.production
