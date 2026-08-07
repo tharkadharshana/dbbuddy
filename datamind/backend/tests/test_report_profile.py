@@ -144,12 +144,12 @@ def test_client_omits_filter_key_without_date_range(monkeypatch):
     assert "X-Filter-Key" not in sess.calls[0]["headers"]
 
 
-def test_client_omits_filter_key_when_secret_unset(monkeypatch):
+def test_client_sends_filter_key_via_dev_fallback_when_secret_unset(monkeypatch):
     monkeypatch.delenv("SALESPLAY_SHARED_SECRET", raising=False)
     sess = _FakeSession([_FakeResp(200, {"ok": True})])
     rc_client.ReportAPIClient("t", session=sess).get(
         "/sales_summary", {"start_date": "2026-01-01", "end_date": "2026-01-31"})
-    assert "X-Filter-Key" not in sess.calls[0]["headers"]
+    assert "X-Filter-Key" in sess.calls[0]["headers"]
     assert len(sess.calls) == 1
 
 

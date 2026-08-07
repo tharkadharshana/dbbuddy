@@ -55,7 +55,7 @@ class ReportAPIClient:
         resp = None
         for attempt in range(1, attempts + 1):
             headers = {"Authorization": f"Bearer {self._token}"}
-            if is_date_ranged and os.getenv("SALESPLAY_SHARED_SECRET"):
+            if is_date_ranged:
                 headers["X-Filter-Key"] = build_filter_key()
             resp = self._http.get(
                 url,
