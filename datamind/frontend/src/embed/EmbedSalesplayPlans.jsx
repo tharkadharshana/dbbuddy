@@ -132,11 +132,11 @@ const CARD_POLL_INTERVAL_MS = Number(import.meta.env.VITE_SALESPLAY_CARD_POLL_IN
 const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 
 // ponytail: tier index → DataMind subscription_plans.id/name. Matches the
-// current DB seed (Starter=1, Growth=2, Pro=3, sort_order 1/2/3 — same order
+// current DB seed (Standard=1, Growth=2, Pro=3, sort_order 1/2/3 — same order
 // as ascending price, same order Salesplay's tiers are grouped in above).
 // Revisit if subscription_plans is ever reseeded with different ids/order.
 const TIER_TO_INTERNAL_PLAN_ID = [1, 2, 3]
-const TIER_TO_PLAN_NAME = ['Starter', 'Growth', 'Pro']
+const TIER_TO_PLAN_NAME = ['Standard', 'Growth', 'Pro']
 
 // Salesplay's own product_name ("Access To Unlimited AI POS Data Module
 // Monthly/Yearly") is their internal SKU label, not a name a merchant should
@@ -300,15 +300,22 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
   const busy = confirmBusy || checking || awaitingCard || trialBusy
 
   // What Salesplay actually nets the card for, not the sticker price — any
-  // account credit on file is applied first. Never goes below 0. Computed
-  // from the *_text fields (real currency amounts), not the raw show_price/
+  // account credit on file is applied first. Never goes below 0. Price comes
+  // from the SELECTED plan's own price text, not the subscription-level
+  // show_price_text — confirmed against real API responses that show_price
+  // always mirrors the merchant's MONTHLY tier only, even when a YEARLY plan
+  // is the one being confirmed (5/10/25 monthly vs 50/100/250 yearly never
+  // show up in show_price at all). Only available_credit_text is safe to
+  // read at the subscription level — it's a currency balance, not tied to a
+  // tier. Math runs on *_text amounts, never the raw show_price/
   // available_credit numbers (Salesplay's internal tier code, wrong scale).
-  const priceAmount = parseAmountText(showPriceText)
+  const selectedPriceText = selectedPlan ? planPrice(selectedPlan) : showPriceText
+  const priceAmount = parseAmountText(selectedPriceText)
   const creditAmount = parseAmountText(availableCreditText)
   const hasCredit = creditAmount > 0
   const actualCharge = Math.max(0, priceAmount - creditAmount)
-  const actualChargeText = formatWithCurrencyOf(showPriceText, actualCharge)
-  const creditAmountText = formatWithCurrencyOf(showPriceText, creditAmount)
+  const actualChargeText = formatWithCurrencyOf(selectedPriceText, actualCharge)
+  const creditAmountText = formatWithCurrencyOf(selectedPriceText, creditAmount)
 
   return (
     <div style={{
@@ -418,7 +425,7 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '9px 0', borderBottom: '1px solid rgba(15,23,42,0.06)' }}>
               <span style={{ fontSize: 12, color: SP.text3 }}>Price</span>
               <span style={{ fontSize: 13, fontWeight: 600, color: hasCredit ? SP.text3 : SP.heading, textDecoration: hasCredit ? 'line-through' : 'none' }}>
-                {showPriceText || planPrice(selectedPlan)}
+                {selectedPriceText}
               </span>
             </div>
 
