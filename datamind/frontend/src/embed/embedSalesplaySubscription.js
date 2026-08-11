@@ -30,6 +30,15 @@ export function evaluateSalesplayAccess(salesplayInfo, internalSub) {
   const card = salesplayInfo?.data?.payment_methods
   const cardLabel = card?.payment_method_id ? `${(card.brand || 'card').toUpperCase()} ····${card.last4 || ''}` : null
 
+  // Account credit balance — same subscription object as pricing_plans, sits
+  // alongside it rather than inside it (one balance, applies whichever tier
+  // is picked). *_text carries the real converted currency amount; the raw
+  // available_credit/show_price numbers are Salesplay's internal tier code
+  // (5/10/25), wrong scale for arithmetic — text fields only, parsed at
+  // render time.
+  const availableCreditText = sub?.available_credit_text
+  const showPriceText = sub?.show_price_text
+
   const status = internalSub?.status // 'trial' | 'active' | 'expired' | 'cancelled' | 'no_subscription'
   const isLive = status === 'trial' || status === 'active'
   const tokensOk = internalSub?.can_use_ai !== false
@@ -74,5 +83,7 @@ export function evaluateSalesplayAccess(salesplayInfo, internalSub) {
     billingDetailsAdded,
     cardAddUrl,
     cardLabel,
+    availableCreditText,
+    showPriceText,
   }
 }

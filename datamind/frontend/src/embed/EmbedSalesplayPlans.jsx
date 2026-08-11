@@ -28,6 +28,7 @@ import { salesplaySubscriptionPayment } from './embedApi'
 import { notifyParent } from './EmbedApp'
 import { appName } from './embedBranding'
 import BrandLogo from '../components/Logo'
+import salesplayLogo from '../assets/salesplay-logo.svg'
 
 const SP = {
   bg:        'linear-gradient(180deg, #F0F4F8 0%, #F7F9FB 100%)',
@@ -99,6 +100,24 @@ function planPrice(plan) {
     || String(plan?.show_price ?? plan?.product_price ?? '')
 }
 
+// show_price/available_credit (the raw numbers) are Salesplay's base tier
+// code (5/10/25), NOT the merchant's charged amount — only *_text carries
+// the real converted currency value ("LKR 3,305.97"). Math must run on the
+// text fields; the raw numbers are for other things entirely.
+function parseAmountText(text) {
+  if (typeof text === 'number') return text
+  return Number(String(text || '').replace(/[^0-9.]/g, '')) || 0
+}
+
+// Formats a number using whatever currency label prefixes showPriceText
+// ("LKR 1,659.46" → "LKR"), so the derived "actual charge" line reads in the
+// same currency Salesplay already quoted — we never guess a currency symbol.
+function formatWithCurrencyOf(priceText, amount) {
+  const prefix = String(priceText || '').match(/^[A-Za-z$]+/)?.[0] || ''
+  const formatted = Number(amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  return prefix ? `${prefix} ${formatted}` : formatted
+}
+
 function yearlySavingsPct(tier) {
   if (!tier?.monthly || !tier?.yearly) return null
   const monthlyAnnualized = Number(tier.monthly.product_price) * 12
@@ -131,7 +150,7 @@ function Spin({ color = '#fff' }) {
   return <div style={{ width:13, height:13, border:`2px solid ${color === '#fff' ? 'rgba(255,255,255,0.3)' : 'rgba(0,88,190,0.25)'}`, borderTopColor:color, borderRadius:'50%', animation:'spin 0.7s linear infinite' }} />
 }
 
-export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, trialAvailable, blockReason, isPaidQuotaBlocked, trialDays = 14, billingDetailsAdded, cardAddUrl, cardLabel, onTrialSelected, onSubscribed, onRefreshAccess, onClose }) {
+export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, trialAvailable, blockReason, isPaidQuotaBlocked, trialDays = 14, billingDetailsAdded, cardAddUrl, cardLabel, availableCreditText, showPriceText, onTrialSelected, onSubscribed, onRefreshAccess, onClose }) {
   const [selectedPlan, setSelectedPlan] = useState(null) // { ...plan, _tierIndex } under review on the receipt screen
   const [checking, setChecking] = useState(false) // re-checking access after returning from card_add_url (manual "Continue")
   const [awaitingCard, setAwaitingCard] = useState(false) // polling for a card add — grays out the screen
@@ -280,6 +299,17 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
   const grayedOut = awaitingCard
   const busy = confirmBusy || checking || awaitingCard || trialBusy
 
+  // What Salesplay actually nets the card for, not the sticker price — any
+  // account credit on file is applied first. Never goes below 0. Computed
+  // from the *_text fields (real currency amounts), not the raw show_price/
+  // available_credit numbers (Salesplay's internal tier code, wrong scale).
+  const priceAmount = parseAmountText(showPriceText)
+  const creditAmount = parseAmountText(availableCreditText)
+  const hasCredit = creditAmount > 0
+  const actualCharge = Math.max(0, priceAmount - creditAmount)
+  const actualChargeText = formatWithCurrencyOf(showPriceText, actualCharge)
+  const creditAmountText = formatWithCurrencyOf(showPriceText, creditAmount)
+
   return (
     <div style={{
       height: '100%', overflowY: 'auto', padding: '24px 20px',
@@ -350,18 +380,61 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
             </h2>
           </div>
 
+          {/* Card visual — stands in for the "which card gets charged" line a
+              real checkout shows, branded to Salesplay (the actual payment
+              gateway) instead of a generic Visa/Mastercard mark. */}
+          <div style={{
+            background: `linear-gradient(135deg, ${SP.blueDark} 0%, ${SP.blue} 100%)`,
+            borderRadius: 16, padding: '18px 20px', marginBottom: 12,
+            boxShadow: '0 8px 24px rgba(0,26,66,0.28)', color: '#fff', position: 'relative', overflow: 'hidden',
+          }}>
+            <div style={{
+              position: 'absolute', top: -30, right: -30, width: 120, height: 120,
+              borderRadius: '50%', background: 'rgba(255,255,255,0.06)',
+            }} />
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.08em', color: 'rgba(255,255,255,0.65)' }}>PAYMENT METHOD</span>
+              <div style={{ background: '#fff', borderRadius: 6, padding: '4px 8px', display: 'flex', alignItems: 'center' }}>
+                <img src={salesplayLogo} alt="Salesplay" style={{ height: 14, display: 'block' }} />
+              </div>
+            </div>
+            <div style={{ fontSize: 17, fontWeight: 700, letterSpacing: '.12em', margin: '20px 0 4px' }}>
+              {cardLabel || '···· ···· ···· ····'}
+            </div>
+            <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.7)' }}>{cardLabel ? 'On file with Salesplay' : 'On file'}</div>
+          </div>
+
           <div style={{ background: SP.card, borderRadius: 14, boxShadow: SP.shadow, padding: 16, marginBottom: 16 }}>
             {[
               ['Plan', displayPlanName(selectedPlan._tierIndex, selectedPlan.billing_type)],
               ['Billing', selectedPlan.billing_type === 'YEARLY' ? 'Yearly' : 'Monthly'],
-              ['Card', cardLabel || 'On file'],
-              ['Total', `${planPrice(selectedPlan)} / ${selectedPlan.billing_type === 'YEARLY' ? 'yr' : 'mo'}`],
-            ].map(([k, v], i, arr) => (
-              <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '9px 0', borderBottom: i < arr.length - 1 ? '1px solid rgba(15,23,42,0.06)' : 'none' }}>
+            ].map(([k, v], i) => (
+              <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '9px 0', borderBottom: '1px solid rgba(15,23,42,0.06)' }}>
                 <span style={{ fontSize: 12, color: SP.text3 }}>{k}</span>
                 <span style={{ fontSize: 13, fontWeight: 600, color: SP.heading }}>{v}</span>
               </div>
             ))}
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '9px 0', borderBottom: '1px solid rgba(15,23,42,0.06)' }}>
+              <span style={{ fontSize: 12, color: SP.text3 }}>Price</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: hasCredit ? SP.text3 : SP.heading, textDecoration: hasCredit ? 'line-through' : 'none' }}>
+                {showPriceText || planPrice(selectedPlan)}
+              </span>
+            </div>
+
+            {/* Always shown, even at zero — a bill should never hide a line
+                item, it should say "you have none" rather than say nothing. */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '9px 0', borderBottom: '1px dashed rgba(15,23,42,0.12)' }}>
+              <span style={{ fontSize: 12, color: hasCredit ? SP.green : SP.text3 }}>Available credit</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: hasCredit ? SP.green : SP.text3 }}>
+                {hasCredit ? `− ${creditAmountText}` : creditAmountText}
+              </span>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 0 0' }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: SP.heading }}>Charged today</span>
+              <span style={{ fontSize: 18, fontWeight: 800, color: SP.blue }}>{actualChargeText}</span>
+            </div>
           </div>
 
           {paidPending ? (
