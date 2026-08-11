@@ -359,8 +359,10 @@ def bootstrap_billing_tables():
         """)
         for _plan_name, _limits in _PLAN_HISTORY.items():
             cur.execute("""
-                INSERT IGNORE INTO plan_history_limits (plan_name, history_months, row_limit)
+                INSERT INTO plan_history_limits (plan_name, history_months, row_limit)
                 VALUES (%s, %s, %s)
+                ON DUPLICATE KEY UPDATE history_months = VALUES(history_months),
+                                        row_limit = VALUES(row_limit)
             """, (_plan_name, _limits["months"], _limits["row_limit"]))
 
         cur.execute("""
