@@ -789,9 +789,12 @@ def salesplay_subscription_info(request: Request, partner_key: str, aat: str, us
     from it), but access itself is decided from DataMind's OWN billing
     (trial days, tokens — see GET /billing/subscription) — Salesplay is the
     payment gateway, not the source of truth for what the user can do here.
-    The one thing we do sync down from Salesplay: is_expired=1 means their
-    subscription is no longer valid (failed renewal, refund, chargeback) —
-    cancel our internal one immediately regardless of our own period_end.
+    The one thing we do sync down from Salesplay: is_expired=1, or
+    subscribe_status=0, means their subscription is no longer valid (failed
+    renewal, refund, chargeback, cancelled) — cancel our internal one
+    immediately regardless of our own period_end. activation_status is NOT
+    checked (Salesplay-confirmed: was laggy after payment, no longer relied
+    on for anything).
     """
     _salesplay_guard(partner_key, request)
     url = f"{_SALESPLAY_SUBSCRIPTION_BASE}/subscriptions/get_ai_pos_info"
@@ -809,7 +812,7 @@ def salesplay_subscription_info(request: Request, partner_key: str, aat: str, us
             raise HTTPException(status_code=502, detail=_salesplay_error(resp, "Could not reach Salesplay API. Please try again."))
         data = resp.json()
         sub = (data.get("data") or {}).get("subscription") or []
-        if sub and sub[0].get("is_expired") == 1:
+        if sub and (sub[0].get("is_expired") == 1 or sub[0].get("subscribe_status") == 0):
             try:
                 cancel_subscription(user["email"])
             except Exception as e:
