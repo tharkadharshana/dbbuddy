@@ -120,3 +120,31 @@ html.dm-collapsed, body.dm-collapsed, body.dm-collapsed #embed-root {
 .dm-scroll-hidden::-webkit-scrollbar {
   display: none;
 }
+
+/* ── Payment success checkmark (Salesplay plans receipt) ────────────────────── */
+@keyframes dmSuccessCircle {
+  from { stroke-dashoffset: 74; }
+  to   { stroke-dashoffset: 0;  }
+}
+@keyframes dmSuccessCheck {
+  from { stroke-dashoffset: 24; }
+  to   { stroke-dashoffset: 0;  }
+}
+@keyframes dmSuccessPop {
+  0%   { transform: scale(0.8); opacity: 0; }
+  60%  { transform: scale(1.05); opacity: 1; }
+  100% { transform: scale(1); }
+}
+.dm-success-circle {
+  stroke-dasharray: 74;
+  stroke-dashoffset: 74;
+  animation: dmSuccessCircle .5s ease-out forwards;
+}
+.dm-success-check {
+  stroke-dasharray: 24;
+  stroke-dashoffset: 24;
+  animation: dmSuccessCheck .35s ease-out .45s forwards;
+}
+.dm-success-wrap {
+  animation: dmSuccessPop .4s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
