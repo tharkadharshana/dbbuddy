@@ -39,14 +39,20 @@ function snoozeFeedback() {
 // the <iframe> element. See docs/SALESPLAY_EMBED.md.
 const SIZE_COLLAPSED = { width: 320, height: 64 }
 
-// Cap expanded width at the device screen width so the iframe doesn't overflow
-// on narrow phones (e.g. 375px iPhone). window.screen.width is the physical
-// device width, not the iframe viewport width, so it's readable here.
+// Cap expanded width/height at the device screen size so the iframe doesn't
+// overflow on narrow phones or short tablet viewports. window.screen is the
+// physical device size, not the iframe viewport, so it's readable here.
+// Height matters too: the panel is anchored `bottom:24px` fixed, so an
+// uncapped 680px height pushes its top edge above short viewports (tablets
+// in landscape), cropping the close button under the browser chrome.
 function getExpandedSize() {
   const sw = typeof window !== 'undefined' && window.screen?.width > 0
     ? window.screen.width
     : 420
-  return { width: Math.min(420, sw - 16), height: 680 }
+  const sh = typeof window !== 'undefined' && window.screen?.height > 0
+    ? window.screen.height
+    : 680
+  return { width: Math.min(420, sw - 16), height: Math.min(680, sh - 48) }
 }
 
 // ── postMessage helper ────────────────────────────────────────────────────────
