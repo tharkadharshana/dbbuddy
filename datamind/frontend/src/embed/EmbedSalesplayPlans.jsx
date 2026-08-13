@@ -442,7 +442,9 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
           <div style={{ background: SP.card, borderRadius: 14, boxShadow: SP.shadow, padding: 16, marginBottom: 16 }}>
             {[
               ['Plan', displayPlanName(selectedPlan._tierIndex, selectedPlan.billing_type)],
-              ['Billing', `${selectedPlan.billing_type === 'YEARLY' ? 'Yearly' : 'Monthly'}${previewProduct?.activation_period ? ` (${previewProduct.activation_period})` : ''}`],
+              ['Billing', previewProduct?.product_price
+                ? `${previewProduct.product_price} /${selectedPlan.billing_type === 'YEARLY' ? 'year' : 'month'} per shop`
+                : `${selectedPlan.billing_type === 'YEARLY' ? 'Yearly' : 'Monthly'}${previewProduct?.activation_period ? ` (${previewProduct.activation_period})` : ''}`],
             ].map(([k, v], i) => (
               <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '9px 0', borderBottom: '1px solid rgba(15,23,42,0.06)' }}>
                 <span style={{ fontSize: 12, color: SP.text3 }}>{k}</span>
@@ -460,7 +462,9 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '9px 0', borderBottom: '1px solid rgba(15,23,42,0.06)' }}>
                   <span style={{ fontSize: 12, color: SP.text3 }}>Price</span>
                   <span style={{ fontSize: 13, fontWeight: 600, color: hasCredit ? SP.text3 : SP.heading, textDecoration: hasCredit ? 'line-through' : 'none' }}>
-                    {selectedPriceText}
+                    {previewProduct?.product_price && previewProduct?.product_qty
+                      ? `${previewProduct.product_price} x ${previewProduct.product_qty} = ${selectedPriceText}`
+                      : selectedPriceText}
                   </span>
                 </div>
 
