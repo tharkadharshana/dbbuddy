@@ -1,6 +1,5 @@
 """
 embed.py
-========
 Partner embed integration for DataMind AI.
 
 Provides:
@@ -903,6 +902,54 @@ def salesplay_subscription_payment(request: Request, req: SalesplaySubscriptionP
         raise
     except Exception as e:
         log.error("Salesplay proxy: subscription payment failed", error=str(e))
+        raise HTTPException(status_code=502, detail="Could not reach Salesplay API. Please try again.")
+
+
+class SalesplaySubscriptionPreviewRequest(BaseModel):
+    partner_key: str
+    aat: str
+    subscription_type: int
+    product_code: str
+    activation_value_data: list = Field(default_factory=list)
+    product_type: Optional[str] = None
+    coupon_code_verified: int = 0
+    coupon_code: str = ""
+
+
+@router.post("/salesplay/subscription/preview")
+def salesplay_subscription_preview(request: Request, req: SalesplaySubscriptionPreviewRequest, user: dict = Depends(current_user)):
+    """
+    Proxy: POST {base}/subscriptions/order/preview
+    Returns Salesplay's real, already-formatted pricing (product_price ×
+    qty, credits, amount due) for the receipt screen — forwarded verbatim.
+    The frontend must never recompute or reformat these currency strings
+    itself; this endpoint is the only source for what gets shown/charged.
+    """
+    _salesplay_guard(req.partner_key, request)
+    body = req.dict(exclude={"partner_key", "aat"}, exclude_none=True)
+    url = f"{_SALESPLAY_SUBSCRIPTION_BASE}/subscriptions/order/preview"
+    log.debug("Salesplay subscription API request", method="POST", url=url, body=body)
+    try:
+        resp = _http.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {req.aat.strip()}",
+                "Content-Type":  "application/json",
+            },
+            json=body,
+            timeout=_PROXY_TIMEOUT,
+        )
+        log.debug("Salesplay subscription API response", url=url, status=resp.status_code, raw_body=resp.text)
+        if resp.status_code == 401:
+            raise HTTPException(status_code=401, detail="Salesplay session expired. Please refresh the page.")
+        try:
+            return resp.json()
+        except ValueError:
+            raise HTTPException(status_code=502, detail=_salesplay_error(resp, "Could not load order preview. Please try again."))
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("Salesplay proxy: subscription preview fetch failed", error=str(e))
         raise HTTPException(status_code=502, detail="Could not reach Salesplay API. Please try again.")
 
 

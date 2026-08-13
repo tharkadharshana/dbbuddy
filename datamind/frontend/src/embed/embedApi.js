@@ -168,6 +168,11 @@ export const salesplaySubscriptionInfo = (partnerKey, aat) =>
 export const salesplaySubscriptionPayment = (payload) =>
   api.post('/embed/salesplay/subscription/payment', payload).then(r => r.data)
 
+// Real, pre-formatted pricing for the receipt screen (price × qty, credits,
+// amount due) — never recompute these currency strings client-side.
+export const salesplaySubscriptionPreview = (payload) =>
+  api.post('/embed/salesplay/subscription/preview', payload).then(r => r.data)
+
 // Explicitly starts the free trial — only called from the plans screen's
 // "Start free trial" button, never implicitly at onboarding.
 export const salesplayStartTrial = () =>

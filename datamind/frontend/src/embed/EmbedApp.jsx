@@ -429,6 +429,8 @@ function EmbedApp() {
         billingDetailsAdded={!!subAccess?.billingDetailsAdded}
         cardAddUrl={subAccess?.cardAddUrl}
         cardLabel={subAccess?.cardLabel}
+        availableCreditText={subAccess?.availableCreditText}
+        showPriceText={subAccess?.showPriceText}
         onTrialSelected={handleTrialSelected}
         onSubscribed={handlePlanSubscribed}
         onRefreshAccess={handleRefreshAccess}

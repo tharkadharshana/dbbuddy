@@ -600,7 +600,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
 
                 {/* Stats */}
                 <div style={{ display:'flex', justifyContent:'center', gap:16, fontSize:12, color:'var(--text2)', marginBottom:20 }}>
-                  {rows > 0 && <span>{rows.toLocaleString()} records synced</span>}
+                  {rows > 0 && <span>Syncing data</span>}
                   {etaStr  && <span>{etaStr}</span>}
                   {pct > 0 && <span>{pct}%</span>}
                 </div>

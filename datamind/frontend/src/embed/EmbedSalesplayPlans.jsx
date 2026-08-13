@@ -24,10 +24,11 @@
  * (never re-runs the charge) rather than silently retrying forever.
  */
 import React, { useState, useRef, useEffect } from 'react'
-import { salesplaySubscriptionPayment } from './embedApi'
+import { salesplaySubscriptionPayment, salesplaySubscriptionPreview } from './embedApi'
 import { notifyParent } from './EmbedApp'
 import { appName } from './embedBranding'
 import BrandLogo from '../components/Logo'
+import salesplayLogo from '../assets/salesplay-logo.svg'
 
 const SP = {
   bg:        'linear-gradient(180deg, #F0F4F8 0%, #F7F9FB 100%)',
@@ -99,6 +100,15 @@ function planPrice(plan) {
     || String(plan?.show_price ?? plan?.product_price ?? '')
 }
 
+// show_price/available_credit (the raw numbers) are Salesplay's base tier
+// code (5/10/25), NOT the merchant's charged amount — only *_text carries
+// the real converted currency value ("LKR 3,305.97"). Math must run on the
+// text fields; the raw numbers are for other things entirely.
+function parseAmountText(text) {
+  if (typeof text === 'number') return text
+  return Number(String(text || '').replace(/[^0-9.]/g, '')) || 0
+}
+
 function yearlySavingsPct(tier) {
   if (!tier?.monthly || !tier?.yearly) return null
   const monthlyAnnualized = Number(tier.monthly.product_price) * 12
@@ -113,11 +123,11 @@ const CARD_POLL_INTERVAL_MS = Number(import.meta.env.VITE_SALESPLAY_CARD_POLL_IN
 const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 
 // ponytail: tier index → DataMind subscription_plans.id/name. Matches the
-// current DB seed (Starter=1, Growth=2, Pro=3, sort_order 1/2/3 — same order
+// current DB seed (Standard=1, Growth=2, Pro=3, sort_order 1/2/3 — same order
 // as ascending price, same order Salesplay's tiers are grouped in above).
 // Revisit if subscription_plans is ever reseeded with different ids/order.
 const TIER_TO_INTERNAL_PLAN_ID = [1, 2, 3]
-const TIER_TO_PLAN_NAME = ['Starter', 'Growth', 'Pro']
+const TIER_TO_PLAN_NAME = ['Standard', 'Growth', 'Pro']
 
 // Salesplay's own product_name ("Access To Unlimited AI POS Data Module
 // Monthly/Yearly") is their internal SKU label, not a name a merchant should
@@ -131,7 +141,7 @@ function Spin({ color = '#fff' }) {
   return <div style={{ width:13, height:13, border:`2px solid ${color === '#fff' ? 'rgba(255,255,255,0.3)' : 'rgba(0,88,190,0.25)'}`, borderTopColor:color, borderRadius:'50%', animation:'spin 0.7s linear infinite' }} />
 }
 
-export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, trialAvailable, blockReason, isPaidQuotaBlocked, trialDays = 14, billingDetailsAdded, cardAddUrl, cardLabel, onTrialSelected, onSubscribed, onRefreshAccess, onClose }) {
+export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, trialAvailable, blockReason, isPaidQuotaBlocked, trialDays = 14, billingDetailsAdded, cardAddUrl, cardLabel, availableCreditText, showPriceText, onTrialSelected, onSubscribed, onRefreshAccess, onClose }) {
   const [selectedPlan, setSelectedPlan] = useState(null) // { ...plan, _tierIndex } under review on the receipt screen
   const [checking, setChecking] = useState(false) // re-checking access after returning from card_add_url (manual "Continue")
   const [awaitingCard, setAwaitingCard] = useState(false) // polling for a card add — grays out the screen
@@ -139,10 +149,45 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
   const [paidPending, setPaidPending] = useState(false) // charge succeeded — blocks re-paying even if the confirm check below fails
   const [billingCycle, setBillingCycle] = useState('MONTHLY') // global toggle — one cycle for all 3 tiers
   const [error, setError] = useState('')
+  const [preview, setPreview] = useState(null) // raw order/preview response for the selected plan
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [paymentSuccess, setPaymentSuccess] = useState(false) // charge confirmed — shows the checkmark before handing off to chat
   const appNm = appName(context)
   const cardPollActive = useRef(false)
 
   useEffect(() => () => { cardPollActive.current = false }, []) // stop polling on unmount
+
+  // Real per-order pricing (product_price × qty, credits, amount due) for
+  // whichever plan is on the receipt screen. Salesplay's own numbers, shown
+  // verbatim — see the Price/Charged-today rendering below for why we never
+  // parse or reformat these.
+  useEffect(() => {
+    if (!selectedPlan) { setPreview(null); return }
+    let cancelled = false
+    setPreview(null)
+    setPreviewLoading(true)
+    setError('')
+    salesplaySubscriptionPreview({
+      partner_key: partnerKey,
+      aat,
+      subscription_type: Number(selectedPlan.subscription_type),
+      product_code: selectedPlan.product_code,
+      product_type: 'ADDON',
+      coupon_code_verified: 0,
+      coupon_code: '',
+    })
+      .then(res => {
+        if (cancelled) return
+        if (res?.status === 'success') setPreview(res.data)
+        else setError(res?.message || 'Could not load pricing. Please try again.')
+      })
+      .catch(e => {
+        if (cancelled) return
+        setError(e.response?.data?.detail || e.message || 'Could not load pricing. Please try again.')
+      })
+      .finally(() => { if (!cancelled) setPreviewLoading(false) })
+    return () => { cancelled = true }
+  }, [selectedPlan])
 
   const tiers = groupPlansByTier(plans)
   // Fallback for unexpected data shapes (e.g. only one cycle configured) —
@@ -240,12 +285,16 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
 
       // Charge went through and the backend already activated our plan in
       // this same request — never re-pay from here again regardless of what
-      // happens next. A single re-check should confirm it immediately; if it
-      // somehow doesn't (real inconsistency, not lag), fall back to a manual
-      // "Check again" rather than a blind retry loop.
+      // happens next. Show the success checkmark first (the activation is
+      // already done by now), then hand off to chat — the re-check below is
+      // just confirming what's already true, not waiting on anything.
       setPaidPending(true)
+      setConfirmBusy(false)
+      setPaymentSuccess(true)
+      await sleep(1400)
       await onSubscribed() // parent switches to 'chat' on success
     } catch (e) {
+      setPaymentSuccess(false)
       setConfirmBusy(false)
       setError(e.response?.data?.detail || e.message || 'Payment succeeded but activation could not be confirmed yet.')
     }
@@ -278,7 +327,23 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
   }
 
   const grayedOut = awaitingCard
-  const busy = confirmBusy || checking || awaitingCard || trialBusy
+  const busy = confirmBusy || checking || awaitingCard || trialBusy || paymentSuccess
+
+  // Price and Charged-today come straight from /subscriptions/order/preview
+  // (data.invoiceTotal, data.invoice_amount_due_format) — Salesplay's own
+  // already-formatted, already-computed currency strings, shown verbatim.
+  // Never parsed or re-derived: that's real money, and the preview call is
+  // the one place Salesplay tells us exactly what a card will be charged for
+  // this specific plan/qty, ahead of the actual payment call.
+  const previewProduct = preview?.productData?.[0]
+  const selectedPriceText = preview?.invoiceTotal || (selectedPlan ? planPrice(selectedPlan) : showPriceText)
+  const actualChargeText = preview?.invoice_amount_due_format || selectedPriceText
+  // Available credit: unchanged from before — subscription-level balance,
+  // not sourced from the preview call. hasCredit only drives display styling
+  // (strikethrough/green), the credit amount text itself is availableCreditText as-is.
+  const creditAmount = parseAmountText(availableCreditText)
+  const hasCredit = creditAmount > 0
+  const creditAmountText = availableCreditText
 
   return (
     <div style={{
@@ -350,21 +415,88 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
             </h2>
           </div>
 
+          {/* Card visual — stands in for the "which card gets charged" line a
+              real checkout shows, branded to Salesplay (the actual payment
+              gateway) instead of a generic Visa/Mastercard mark. */}
+          <div style={{
+            background: `linear-gradient(135deg, ${SP.blueDark} 0%, ${SP.blue} 100%)`,
+            borderRadius: 16, padding: '18px 20px', marginBottom: 12,
+            boxShadow: '0 8px 24px rgba(0,26,66,0.28)', color: '#fff', position: 'relative', overflow: 'hidden',
+          }}>
+            <div style={{
+              position: 'absolute', top: -30, right: -30, width: 120, height: 120,
+              borderRadius: '50%', background: 'rgba(255,255,255,0.06)',
+            }} />
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.08em', color: 'rgba(255,255,255,0.65)' }}>PAYMENT METHOD</span>
+              <div style={{ background: '#fff', borderRadius: 6, padding: '4px 8px', display: 'flex', alignItems: 'center' }}>
+                <img src={salesplayLogo} alt="Salesplay" style={{ height: 14, display: 'block' }} />
+              </div>
+            </div>
+            <div style={{ fontSize: 17, fontWeight: 700, letterSpacing: '.12em', margin: '20px 0 4px' }}>
+              {cardLabel || '···· ···· ···· ····'}
+            </div>
+            <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.7)' }}>{cardLabel ? 'On file with Salesplay' : 'On file'}</div>
+          </div>
+
           <div style={{ background: SP.card, borderRadius: 14, boxShadow: SP.shadow, padding: 16, marginBottom: 16 }}>
             {[
               ['Plan', displayPlanName(selectedPlan._tierIndex, selectedPlan.billing_type)],
-              ['Billing', selectedPlan.billing_type === 'YEARLY' ? 'Yearly' : 'Monthly'],
-              ['Card', cardLabel || 'On file'],
-              ['Total', `${planPrice(selectedPlan)} / ${selectedPlan.billing_type === 'YEARLY' ? 'yr' : 'mo'}`],
-            ].map(([k, v], i, arr) => (
-              <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '9px 0', borderBottom: i < arr.length - 1 ? '1px solid rgba(15,23,42,0.06)' : 'none' }}>
+              ['Billing', previewProduct?.product_price
+                ? `${previewProduct.product_price} /${selectedPlan.billing_type === 'YEARLY' ? 'year' : 'month'} per shop`
+                : `${selectedPlan.billing_type === 'YEARLY' ? 'Yearly' : 'Monthly'}${previewProduct?.activation_period ? ` (${previewProduct.activation_period})` : ''}`],
+            ].map(([k, v], i) => (
+              <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '9px 0', borderBottom: '1px solid rgba(15,23,42,0.06)' }}>
                 <span style={{ fontSize: 12, color: SP.text3 }}>{k}</span>
                 <span style={{ fontSize: 13, fontWeight: 600, color: SP.heading }}>{v}</span>
               </div>
             ))}
+
+            {previewLoading ? (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '20px 0' }}>
+                <Spin color={SP.blue} />
+                <span style={{ fontSize: 12, color: SP.text3 }}>Loading pricing…</span>
+              </div>
+            ) : (
+              <>
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '9px 0', borderBottom: '1px solid rgba(15,23,42,0.06)' }}>
+                  <span style={{ fontSize: 12, color: SP.text3 }}>Price</span>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: hasCredit ? SP.text3 : SP.heading, textDecoration: hasCredit ? 'line-through' : 'none' }}>
+                    {previewProduct?.product_price && previewProduct?.product_qty
+                      ? `${previewProduct.product_price} x ${previewProduct.product_qty} = ${selectedPriceText}`
+                      : selectedPriceText}
+                  </span>
+                </div>
+
+                {/* Always shown, even at zero — a bill should never hide a line
+                    item, it should say "you have none" rather than say nothing. */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '9px 0', borderBottom: '1px dashed rgba(15,23,42,0.12)' }}>
+                  <span style={{ fontSize: 12, color: hasCredit ? SP.green : SP.text3 }}>Available credit</span>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: hasCredit ? SP.green : SP.text3 }}>
+                    {hasCredit ? `− ${creditAmountText}` : creditAmountText}
+                  </span>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 0 0' }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: SP.heading }}>Charged today</span>
+                  <span style={{ fontSize: 18, fontWeight: 800, color: SP.blue }}>{actualChargeText}</span>
+                </div>
+              </>
+            )}
           </div>
 
-          {paidPending ? (
+          {paymentSuccess ? (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '10px 0 4px' }}>
+              <div className="dm-success-wrap" style={{ marginBottom: 10 }}>
+                <svg width="56" height="56" viewBox="0 0 56 56" fill="none">
+                  <circle cx="28" cy="28" r="24" className="dm-success-circle" stroke={SP.green} strokeWidth="3" fill="rgba(0,105,71,0.06)" />
+                  <path d="M18 28.5 24.5 35 38 21" className="dm-success-check" stroke={SP.green} strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                </svg>
+              </div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: SP.heading }}>Payment successful</div>
+              <div style={{ fontSize: 12, color: SP.text3, marginTop: 2 }}>Taking you to chat…</div>
+            </div>
+          ) : paidPending ? (
             // Charge already went through — this only re-checks, never re-pays.
             <>
               <div style={{ fontSize: 12, color: SP.text3, textAlign: 'center', marginBottom: 10 }}>
@@ -392,10 +524,11 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
             <>
               <button
                 onClick={handleConfirmSubscribe}
-                disabled={busy}
+                disabled={busy || previewLoading || !preview}
                 style={{
                   width: '100%', padding: '12px', borderRadius: 9999, fontSize: 13, fontWeight: 700,
-                  background: SP.blue, color: '#fff', border: 'none', cursor: busy ? 'not-allowed' : 'pointer',
+                  background: SP.blue, color: '#fff', border: 'none',
+                  cursor: (busy || previewLoading || !preview) ? 'not-allowed' : 'pointer',
                   display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
                   boxShadow: '0 4px 12px rgba(0,88,190,0.35)', marginBottom: 8,
                 }}
