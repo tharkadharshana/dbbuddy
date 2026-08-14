@@ -24,6 +24,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import mysql.connector
+from embed import SALESPLAY_BRANDING
 
 PARTNERS = [
     {
@@ -33,10 +34,7 @@ PARTNERS = [
             "SALESPLAY_EMBED_ORIGINS",
             "https://app.salesplay.io,https://backoffice.salesplay.io",
         ),
-        "branding": {
-            "accent_color": "#f59e0b",
-            "product_name": "Ask Your Salesplay Data",
-        },
+        "branding": SALESPLAY_BRANDING,
         "key_prefix": "sp_live_",
     },
     {

@@ -20,7 +20,7 @@ export function appName(context) {
 
 /**
  * productTitle — the widget header title. A partner may override it with a
- * branded phrase (branding.product_name, e.g. "Ask Your Salesplay Data");
+ * branded phrase (branding.product_name, e.g. "SalesPlay AI");
  * otherwise it falls back to the app name.
  */
 export function productTitle(context) {
