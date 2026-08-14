@@ -120,6 +120,7 @@ function EmbedApp() {
   const [errorMsg, setError]    = useState('')
   const [aatToken, setAatToken] = useState('')
   const [subAccess, setSubAccess] = useState(null) // { hasAccess, trialAvailable, blockReason, plans }
+  const [plansStartExpanded, setPlansStartExpanded] = useState(false) // consent screen's "Explore plans" was clicked — land on salesplay_plans already expanded
 
   const layoutBar = params.get('layout') === 'bar'
   const [expanded, setExpanded]         = useState(!layoutBar)
@@ -260,6 +261,8 @@ function EmbedApp() {
   async function handleOnboardingComplete(token, userData) {
     localStorage.setItem('dm_embed_token', token)
     if (userData) localStorage.setItem('dm_embed_user', JSON.stringify(userData))
+    const intent = userData?.embed_intent // 'trial' | 'explore' — which consent-screen button was clicked
+    setPlansStartExpanded(intent === 'explore')
 
     // Salesplay: onboarding no longer starts a trial by itself, so a brand-new
     // merchant has no subscription yet — checkSalesplayAccess reports
@@ -267,6 +270,18 @@ function EmbedApp() {
     if (context?.provider_id === 'salesplay' && aatToken) {
       try {
         const access = await checkSalesplayAccessRetrying(partnerKey, aatToken)
+
+        // "Start Free Trial" was clicked — start it now and skip the plans
+        // screen entirely, straight into chat. Falls through to the normal
+        // plans-screen routing below if the trial can't be started for some
+        // reason (already active, unreachable, etc).
+        if (!access.hasAccess && intent === 'trial' && access.trialAvailable) {
+          try {
+            await handleTrialSelected()
+            return
+          } catch { /* fall through to plans screen so the user can retry there */ }
+        }
+
         setSubAccess(access)
         setState(access.hasAccess ? 'chat' : 'salesplay_plans')
         notifyParent(access.hasAccess ? 'dm:chat_open' : 'dm:onboarding_start')
@@ -437,6 +452,7 @@ function EmbedApp() {
         cardLabel={subAccess?.cardLabel}
         availableCreditText={subAccess?.availableCreditText}
         showPriceText={subAccess?.showPriceText}
+        initialExpanded={plansStartExpanded}
         onTrialSelected={handleTrialSelected}
         onSubscribed={handlePlanSubscribed}
         onRefreshAccess={handleRefreshAccess}

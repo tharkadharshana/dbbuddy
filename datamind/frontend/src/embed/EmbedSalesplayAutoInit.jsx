@@ -11,11 +11,13 @@
  *   sync     → first-time workspace setup with progress bar (auto)
  *   error    → something went wrong, with retry
  */
-import React, { useState, useEffect } from 'react'
-import { salesplayOnboard, embedGetProviderStatus, embedGetPlans } from './embedApi'
+import React, { useState, useEffect, useRef } from 'react'
+import { salesplayOnboard, embedGetProviderStatus, embedGetPlans, salesplaySubscriptionInfo } from './embedApi'
 import { notifyParent } from './EmbedApp'
 import { appName, productTitle as resolveProductTitle } from './embedBranding'
 import BrandLogo from '../components/Logo'
+import salesplayAiLogo from '../assets/salesplay-ai-logo.svg'
+import { TIER_FEATURES, groupPlansByTier, planPrice, yearlySavingsPct, displayPlanName } from './embedSalesplayPlanFormat'
 
 // ── SalesPlay visual language (mirrors EmbedChat's isSalesplay branch) ───────
 const SP = {
@@ -146,6 +148,35 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
   const [plans, setPlans]       = useState([])
   const [selectedPlan, setSelectedPlan] = useState(null)
 
+  // Real Salesplay pricing preview — shown when "Explore plans" is expanded,
+  // fetched pre-account (aat alone is enough for /subscription/info; no
+  // DataMind account needed just to look at prices).
+  const [spExpanded, setSpExpanded]       = useState(false)
+  const [spCycle, setSpCycle]             = useState('MONTHLY')
+  const [spTiers, setSpTiers]             = useState(null) // null = not fetched yet
+  const [spPreviewLoading, setSpPreviewLoading] = useState(false)
+  const [spPreviewError, setSpPreviewError]     = useState('')
+  const scrollRef = useRef(null) // outer scroll container
+  const boxRef     = useRef(null) // CTA + explore-plans box
+
+  // Auto-scroll so the expanding/collapsing box is always in view — no
+  // manual scrolling needed. Timed to the accordion's own transition
+  // (.35s ease, see the grid-template-rows div below) rather than firing
+  // immediately, so it doesn't scroll to a height the box hasn't reached yet.
+  useEffect(() => {
+    const el = scrollRef.current
+    const box = boxRef.current
+    if (!el || !box) return
+    const t = setTimeout(() => {
+      if (spExpanded) {
+        el.scrollTo({ top: box.offsetTop + box.offsetHeight - el.clientHeight, behavior: 'smooth' })
+      } else {
+        el.scrollTo({ top: 0, behavior: 'smooth' })
+      }
+    }, 350)
+    return () => clearTimeout(t)
+  }, [spExpanded])
+
   // Load subscription plans for the consent screen pricing section.
   // Non-fatal — if this fails, the consent screen still renders without pricing.
   useEffect(() => {
@@ -169,8 +200,39 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
   const appNm         = appName(context)
   const providerName  = context?.partner_name || 'Salesplay'
 
-  // Called when the user clicks "Accept & Connect"
-  async function handleAccept() {
+  // "Explore plans" toggle — pure preview, no account created. Fetches once
+  // on first expand, then just toggles open/closed.
+  async function handleToggleExplore() {
+    if (spExpanded) { setSpExpanded(false); return }
+    setSpExpanded(true)
+    if (spTiers !== null || spPreviewLoading) return
+    setSpPreviewLoading(true)
+    setSpPreviewError('')
+    try {
+      const info = await salesplaySubscriptionInfo(partnerKey, aat)
+      const rawPlans = info?.data?.subscription?.[0]?.pricing_plans || []
+      const tiers = groupPlansByTier(rawPlans)
+      if (!tiers) {
+        setSpPreviewError('Could not load pricing. Please try again.')
+      } else {
+        setSpTiers(tiers)
+      }
+    } catch (e) {
+      setSpPreviewError(e.response?.data?.detail || e.message || 'Could not load pricing. Please try again.')
+    } finally {
+      setSpPreviewLoading(false)
+    }
+  }
+
+  // Both buttons run the exact same onboarding call — there's no account yet
+  // to start a trial or price real plans against. `intent` just tells
+  // EmbedApp what to do once the account exists: 'trial' starts the trial
+  // immediately and goes straight to chat; 'explore' lands on the plans
+  // screen already expanded so the user can see pricing / subscribe.
+  const intentRef = useRef('trial')
+
+  async function handleAccept(intent = 'trial') {
+    intentRef.current = intent
     setLoading(true)
     await runFlow()
     setLoading(false)
@@ -201,7 +263,7 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
     // Carried through to onComplete so EmbedApp can force-show the plans
     // screen once for brand-new users regardless of computed access (their
     // trial is already silently active — this is informational/upsell).
-    result.user = { ...result.user, is_new_user: result.is_new_user }
+    result.user = { ...result.user, is_new_user: result.is_new_user, embed_intent: intentRef.current }
 
     if (result.sync === 'started') {
       setPhase('sync')
@@ -222,7 +284,7 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
         const r    = await embedGetProviderStatus(connId)
         const prog = r.progress
         if (prog) {
-          setSyncMsg(friendlySyncMsg(prog.message, providerName))
+          setSyncMsg(friendlySyncMsg(prog.message, appNm))
           setSyncPct(prog.percent || 0)
           setSyncRows(prog.rows_synced || 0)
           latestRows = prog.rows_synced || latestRows
@@ -261,7 +323,7 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
   const canClose = phase === 'consent' || phase === 'error'
 
   return (
-    <div style={{
+    <div ref={scrollRef} className={sp ? 'dm-scroll-hidden' : undefined} style={{
       height: '100%', overflowY: 'auto',
       display: 'flex', flexDirection: 'column',
       alignItems: 'center', justifyContent: phase === 'consent' ? 'flex-start' : 'center',
@@ -278,7 +340,7 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}>✕</button>
       )}
-      {!(sp && phase === 'consent') && (
+      {sp && phase === 'consent' ? null : (
         <>
           <Logo />
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, fontWeight: 700, color: sp ? SP.heading : 'var(--text)', marginBottom: 4 }}>
@@ -290,15 +352,18 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
       {/* ── CONSENT ────────────────────────────────────────────────────────── */}
       {phase === 'consent' && (sp ? (
         <div style={{ width: '100%' }}>
-          <h2 style={{
-            fontFamily: "'Manrope', 'Plus Jakarta Sans', sans-serif",
-            fontSize: 26, lineHeight: '34px', letterSpacing: '-0.02em', fontWeight: 800,
-            color: SP.heading, margin: '14px 0 10px',
-          }}>
-            Connect Your Data
-          </h2>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, margin: '14px 0 10px' }}>
+            <img src={salesplayAiLogo} alt="" style={{ height: 60, flexShrink: 0 }} />
+            <h2 style={{
+              fontFamily: "'Manrope', 'Plus Jakarta Sans', sans-serif",
+              fontSize: 26, lineHeight: '34px', letterSpacing: '-0.02em', fontWeight: 800,
+              color: SP.heading, margin: 0,
+            }}>
+              {productTitle}
+            </h2>
+          </div>
           <p style={{ fontSize: 14, lineHeight: '22px', color: SP.text, marginBottom: 24 }}>
-            To get started, connect your {providerName} account — it only takes a few seconds.
+            Ask questions in your own language, discover past performance and emerging trends.
           </p>
 
           <div style={{ textAlign: 'left', marginBottom: 20 }}>
@@ -307,7 +372,7 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {[
-                { icon: '💬', text: 'Ask questions in plain English — no spreadsheets, no formulas' },
+                { icon: '💬', text: 'Ask questions in your own language — no spreadsheets, no formulas' },
                 { icon: '📊', text: 'Get instant answers about sales, top products & customers' },
                 { icon: '🔮', text: 'Spot trends and unusual patterns before they become problems' },
                 { icon: '⚡', text: `Insights in seconds, right inside ${providerName}` },
@@ -319,7 +384,6 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
                 }}>
                   <span style={{ fontSize: 20, flexShrink: 0 }}>{icon}</span>
                   <span style={{ flex: 1, fontSize: 12, fontWeight: 500, color: SP.heading }}>{text}</span>
-                  <span style={{ fontSize: 18, color: SP.text, flexShrink: 0 }}>›</span>
                 </div>
               ))}
             </div>
@@ -386,13 +450,136 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
           )}
           */}
 
-          <button onClick={handleAccept} disabled={loading} style={primaryBtn(loading, sp)}>
-            {loading ? <><Spin sp={sp} /> Setting up…</> : 'Try SalesPlay AI'}
-          </button>
+          <div ref={boxRef} style={{
+            background: SP.card, borderRadius: 16, boxShadow: SP.shadow,
+            border: `1px solid ${SP.outline}`, overflow: 'hidden', marginBottom: 14,
+          }}>
+            <div style={{ padding: 16 }}>
+              <button onClick={() => handleAccept('trial')} disabled={loading} style={{ ...primaryBtn(loading, sp), marginTop: 0 }}>
+                {loading ? <><Spin sp={sp} /> Setting up…</> : 'Start Free Trial (14 Days)'}
+              </button>
+            </div>
+            <button
+              onClick={handleToggleExplore}
+              disabled={loading}
+              style={{
+                width: '100%', padding: '4px 16px 14px', background: 'transparent', border: 'none',
+                borderTop: `1px solid rgba(15,23,42,0.08)`, color: SP.text3, fontSize: 12, fontWeight: 600,
+                cursor: loading ? 'not-allowed' : 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+              }}
+            >
+              {spExpanded ? 'Hide plans' : 'Explore plans'}
+              <span style={{
+                display: 'inline-block', width: 7, height: 7,
+                borderRight: `1.5px solid ${SP.text3}`, borderBottom: `1.5px solid ${SP.text3}`,
+                transform: spExpanded ? 'rotate(-135deg)' : 'rotate(45deg)',
+                transition: 'transform .3s ease', marginTop: spExpanded ? 2 : -2,
+              }} />
+            </button>
+
+            <div style={{ display: 'grid', gridTemplateRows: spExpanded ? '1fr' : '0fr', transition: 'grid-template-rows .35s ease' }}>
+              <div style={{ overflow: 'hidden' }}>
+                <div style={{ padding: '4px 16px 16px', borderTop: `1px solid rgba(15,23,42,0.08)`, textAlign: 'left' }}>
+                  {spPreviewLoading ? (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '20px 0' }}>
+                      <Spin sp={sp} />
+                      <span style={{ fontSize: 12, color: SP.text3 }}>Loading pricing…</span>
+                    </div>
+                  ) : spPreviewError ? (
+                    <div style={{ fontSize: 12, color: '#B3261E', textAlign: 'center', padding: '10px 0' }}>{spPreviewError}</div>
+                  ) : spTiers ? (
+                    <>
+                      <div style={{ display: 'flex', background: SP.bg, borderRadius: 9999, padding: 4, marginBottom: 14 }}>
+                        {['MONTHLY', 'YEARLY'].map(cycle => (
+                          <button
+                            key={cycle}
+                            onClick={() => setSpCycle(cycle)}
+                            style={{
+                              flex: 1, padding: '8px 10px', borderRadius: 9999, border: 'none',
+                              background: spCycle === cycle ? SP.blue : 'transparent',
+                              color: spCycle === cycle ? '#fff' : SP.text,
+                              fontSize: 11, fontWeight: 700, cursor: 'pointer',
+                              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                            }}
+                          >
+                            {cycle === 'MONTHLY' ? 'Monthly' : 'Yearly'}
+                            {cycle === 'YEARLY' && yearlySavingsPct(spTiers[0]) > 0 && (
+                              <span style={{
+                                fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 9999,
+                                background: spCycle === cycle ? 'rgba(255,255,255,0.25)' : SP.blueLight,
+                                color: spCycle === cycle ? '#fff' : SP.blueDark,
+                              }}>
+                                SAVE {yearlySavingsPct(spTiers[0])}%
+                              </span>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        {spTiers.map((tier, i) => {
+                          const plan = spCycle === 'YEARLY' ? tier.yearly : tier.monthly
+                          if (!plan) return null
+                          const features = TIER_FEATURES[Math.min(i, 2)] || []
+                          return (
+                            <div key={plan.product_code} style={{
+                              position: 'relative', background: SP.card, borderRadius: 14,
+                              border: i === 0 ? `2px solid ${SP.blue}` : `1px solid ${SP.outline}`,
+                              padding: '16px 16px 14px',
+                            }}>
+                              {i === 0 && (
+                                <span style={{
+                                  position: 'absolute', top: -10, left: 14,
+                                  background: SP.blue, color: '#fff', fontSize: 9, fontWeight: 700,
+                                  padding: '3px 9px', borderRadius: 9999, letterSpacing: '.04em',
+                                }}>
+                                  MOST POPULAR
+                                </span>
+                              )}
+                              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginTop: i === 0 ? 6 : 0 }}>
+                                <span style={{ fontSize: 15, fontWeight: 700, color: SP.heading }}>
+                                  {displayPlanName(i, plan.billing_type)}
+                                </span>
+                                <span style={{ fontSize: 18, fontWeight: 800, color: SP.heading }}>
+                                  {planPrice(plan)}
+                                  <span style={{ fontSize: 11, fontWeight: 500, color: SP.text3 }}>
+                                    /{plan.billing_type === 'YEARLY' ? 'yr' : 'mo'}
+                                  </span>
+                                </span>
+                              </div>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 10, paddingTop: 10, borderTop: `1px solid rgba(15,23,42,0.06)` }}>
+                                {features.map(({ text, ok }) => (
+                                  <div key={text} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    <span style={{ fontSize: 11, color: ok ? SP.green : SP.text3 }}>{ok ? '✓' : '–'}</span>
+                                    <span style={{ fontSize: 12, color: ok ? SP.text : SP.text3 }}>{text}</span>
+                                  </div>
+                                ))}
+                              </div>
+                              <button
+                                onClick={() => handleAccept('explore')}
+                                disabled={loading}
+                                style={{
+                                  width: '100%', padding: '11px', borderRadius: 9999, fontSize: 13, fontWeight: 700,
+                                  background: 'transparent', color: SP.blue, border: `1px solid ${SP.blue}`,
+                                  cursor: loading ? 'not-allowed' : 'pointer', marginTop: 12,
+                                }}
+                              >
+                                {loading ? <><Spin sp={sp} /> Setting up…</> : 'Subscribe Now'}
+                              </button>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          </div>
 
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 14 }}>
-            <span style={{ width: 8, height: 8, borderRadius: '50%', background: SP.green, flexShrink: 0 }} />
-            <span style={{ fontSize: 11, color: SP.text }}>Real-time data · Powered by {appNm}</span>
+            <span style={{ fontSize: 11, color: SP.text }}>Powered by {appNm}</span>
           </div>
 
           <div style={{ fontSize: 11, color: SP.text, marginTop: 10, lineHeight: 1.6 }}>
@@ -503,7 +690,7 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
 
           <div style={cardStyle(sp)}>
             {[
-              { icon: '🔗', text: `Connecting to ${providerName}` },
+              { icon: '🔗', text: `Connecting to ${appNm}` },
               { icon: '⚙️', text: 'Setting up your workspace' },
               { icon: '🧠', text: 'Preparing your analytics' },
               { icon: '⚡', text: 'This only happens once — future questions load instantly' },
