@@ -98,6 +98,31 @@ def _check_rate(ip: str):
 
 # ── Bootstrap ─────────────────────────────────────────────────────────────────
 
+# Single source of truth for the Salesplay partner's branding copy — edit here,
+# restart the backend, it's live. No manual DB update or re-seeding needed.
+SALESPLAY_BRANDING = {
+    "accent_color": "#f59e0b",
+    "product_name": "SalesPlay AI",
+}
+
+
+def _sync_salesplay_branding():
+    """Keeps the Salesplay embed_partners row's branding in sync with
+    SALESPLAY_BRANDING on every startup. No-op if the partner hasn't been
+    seeded yet (first-time setup still goes through seed_embed_partners.py,
+    which also creates the partner_key)."""
+    conn = _get_conn()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE embed_partners SET branding=%s WHERE provider_id='salesplay'",
+            (json.dumps(SALESPLAY_BRANDING),)
+        )
+        conn.commit()
+        cursor.close()
+    finally:
+        conn.close()
+
 def bootstrap_embed_tables():
     """Create embed_partners table. Safe to call on every startup."""
     conn = _get_conn()
@@ -116,6 +141,7 @@ def bootstrap_embed_tables():
     conn.commit()
     cursor.close()
     conn.close()
+    _sync_salesplay_branding()
     log.info("Embed tables bootstrapped")
 
 
