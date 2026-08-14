@@ -29,6 +29,7 @@ import { notifyParent } from './EmbedApp'
 import { appName } from './embedBranding'
 import BrandLogo from '../components/Logo'
 import salesplayLogo from '../assets/salesplay-logo.svg'
+import { TIER_FEATURES, groupPlansByTier, planPrice, yearlySavingsPct, displayPlanName } from './embedSalesplayPlanFormat'
 
 const SP = {
   bg:        'linear-gradient(180deg, #F0F4F8 0%, #F7F9FB 100%)',
@@ -46,58 +47,12 @@ const SP = {
   shadow:    '0px 4px 20px 0px rgba(84,95,115,0.12)',
 }
 
-const TIER_FEATURES = {
-  0: [ // lowest plan
-    { text: 'Ask Your Data (AI)',      ok: true  },
-    { text: 'All Analytics & Reports', ok: true  },
-    { text: 'Forecasting & Anomalies', ok: false },
-    { text: 'Priority Support',        ok: false },
-  ],
-  1: [
-    { text: 'Ask Your Data (AI)',      ok: true  },
-    { text: 'All Analytics & Reports', ok: true  },
-    { text: 'Forecasting & Anomalies', ok: true  },
-    { text: 'Priority Support',        ok: false },
-  ],
-  2: [
-    { text: 'Ask Your Data (AI)',      ok: true  },
-    { text: 'All Analytics & Reports', ok: true  },
-    { text: 'Forecasting & Anomalies', ok: true  },
-    { text: 'Priority Support',        ok: true  },
-  ],
-}
-
 const SUPPORT_EMAIL = 'support@datamind.ai'
 
 const REASON_COPY = {
   trial_expired:  (days) => `Your ${days}-day free trial has ended.`,
   plan_expired:   () => 'Your subscription has expired.',
   quota_exceeded: () => "You've used up your plan's quota.",
-}
-
-// Salesplay returns 6 flat pricing_plans entries — 3 tiers × {MONTHLY, YEARLY}.
-// Pair them into 3 tiers (by ascending price within each cycle) so the UI
-// shows 3 cards with a Monthly/Yearly toggle instead of 6 separate cards.
-// Fails safe: if the two cycle lists don't line up 1:1, don't guess a
-// pairing — every product_code sent to /subscriptions/payment must be
-// exactly the one the user saw the price for, no exceptions.
-function groupPlansByTier(plans) {
-  const monthly = (plans || []).filter(p => p.billing_type === 'MONTHLY').sort((a, b) => Number(a.product_price) - Number(b.product_price))
-  const yearly  = (plans || []).filter(p => p.billing_type === 'YEARLY').sort((a, b) => Number(a.product_price) - Number(b.product_price))
-  if (monthly.length === 0 || yearly.length === 0 || monthly.length !== yearly.length) {
-    return null // caller falls back to a flat, ungrouped list
-  }
-  return monthly.map((m, i) => ({ monthly: m, yearly: yearly[i] }))
-}
-
-// Salesplay already formats each plan's price in the merchant's own currency
-// ("LKR 1,654.93") — show that string verbatim, no symbol logic of ours.
-// Building it ourselves was wrong twice over: product_price is Salesplay's
-// base amount (5/10/25), not what the merchant is charged, and
-// product_currency_symbol reads "$" even on LKR accounts.
-function planPrice(plan) {
-  return String(plan?.show_price_text || plan?.product_price_text || '').trim()
-    || String(plan?.show_price ?? plan?.product_price ?? '')
 }
 
 // show_price/available_credit (the raw numbers) are Salesplay's base tier
@@ -107,14 +62,6 @@ function planPrice(plan) {
 function parseAmountText(text) {
   if (typeof text === 'number') return text
   return Number(String(text || '').replace(/[^0-9.]/g, '')) || 0
-}
-
-function yearlySavingsPct(tier) {
-  if (!tier?.monthly || !tier?.yearly) return null
-  const monthlyAnnualized = Number(tier.monthly.product_price) * 12
-  const yearly = Number(tier.yearly.product_price)
-  if (!monthlyAnnualized) return null
-  return Math.round((1 - yearly / monthlyAnnualized) * 100)
 }
 
 // Card-add happens on Salesplay's own page in another tab — poll for it, so
@@ -127,27 +74,19 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 // as ascending price, same order Salesplay's tiers are grouped in above).
 // Revisit if subscription_plans is ever reseeded with different ids/order.
 const TIER_TO_INTERNAL_PLAN_ID = [1, 2, 3]
-const TIER_TO_PLAN_NAME = ['Standard', 'Growth', 'Pro']
-
-// Salesplay's own product_name ("Access To Unlimited AI POS Data Module
-// Monthly/Yearly") is their internal SKU label, not a name a merchant should
-// see here — show our own plan name instead.
-function displayPlanName(tierIndex, billingType) {
-  const name = TIER_TO_PLAN_NAME[tierIndex] || 'Plan'
-  return `${name} — ${billingType === 'YEARLY' ? 'Yearly' : 'Monthly'}`
-}
 
 function Spin({ color = '#fff' }) {
   return <div style={{ width:13, height:13, border:`2px solid ${color === '#fff' ? 'rgba(255,255,255,0.3)' : 'rgba(0,88,190,0.25)'}`, borderTopColor:color, borderRadius:'50%', animation:'spin 0.7s linear infinite' }} />
 }
 
-export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, trialAvailable, blockReason, isPaidQuotaBlocked, trialDays = 14, billingDetailsAdded, cardAddUrl, cardLabel, availableCreditText, showPriceText, onTrialSelected, onSubscribed, onRefreshAccess, onClose }) {
+export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, trialAvailable, blockReason, isPaidQuotaBlocked, trialDays = 14, billingDetailsAdded, cardAddUrl, cardLabel, availableCreditText, showPriceText, initialExpanded = false, onTrialSelected, onSubscribed, onRefreshAccess, onClose }) {
   const [selectedPlan, setSelectedPlan] = useState(null) // { ...plan, _tierIndex } under review on the receipt screen
   const [checking, setChecking] = useState(false) // re-checking access after returning from card_add_url (manual "Continue")
   const [awaitingCard, setAwaitingCard] = useState(false) // polling for a card add — grays out the screen
   const [confirmBusy, setConfirmBusy] = useState(false) // paying + confirming activation
   const [paidPending, setPaidPending] = useState(false) // charge succeeded — blocks re-paying even if the confirm check below fails
   const [billingCycle, setBillingCycle] = useState('MONTHLY') // global toggle — one cycle for all 3 tiers
+  const [plansExpanded, setPlansExpanded] = useState(initialExpanded) // trial-available plan list starts collapsed to just the trial CTA, unless the consent screen's "Explore plans" sent us here already open
   const [error, setError] = useState('')
   const [preview, setPreview] = useState(null) // raw order/preview response for the selected plan
   const [previewLoading, setPreviewLoading] = useState(false)
@@ -338,12 +277,119 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
   const previewProduct = preview?.productData?.[0]
   const selectedPriceText = preview?.invoiceTotal || (selectedPlan ? planPrice(selectedPlan) : showPriceText)
   const actualChargeText = preview?.invoice_amount_due_format || selectedPriceText
-  // Available credit: unchanged from before — subscription-level balance,
-  // not sourced from the preview call. hasCredit only drives display styling
-  // (strikethrough/green), the credit amount text itself is availableCreditText as-is.
-  const creditAmount = parseAmountText(availableCreditText)
-  const hasCredit = creditAmount > 0
-  const creditAmountText = availableCreditText
+  // ponytail: credit line hidden from the receipt UI — deduction display
+  // (strikethrough price / "Available credit" row) commented out below with
+  // it. Charged-today still comes from Salesplay's own preview total, which
+  // already nets out credit server-side, so nothing here affects the charge.
+  // const creditAmount = parseAmountText(availableCreditText)
+  // const hasCredit = creditAmount > 0
+  // const creditAmountText = availableCreditText
+
+  // Monthly/Yearly toggle + tier cards — shared between the trial-available
+  // accordion body and the no-trial (blocked/expired) straight list, so the
+  // two call sites never drift apart.
+  function renderTierList() {
+    return (
+      <>
+        {tiers && (
+          <div style={{
+            display: 'flex', background: SP.card, borderRadius: 9999, padding: 4,
+            boxShadow: SP.shadow, marginBottom: 16,
+          }}>
+            {['MONTHLY', 'YEARLY'].map(cycle => (
+              <button
+                key={cycle}
+                onClick={() => setBillingCycle(cycle)}
+                style={{
+                  flex: 1, padding: '9px 10px', borderRadius: 9999, border: 'none',
+                  background: billingCycle === cycle ? SP.blue : 'transparent',
+                  color: billingCycle === cycle ? '#fff' : SP.text,
+                  fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                }}
+              >
+                {cycle === 'MONTHLY' ? 'Monthly' : 'Yearly'}
+                {cycle === 'YEARLY' && savingsPct > 0 && (
+                  <span style={{
+                    fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 9999,
+                    background: billingCycle === cycle ? 'rgba(255,255,255,0.25)' : SP.blueLight,
+                    color: billingCycle === cycle ? '#fff' : SP.blueDark,
+                  }}>
+                    SAVE {savingsPct}%
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {displayPlans.map((plan, i) => {
+            if (!plan) return null // guard: cycle missing for this tier — skip rather than render a broken card
+            const features = TIER_FEATURES[Math.min(i, 2)] || []
+            const isLowest = i === 0
+            const showTrial = isLowest && trialAvailable
+
+            return (
+              <div key={plan.product_code} style={{
+                position: 'relative', background: SP.card, borderRadius: 14,
+                border: isLowest ? `2px solid ${SP.blue}` : `1px solid ${SP.outline}`,
+                boxShadow: SP.shadow, padding: '16px 16px 14px',
+              }}>
+                {isLowest && !trialAvailable && (
+                  <span style={{
+                    position: 'absolute', top: -10, left: 14,
+                    background: SP.blue, color: '#fff', fontSize: 9, fontWeight: 700,
+                    padding: '3px 9px', borderRadius: 9999, letterSpacing: '.04em',
+                  }}>
+                    MOST POPULAR
+                  </span>
+                )}
+
+                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginTop: isLowest ? 6 : 0 }}>
+                  <span style={{ fontSize: 15, fontWeight: 700, color: SP.heading }}>
+                    {displayPlanName(i, plan.billing_type)}
+                  </span>
+                  <span style={{ fontSize: 18, fontWeight: 800, color: SP.heading }}>
+                    {planPrice(plan)}
+                    <span style={{ fontSize: 11, fontWeight: 500, color: SP.text3 }}>
+                      /{plan.billing_type === 'YEARLY' ? 'yr' : 'mo'}
+                    </span>
+                  </span>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 10, paddingTop: 10, borderTop: `1px solid rgba(15,23,42,0.06)` }}>
+                  {features.map(({ text, ok }) => (
+                    <div key={text} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: 11, color: ok ? SP.green : SP.text3 }}>{ok ? '✓' : '–'}</span>
+                      <span style={{ fontSize: 12, color: ok ? SP.text : SP.text3 }}>{text}</span>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Trial CTA already lives in the box header above this
+                    accordion when trialAvailable — no second one here. */}
+                <button
+                  onClick={() => handleChoosePlan(plan, i)}
+                  disabled={busy}
+                  style={{
+                    width: '100%', padding: '11px', borderRadius: 9999, fontSize: 13, fontWeight: 700,
+                    background: showTrial ? 'transparent' : SP.blue,
+                    color: showTrial ? SP.blue : '#fff',
+                    border: showTrial ? `1px solid ${SP.blue}` : 'none',
+                    cursor: busy ? 'not-allowed' : 'pointer',
+                    marginTop: 12,
+                  }}
+                >
+                  Subscribe Now
+                </button>
+              </div>
+            )
+          })}
+        </div>
+      </>
+    )
+  }
 
   return (
     <div style={{
@@ -429,9 +475,6 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
             }} />
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.08em', color: 'rgba(255,255,255,0.65)' }}>PAYMENT METHOD</span>
-              <div style={{ background: '#fff', borderRadius: 6, padding: '4px 8px', display: 'flex', alignItems: 'center' }}>
-                <img src={salesplayLogo} alt="Salesplay" style={{ height: 14, display: 'block' }} />
-              </div>
             </div>
             <div style={{ fontSize: 17, fontWeight: 700, letterSpacing: '.12em', margin: '20px 0 4px' }}>
               {cardLabel || '···· ···· ···· ····'}
@@ -461,21 +504,15 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
               <>
                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '9px 0', borderBottom: '1px solid rgba(15,23,42,0.06)' }}>
                   <span style={{ fontSize: 12, color: SP.text3 }}>Price</span>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: hasCredit ? SP.text3 : SP.heading, textDecoration: hasCredit ? 'line-through' : 'none' }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: SP.heading }}>
                     {previewProduct?.product_price && previewProduct?.product_qty
                       ? `${previewProduct.product_price} x ${previewProduct.product_qty} = ${selectedPriceText}`
                       : selectedPriceText}
                   </span>
                 </div>
 
-                {/* Always shown, even at zero — a bill should never hide a line
-                    item, it should say "you have none" rather than say nothing. */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '9px 0', borderBottom: '1px dashed rgba(15,23,42,0.12)' }}>
-                  <span style={{ fontSize: 12, color: hasCredit ? SP.green : SP.text3 }}>Available credit</span>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: hasCredit ? SP.green : SP.text3 }}>
-                    {hasCredit ? `− ${creditAmountText}` : creditAmountText}
-                  </span>
-                </div>
+                {/* ponytail: "Available credit" row hidden — re-enable both
+                    this and the hasCredit consts above together if it comes back. */}
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 0 0' }}>
                   <span style={{ fontSize: 13, fontWeight: 700, color: SP.heading }}>Charged today</span>
@@ -494,7 +531,7 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
                 </svg>
               </div>
               <div style={{ fontSize: 15, fontWeight: 700, color: SP.heading }}>Payment successful</div>
-              <div style={{ fontSize: 12, color: SP.text3, marginTop: 2 }}>Taking you to chat…</div>
+              <div style={{ fontSize: 12, color: SP.text3, marginTop: 2 }}>salesplay AI</div>
             </div>
           ) : paidPending ? (
             // Charge already went through — this only re-checks, never re-pays.
@@ -535,15 +572,6 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
               >
                 {confirmBusy ? <><Spin /> Charging…</> : 'Confirm & Subscribe →'}
               </button>
-
-              {!busy && (
-                <button
-                  onClick={() => { setSelectedPlan(null); setError('') }}
-                  style={{ width: '100%', padding: '8px', background: 'none', border: 'none', color: SP.text3, fontSize: 12, cursor: 'pointer' }}
-                >
-                  ← Back to plans
-                </button>
-              )}
             </>
           )}
 
@@ -553,8 +581,81 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
             </div>
           )}
         </div>
+      ) : trialAvailable ? (
+        // ── Plan list — trial available: single centered box, CTA + an
+        // accordion of plans that expands/collapses in place (no screen
+        // switch). Sitting inside a vertically-centered flex column means
+        // the box grows evenly up and down as it expands, for free. ─────────
+        <div style={{
+          opacity: grayedOut ? 0.4 : 1, pointerEvents: grayedOut ? 'none' : 'auto',
+          height: '100%', display: 'flex', flexDirection: 'column',
+          justifyContent: 'center', alignItems: 'center', textAlign: 'center',
+        }}>
+          <BrandLogo size={40} radius={11} shadow="0 4px 16px rgba(0,88,190,0.3)" style={{ marginBottom: 10 }} />
+          <h2 style={{
+            fontFamily: "'Manrope', 'Plus Jakarta Sans', sans-serif",
+            fontSize: 22, lineHeight: '30px', letterSpacing: '-0.02em', fontWeight: 800,
+            color: SP.heading, margin: '0 0 20px',
+          }}>
+            {plansExpanded ? 'Choose your plan' : "You're all set"}
+          </h2>
+
+          <div style={{
+            width: '100%', maxWidth: 360, textAlign: 'left', background: SP.card,
+            borderRadius: 16, boxShadow: SP.shadow, border: `1px solid ${SP.outline}`, overflow: 'hidden',
+          }}>
+            <div style={{ padding: 16 }}>
+              <button
+                onClick={handleStartTrial}
+                disabled={busy}
+                style={{
+                  width: '100%', padding: '13px', borderRadius: 9999, fontSize: 14, fontWeight: 700,
+                  background: SP.blue, color: '#fff', border: 'none', cursor: busy ? 'not-allowed' : 'pointer',
+                  boxShadow: '0 4px 12px rgba(0,88,190,0.35)',
+                }}
+              >
+                {trialBusy ? <><Spin /> Starting…</> : `Start Free Trial (${trialDays} Days)`}
+              </button>
+            </div>
+
+            <button
+              onClick={() => setPlansExpanded(v => !v)}
+              style={{
+                width: '100%', padding: '4px 16px 14px', background: 'transparent', border: 'none',
+                color: SP.text3, fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+              }}
+            >
+              {plansExpanded ? 'Hide plans' : 'Explore plans'}
+              <span style={{
+                display: 'inline-block', width: 7, height: 7,
+                borderRight: `1.5px solid ${SP.text3}`, borderBottom: `1.5px solid ${SP.text3}`,
+                transform: plansExpanded ? 'rotate(-135deg)' : 'rotate(45deg)',
+                transition: 'transform .3s ease', marginTop: plansExpanded ? 2 : -2,
+              }} />
+            </button>
+
+            <div style={{ display: 'grid', gridTemplateRows: plansExpanded ? '1fr' : '0fr', transition: 'grid-template-rows .35s ease' }}>
+              <div style={{ overflow: 'hidden' }}>
+                <div style={{ padding: '4px 16px 16px', borderTop: `1px solid rgba(15,23,42,0.08)` }}>
+                  {renderTierList()}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {error && (
+            <div style={{
+              width: '100%', maxWidth: 360, background: SP.redLight, color: SP.red,
+              border: '1px solid rgba(179,38,30,0.2)', borderRadius: 10, padding: '10px 14px',
+              fontSize: 12, marginTop: 12, textAlign: 'center',
+            }}>
+              {error}
+            </div>
+          )}
+        </div>
       ) : (
-        // ── Plan list ──────────────────────────────────────────────────────
+        // ── Plan list — no trial (blocked/expired) — straight list ────────
         <div style={{ opacity: grayedOut ? 0.4 : 1, pointerEvents: grayedOut ? 'none' : 'auto' }}>
           <div style={{ textAlign: 'center', marginBottom: 18 }}>
             <BrandLogo size={40} radius={11} shadow="0 4px 16px rgba(0,88,190,0.3)" style={{ marginBottom: 10 }} />
@@ -580,133 +681,12 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
             </div>
           )}
 
-          {tiers && (
-            <div style={{
-              display: 'flex', background: SP.card, borderRadius: 9999, padding: 4,
-              boxShadow: SP.shadow, marginBottom: 16,
-            }}>
-              {['MONTHLY', 'YEARLY'].map(cycle => (
-                <button
-                  key={cycle}
-                  onClick={() => setBillingCycle(cycle)}
-                  style={{
-                    flex: 1, padding: '9px 10px', borderRadius: 9999, border: 'none',
-                    background: billingCycle === cycle ? SP.blue : 'transparent',
-                    color: billingCycle === cycle ? '#fff' : SP.text,
-                    fontSize: 12, fontWeight: 700, cursor: 'pointer',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-                  }}
-                >
-                  {cycle === 'MONTHLY' ? 'Monthly' : 'Yearly'}
-                  {cycle === 'YEARLY' && savingsPct > 0 && (
-                    <span style={{
-                      fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 9999,
-                      background: billingCycle === cycle ? 'rgba(255,255,255,0.25)' : SP.blueLight,
-                      color: billingCycle === cycle ? '#fff' : SP.blueDark,
-                    }}>
-                      SAVE {savingsPct}%
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-          )}
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
-            {displayPlans.map((plan, i) => {
-              if (!plan) return null // guard: cycle missing for this tier — skip rather than render a broken card
-              const features = TIER_FEATURES[Math.min(i, 2)] || []
-              const isLowest = i === 0
-              const showTrial = isLowest && trialAvailable
-
-              return (
-                <div key={plan.product_code} style={{
-                  position: 'relative', background: SP.card, borderRadius: 14,
-                  border: isLowest ? `2px solid ${SP.blue}` : `1px solid ${SP.outline}`,
-                  boxShadow: SP.shadow, padding: '16px 16px 14px',
-                }}>
-                  {isLowest && (
-                    <span style={{
-                      position: 'absolute', top: -10, left: 14,
-                      background: SP.blue, color: '#fff', fontSize: 9, fontWeight: 700,
-                      padding: '3px 9px', borderRadius: 9999, letterSpacing: '.04em',
-                    }}>
-                      {trialAvailable ? `${trialDays}-DAY FREE TRIAL` : 'MOST POPULAR'}
-                    </span>
-                  )}
-
-                  <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginTop: isLowest ? 6 : 0 }}>
-                    <span style={{ fontSize: 15, fontWeight: 700, color: SP.heading }}>
-                      {displayPlanName(i, plan.billing_type)}
-                    </span>
-                    <span style={{ fontSize: 18, fontWeight: 800, color: SP.heading }}>
-                      {planPrice(plan)}
-                      <span style={{ fontSize: 11, fontWeight: 500, color: SP.text3 }}>
-                        /{plan.billing_type === 'YEARLY' ? 'yr' : 'mo'}
-                      </span>
-                    </span>
-                  </div>
-
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 10, paddingTop: 10, borderTop: `1px solid rgba(15,23,42,0.06)` }}>
-                    {features.map(({ text, ok }) => (
-                      <div key={text} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span style={{ fontSize: 11, color: ok ? SP.green : SP.text3 }}>{ok ? '✓' : '–'}</span>
-                        <span style={{ fontSize: 12, color: ok ? SP.text : SP.text3 }}>{text}</span>
-                      </div>
-                    ))}
-                  </div>
-
-                  {showTrial && (
-                    <button
-                      onClick={handleStartTrial}
-                      disabled={busy}
-                      style={{
-                        width: '100%', padding: '11px', borderRadius: 9999, fontSize: 13, fontWeight: 700,
-                        background: SP.blue, color: '#fff', border: 'none', cursor: busy ? 'not-allowed' : 'pointer', marginTop: 12,
-                        boxShadow: '0 4px 12px rgba(0,88,190,0.35)',
-                      }}
-                    >
-                      {trialBusy ? <><Spin /> Starting…</> : `Start ${trialDays}-day free trial →`}
-                    </button>
-                  )}
-
-                  <button
-                    onClick={() => handleChoosePlan(plan, i)}
-                    disabled={busy}
-                    style={{
-                      width: '100%', padding: '11px', borderRadius: 9999, fontSize: 13, fontWeight: 700,
-                      background: showTrial ? 'transparent' : SP.blue,
-                      color: showTrial ? SP.blue : '#fff',
-                      border: showTrial ? `1px solid ${SP.blue}` : 'none',
-                      cursor: busy ? 'not-allowed' : 'pointer',
-                      marginTop: showTrial ? 8 : 12,
-                    }}
-                  >
-                    {billingDetailsAdded ? 'Subscribe →' : 'Add payment method →'}
-                  </button>
-                </div>
-              )
-            })}
-          </div>
-
-          {!billingDetailsAdded && cardAddUrl && (
-            <button
-              onClick={handleContinue}
-              disabled={busy}
-              style={{
-                width: '100%', padding: '10px', borderRadius: 9999, fontSize: 12, fontWeight: 600,
-                background: 'none', border: 'none', color: SP.blue, cursor: busy ? 'not-allowed' : 'pointer',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginBottom: 8,
-              }}
-            >
-              {checking ? <><Spin color={SP.blue} /> Checking…</> : "Already added a payment method or paid? Continue →"}
-            </button>
-          )}
+          {renderTierList()}
 
           {error && (
             <div style={{
               background: SP.redLight, color: SP.red, border: '1px solid rgba(179,38,30,0.2)',
-              borderRadius: 10, padding: '10px 14px', fontSize: 12, marginBottom: 8, textAlign: 'center',
+              borderRadius: 10, padding: '10px 14px', fontSize: 12, marginTop: 8, textAlign: 'center',
             }}>
               {error}
             </div>
