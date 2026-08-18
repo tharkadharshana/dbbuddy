@@ -16,6 +16,17 @@ import time
 import requests
 from typing import Dict, Any, List, Optional
 
+# ── Model selection (env-overridable) ─────────────────────────────────────────
+# OPENAI_MODEL=gpt-4o-mini
+# GEMINI_MODELS=gemini-2.0-flash,gemini-1.5-flash   (fallback chain, first wins)
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
+GEMINI_MODELS = [m.strip() for m in os.getenv(
+    "GEMINI_MODELS",
+    "gemini-2.0-flash,gemini-2.0-flash-lite,gemini-1.5-flash-latest,"
+    "gemini-1.5-flash,gemini-1.5-pro-latest,gemini-pro",
+).split(",") if m.strip()]
+
+
 # HTTP status codes that are transient and safe to retry after a short wait
 _TRANSIENT_STATUS = {429, 500, 502, 503, 504}
 
@@ -174,7 +185,7 @@ def call_openai(prompt: str, system: str = "", max_tokens: int = 2000,
         "Content-Type": "application/json",
     }
     body = {
-        "model": "gpt-4o-mini",
+        "model": OPENAI_MODEL,
         "messages": messages,
         "temperature": 0.2,
         "max_tokens": max_tokens,
@@ -233,14 +244,7 @@ def call_gemini(prompt: str, system: str = "", max_tokens: int = 2000,
         )
 
     # Model fallback chain — tries newest first, falls back on 404
-    MODELS = [
-        "gemini-2.0-flash",
-        "gemini-2.0-flash-lite",
-        "gemini-1.5-flash-latest",
-        "gemini-1.5-flash",
-        "gemini-1.5-pro-latest",
-        "gemini-pro",
-    ]
+    MODELS = GEMINI_MODELS
     BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
     body = {
@@ -436,8 +440,7 @@ def _stream_chat_completions(provider, url, model, prompt, system, max_tokens,
 
 def _stream_gemini(prompt, system, max_tokens, key, on_delta, user_email):
     """Stream a Gemini streamGenerateContent (SSE) response."""
-    MODELS = ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash-latest",
-              "gemini-1.5-flash", "gemini-1.5-pro-latest", "gemini-pro"]
+    MODELS = GEMINI_MODELS
     BASE = "https://generativelanguage.googleapis.com/v1beta/models"
     body = {"contents": [{"parts": [{"text": f"{system}\n\n{prompt}" if system else prompt}]}],
             "generationConfig": {"temperature": 0.2, "maxOutputTokens": max_tokens}}
@@ -539,7 +542,7 @@ def call_llm(prompt: str, system: str = "", llm: str = "openai",
         if on_delta is not None:   # real token streaming — same return contract
             if name == "openai":
                 return _stream_chat_completions("openai", "https://api.openai.com/v1/chat/completions",
-                                                "gpt-4o-mini", prompt, system, max_tokens, key, on_delta, user_email)
+                                                OPENAI_MODEL, prompt, system, max_tokens, key, on_delta, user_email)
             elif name == "deepseek":
                 return _stream_chat_completions("deepseek", "https://api.deepseek.com/v1/chat/completions",
                                                 "deepseek-chat", prompt, system, max_tokens, key, on_delta, user_email)

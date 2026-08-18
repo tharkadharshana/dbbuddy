@@ -42,6 +42,7 @@ from logger import get_logger
 from llm import (
     _build_key_pool, _park_key, _unpark_key, LLMTransientError,
     _TRANSIENT_STATUS, _KEY_RL_COOLDOWN, _KEY_AUTH_COOLDOWN,
+    OPENAI_MODEL, GEMINI_MODELS,
 )
 
 log = get_logger(__name__)
@@ -225,7 +226,7 @@ def call_openai_with_tools(messages: List[dict], tools, api_key: str = "",
     def _do(key):
         url = "https://api.openai.com/v1/chat/completions"
         body = {
-            "model": "gpt-4o-mini",
+            "model": OPENAI_MODEL,
             "messages": _messages_to_openai(messages),
             "tools": _tools_to_openai_schema(tools),
             "tool_choice": "auto",
@@ -283,12 +284,7 @@ def call_deepseek_with_tools(messages: List[dict], tools, api_key: str = "",
     return _run_with_key_pool("deepseek", api_key, user_email, operation, _do)
 
 
-_GEMINI_TOOL_MODELS = [
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
-    "gemini-1.5-flash-latest",
-    "gemini-1.5-pro-latest",
-]
+_GEMINI_TOOL_MODELS = GEMINI_MODELS
 
 
 def call_gemini_with_tools(messages: List[dict], tools, api_key: str = "",
