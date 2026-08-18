@@ -27,6 +27,29 @@ GEMINI_MODELS = [m.strip() for m in os.getenv(
 ).split(",") if m.strip()]
 
 
+# ── HOTFIX 2026-08-18: OpenAI request params differ between model generations ──
+# Switching OPENAI_MODEL from gpt-4o-mini to gpt-5.6-luna broke every OpenAI call.
+# Verified against the live API — no single request body serves both generations:
+#
+#   body field                     gpt-4o-mini            gpt-5.x (e.g. gpt-5.6-luna)
+#   ---------------------------------------------------------------------------
+#   max_tokens                     OK                     400 (use max_completion_tokens)
+#   max_completion_tokens          OK                     OK          <- send this always
+#   temperature: 0.2               OK                     400 (only the default 1)
+#   reasoning_effort: "none"       400 (unrecognized)     REQUIRED to use tools
+#
+# So `max_completion_tokens` is unconditional, and the other two branch on _is_gpt5().
+# Anything reached through OPENAI_MODEL must keep working on BOTH generations —
+# do not "simplify" these branches away without re-testing the model you are not using.
+# DeepSeek shares _stream_chat_completions and still wants max_tokens + temperature.
+def _is_gpt5(model: str) -> bool:
+    """True for model generations that reject temperature != 1 and need
+    reasoning_effort="none" before they will use tools on /v1/chat/completions."""
+    # ponytail: prefix match, not a model list — new gpt-5.x names work without a code change.
+    # If OpenAI ships a generation that breaks the pattern, this is the one place to fix.
+    return model.startswith(("gpt-5", "o1", "o3", "o4"))
+
+
 # HTTP status codes that are transient and safe to retry after a short wait
 _TRANSIENT_STATUS = {429, 500, 502, 503, 504}
 
@@ -187,9 +210,10 @@ def call_openai(prompt: str, system: str = "", max_tokens: int = 2000,
     body = {
         "model": OPENAI_MODEL,
         "messages": messages,
-        "temperature": 0.2,
-        "max_tokens": max_tokens,
+        "max_completion_tokens": max_tokens,   # accepted by both gpt-4o* and gpt-5.x
     }
+    if not _is_gpt5(OPENAI_MODEL):
+        body["temperature"] = 0.2
     log.debug("Calling OpenAI API", max_tokens=max_tokens, prompt_len=len(prompt), user=user_email)
     for attempt in range(3):
         try:
@@ -390,9 +414,12 @@ def _stream_chat_completions(provider, url, model, prompt, system, max_tokens,
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
-    body = {"model": model, "messages": messages, "temperature": 0.2,
-            "max_tokens": max_tokens, "stream": True,
+    body = {"model": model, "messages": messages, "stream": True,
             "stream_options": {"include_usage": True}}
+    # DeepSeek shares this helper and still takes the older param name.
+    body["max_completion_tokens" if provider == "openai" else "max_tokens"] = max_tokens
+    if not _is_gpt5(model):
+        body["temperature"] = 0.2
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     resp = requests.post(url, json=body, headers=headers, timeout=90, stream=True)
     if not resp.ok:
