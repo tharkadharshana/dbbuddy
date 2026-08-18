@@ -42,7 +42,7 @@ from logger import get_logger
 from llm import (
     _build_key_pool, _park_key, _unpark_key, LLMTransientError,
     _TRANSIENT_STATUS, _KEY_RL_COOLDOWN, _KEY_AUTH_COOLDOWN,
-    OPENAI_MODEL, GEMINI_MODELS,
+    OPENAI_MODEL, GEMINI_MODELS, _is_gpt5,
 )
 
 log = get_logger(__name__)
@@ -230,9 +230,13 @@ def call_openai_with_tools(messages: List[dict], tools, api_key: str = "",
             "messages": _messages_to_openai(messages),
             "tools": _tools_to_openai_schema(tools),
             "tool_choice": "auto",
-            "temperature": 0.2,
-            "max_tokens": max_tokens,
+            "max_completion_tokens": max_tokens,
         }
+        # gpt-5.x refuses tools without this; gpt-4o* refuses the param itself.
+        if _is_gpt5(OPENAI_MODEL):
+            body["reasoning_effort"] = "none"
+        else:
+            body["temperature"] = 0.2
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
         try:
             resp = requests.post(url, json=body, headers=headers, timeout=90)
