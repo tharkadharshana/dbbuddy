@@ -449,7 +449,9 @@ function EmbedApp() {
         trialDays={subAccess?.trialDays || 14}
         billingDetailsAdded={!!subAccess?.billingDetailsAdded}
         cardAddUrl={subAccess?.cardAddUrl}
-        cardLabel={subAccess?.cardLabel}
+        cardBrand={subAccess?.cardBrand}
+        cardLast4={subAccess?.cardLast4}
+        cardExpired={subAccess?.cardExpired}
         availableCreditText={subAccess?.availableCreditText}
         showPriceText={subAccess?.showPriceText}
         initialExpanded={plansStartExpanded}
