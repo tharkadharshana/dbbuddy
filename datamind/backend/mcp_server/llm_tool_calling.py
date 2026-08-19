@@ -243,6 +243,12 @@ def call_openai_with_tools(messages: List[dict], tools, api_key: str = "",
         except requests.exceptions.Timeout:
             raise LLMTransientError("OpenAI timed out during MCP tool-calling.")
         if not resp.ok:
+            # Log the body — raise_for_status() discards the one thing that says
+            # WHY (bad model id, unsupported param, malformed tool schema),
+            # leaving only "400 Client Error" in the log.
+            log.warning("OpenAI tool-call error response",
+                        status=resp.status_code, model=body.get("model"),
+                        params=sorted(body.keys()), body=resp.text[:600])
             if resp.status_code in (401, 403):
                 raise ValueError(f"OpenAI API key invalid (status {resp.status_code}).")
             if resp.status_code in _TRANSIENT_STATUS:
