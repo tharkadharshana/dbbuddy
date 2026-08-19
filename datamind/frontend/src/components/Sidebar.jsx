@@ -355,7 +355,7 @@ export default function Sidebar({ active, setActive, connection, cacheStatus, th
         <div style={{ height:1, background:'var(--border)', margin:'8px 4px' }} />
         <div style={{ fontSize:10, color:'var(--text3)', fontWeight:600, textTransform:'uppercase', letterSpacing:'.09em', padding:'4px 12px 6px' }}>Analytics</div>
         <NavGroup label="Analytics" icon={IC.chart}  items={ANALYTICS_SUB}  active={active} setActive={setActive} defaultOpen={true} />
-        <NavGroup label="Predictions" icon={IC.trend} items={PREDICTIONS_SUB} active={active} setActive={setActive} />
+        {/* PREDICTIONS HIDDEN — <NavGroup label="Predictions" icon={IC.trend} items={PREDICTIONS_SUB} active={active} setActive={setActive} /> */}
         <div style={{ height:1, background:'var(--border)', margin:'8px 4px' }} />
         <NavItem id="connections" label="Connections"   icon={IC.plug}     active={active} setActive={setActive} />
         {/* BILLING HIDDEN — <NavItem id="billing" label="Billing" icon={IC.billing} active={active} setActive={setActive} /> */}
