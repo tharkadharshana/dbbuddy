@@ -16,9 +16,11 @@ import EmbedOnboarding from './EmbedOnboarding'
 import EmbedChat from './EmbedChat'
 import EmbedSalesplayAutoInit from './EmbedSalesplayAutoInit'
 import EmbedSalesplayPlans from './EmbedSalesplayPlans'
+import EmbedSyncProgress from './EmbedSyncProgress'
 import EmbedSearchBar from './EmbedSearchBar'
 import EmbedFeedbackModal from './EmbedFeedbackModal'
 import { appName } from './embedBranding'
+import BrandLogo from '../components/Logo'
 
 // Combines Salesplay's raw subscription state (card/plans — it's the payment
 // gateway) with DataMind's own billing (trial days, tokens — the actual
@@ -314,12 +316,20 @@ function EmbedApp() {
   async function handlePlanSubscribed() {
     const access = await checkSalesplayAccess(partnerKey, aatToken)
     if (access.hasAccess) {
-      setState('chat')
-      notifyParent('dm:chat_open')
+      // Paid merchants see the workspace sync here rather than before the
+      // plans screen — they came to pay, so nothing is allowed to sit between
+      // them and the card. Sync has been running server-side since onboarding,
+      // so by now it is usually already done and this passes straight through.
+      setState('syncing')
       return
     }
     setSubAccess(access)
     throw new Error('Subscription could not be confirmed yet. Please try again in a moment.')
+  }
+
+  function handleSyncDone() {
+    setState('chat')
+    notifyParent('dm:chat_open')
   }
 
   // Plans screen: polls this after sending the user to card_add_url, so a card
@@ -435,6 +445,28 @@ function EmbedApp() {
         onError={(msg) => { setError(msg); setState('error') }}
         onClose={handleClose}
       />
+    )
+  } else if (state === 'syncing') {
+    // Post-payment workspace sync — same screen onboarding shows trial users,
+    // just reached later in the paid flow.
+    content = (
+      <div style={{
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        height: '100%', padding: '24px 20px', textAlign: 'center',
+        background: 'linear-gradient(180deg, #F0F4F8 0%, #F7F9FB 100%)',
+      }}>
+        <BrandLogo size={40} radius={11} shadow="0 4px 16px rgba(0,88,190,0.3)" style={{ marginBottom: 10 }} />
+        <div style={{ fontSize: 15, fontWeight: 700, color: '#191C1E', marginBottom: 4 }}>
+          {appName(context)}
+        </div>
+        <div style={{ width: '100%', maxWidth: 360 }}>
+          <EmbedSyncProgress
+            connId={context?.provider_id}
+            appNm={appName(context)}
+            onDone={handleSyncDone}
+          />
+        </div>
+      </div>
     )
   } else if (state === 'salesplay_plans') {
     content = (
