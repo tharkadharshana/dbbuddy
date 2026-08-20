@@ -34,6 +34,18 @@ log = get_logger(__name__)
 
 router = APIRouter(prefix="/embed", tags=["embed"])
 
+# ── Free-subscription mode ────────────────────────────────────────────────────
+# Launch period: everyone gets the trial, nobody is shown a price. The widget
+# renders a single "Try <app>" button instead of the tier cards, and a merchant
+# who can't be given access is never routed to the plans screen — charging a
+# card during a period we've advertised as free is the one outcome worth
+# engineering against. Flip to false and the normal subscribe flow returns for
+# new users, while trials already running expire into it on their own.
+#
+# Read at import: flipping this is a backend restart, no rebuild and no deploy
+# of the frontend bundle, because the widget reads it from GET /embed/context.
+SUBSCRIPTION_FREE = os.getenv("SUBSCRIPTION_FREE", "false").strip().lower() in ("1", "true", "yes")
+
 # ── Report-cache profile sync (feature-flagged, always non-fatal) ─────────────
 _REPORT_CACHE_ENABLED = os.getenv("REPORT_CACHE_ENABLED", "false").strip().lower() in ("1", "true", "yes")
 
@@ -195,6 +207,9 @@ def get_embed_context(pk: str):
         "app_name":        os.getenv("APP_NAME", "SalesPlay AI"),
         "branding":        branding,
         "allowed_origins": allowed_origins,
+        # Launch-period switch. The widget reads this on every load, so
+        # turning the paid flow back on is a backend restart, not a rebuild.
+        "subscription_free": SUBSCRIPTION_FREE,
     }
 
 
