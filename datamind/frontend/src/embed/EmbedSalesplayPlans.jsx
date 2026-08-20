@@ -75,17 +75,75 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 // Revisit if subscription_plans is ever reseeded with different ids/order.
 const TIER_TO_INTERNAL_PLAN_ID = [1, 2, 3]
 
+// Card-network marks, drawn inline rather than fetched — the receipt is the
+// one screen where the merchant is about to be charged, and a card that looks
+// like their actual card reads as trustworthy. Salesplay sends `brand` from
+// Stripe, so the values are Stripe's ("visa", "mastercard", "amex", "discover",
+// "diners", "jcb", "unionpay"). Anything unrecognised falls back to a neutral
+// chip, never a broken or missing mark.
+function CardBrandMark({ brand }) {
+  const b = String(brand || '').toLowerCase()
+
+  if (b === 'visa') {
+    return (
+      <svg width="46" height="16" viewBox="0 0 46 16" aria-label="Visa" role="img">
+        <text x="0" y="13" fontSize="15" fontWeight="700" fontStyle="italic"
+              fontFamily="Helvetica, Arial, sans-serif" fill="#fff" letterSpacing="0.5">VISA</text>
+      </svg>
+    )
+  }
+
+  if (b === 'mastercard' || b === 'maestro') {
+    return (
+      <svg width="40" height="24" viewBox="0 0 40 24" aria-label="Mastercard" role="img">
+        <circle cx="15" cy="12" r="9" fill="#EB001B" />
+        <circle cx="25" cy="12" r="9" fill="#F79E1B" />
+        <path d="M20 5.2a8.98 8.98 0 0 0 0 13.6 8.98 8.98 0 0 0 0-13.6z" fill="#FF5F00" />
+      </svg>
+    )
+  }
+
+  if (b === 'amex' || b === 'american_express') {
+    return (
+      <svg width="40" height="24" viewBox="0 0 40 24" aria-label="American Express" role="img">
+        <rect width="40" height="24" rx="3" fill="#2E77BC" />
+        <text x="20" y="15.5" fontSize="8" fontWeight="700" textAnchor="middle"
+              fontFamily="Helvetica, Arial, sans-serif" fill="#fff" letterSpacing="0.3">AMEX</text>
+      </svg>
+    )
+  }
+
+  if (b === 'discover') {
+    return (
+      <svg width="44" height="18" viewBox="0 0 44 18" aria-label="Discover" role="img">
+        <text x="0" y="13" fontSize="9" fontWeight="700"
+              fontFamily="Helvetica, Arial, sans-serif" fill="#fff">DISC</text>
+        <circle cx="36" cy="9" r="6" fill="#F76B1C" />
+      </svg>
+    )
+  }
+
+  // Unknown network — a plain chip, so the card still looks like a card.
+  return (
+    <svg width="30" height="22" viewBox="0 0 30 22" aria-label="Card" role="img">
+      <rect x="0.75" y="0.75" width="28.5" height="20.5" rx="3.5"
+            fill="rgba(255,255,255,0.14)" stroke="rgba(255,255,255,0.5)" strokeWidth="1.5" />
+      <path d="M0 7.5h30" stroke="rgba(255,255,255,0.5)" strokeWidth="1.5" />
+    </svg>
+  )
+}
+
 function Spin({ color = '#fff' }) {
   return <div style={{ width:13, height:13, border:`2px solid ${color === '#fff' ? 'rgba(255,255,255,0.3)' : 'rgba(0,88,190,0.25)'}`, borderTopColor:color, borderRadius:'50%', animation:'spin 0.7s linear infinite' }} />
 }
 
-export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, trialAvailable, blockReason, isPaidQuotaBlocked, trialDays = 14, billingDetailsAdded, cardAddUrl, cardLabel, availableCreditText, showPriceText, initialExpanded = false, onTrialSelected, onSubscribed, onRefreshAccess, onClose }) {
+export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, trialAvailable, blockReason, isPaidQuotaBlocked, trialDays = 14, billingDetailsAdded, cardAddUrl, cardBrand, cardLast4, cardExpired, availableCreditText, showPriceText, initialExpanded = false, autoPick = null, onTrialSelected, onSubscribed, onRefreshAccess, onClose }) {
   const [selectedPlan, setSelectedPlan] = useState(null) // { ...plan, _tierIndex } under review on the receipt screen
   const [checking, setChecking] = useState(false) // re-checking access after returning from card_add_url (manual "Continue")
   const [awaitingCard, setAwaitingCard] = useState(false) // polling for a card add — grays out the screen
   const [confirmBusy, setConfirmBusy] = useState(false) // paying + confirming activation
   const [paidPending, setPaidPending] = useState(false) // charge succeeded — blocks re-paying even if the confirm check below fails
-  const [billingCycle, setBillingCycle] = useState('MONTHLY') // global toggle — one cycle for all 3 tiers
+  const [billingCycle, setBillingCycle] = useState(autoPick?.cycle === 'YEARLY' ? 'YEARLY' : 'MONTHLY') // global toggle — one cycle for all 3 tiers
   const [plansExpanded, setPlansExpanded] = useState(initialExpanded) // trial-available plan list starts collapsed to just the trial CTA, unless the consent screen's "Explore plans" sent us here already open
   const [error, setError] = useState('')
   const [preview, setPreview] = useState(null) // raw order/preview response for the selected plan
@@ -160,6 +218,19 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
     cardPollActive.current = false
     setAwaitingCard(false)
   }
+
+  // A tier was already clicked on the consent screen — act on it instead of
+  // re-rendering the same list and asking for the same click twice. Runs once:
+  // after this the user owns the screen, so a later cancel/back must not
+  // re-trigger it.
+  const autoPickDone = useRef(false)
+  useEffect(() => {
+    if (autoPickDone.current || !autoPick || isPaidQuotaBlocked) return
+    const plan = displayPlans?.[autoPick.tierIndex]
+    if (!plan) return // plans not loaded yet, or that cycle isn't configured — leave the list up
+    autoPickDone.current = true
+    handleChoosePlan(plan, autoPick.tierIndex)
+  }, [autoPick, displayPlans, isPaidQuotaBlocked])
 
   function handleChoosePlan(plan, tierIndex) {
     setError('')
@@ -405,6 +476,15 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
           <div style={{ width: 28, height: 28, border: '3px solid rgba(0,88,190,0.2)', borderTopColor: SP.blue, borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
           <div style={{ fontSize: 13, fontWeight: 600, color: SP.heading }}>Waiting for your payment method…</div>
           <div style={{ fontSize: 12, color: SP.text3, maxWidth: 240, textAlign: 'center' }}>Finish adding your card in the other tab — we'll pick it up automatically.</div>
+          {/* The auto-pick path reaches handleChoosePlan from an effect, not a
+              click, so its window.open can be popup-blocked. This link is the
+              same URL behind a real gesture — the only way back if that happens. */}
+          {cardAddUrl && (
+            <a href={cardAddUrl} target="_blank" rel="noopener noreferrer"
+              style={{ fontSize: 12, fontWeight: 600, color: SP.blue, textDecoration: 'underline' }}>
+              Didn't open? Add your card here
+            </a>
+          )}
           <button onClick={handleCancelCardWait} style={{ background: 'none', border: 'none', color: SP.blue, fontSize: 12, fontWeight: 600, cursor: 'pointer', marginTop: 4 }}>
             Cancel
           </button>
@@ -475,11 +555,19 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
             }} />
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.08em', color: 'rgba(255,255,255,0.65)' }}>PAYMENT METHOD</span>
+              <CardBrandMark brand={cardBrand} />
             </div>
-            <div style={{ fontSize: 17, fontWeight: 700, letterSpacing: '.12em', margin: '20px 0 4px' }}>
-              {cardLabel || '···· ···· ···· ····'}
+            {/* Masked digits, grouped the way they sit on a real card — only
+                the last group is ever known to us. */}
+            <div style={{ fontSize: 17, fontWeight: 700, letterSpacing: '.12em', margin: '16px 0 4px', display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ color: 'rgba(255,255,255,0.55)' }}>••••</span>
+              <span style={{ color: 'rgba(255,255,255,0.55)' }}>••••</span>
+              <span style={{ color: 'rgba(255,255,255,0.55)' }}>••••</span>
+              <span>{cardLast4 || '••••'}</span>
             </div>
-            <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.7)' }}>{cardLabel ? 'On file with Salesplay' : 'On file'}</div>
+            <div style={{ fontSize: 11, color: cardExpired ? '#FFC9C4' : 'rgba(255,255,255,0.7)' }}>
+              {cardExpired ? 'This card has expired — update it in Salesplay' : (cardLast4 ? 'On file with Salesplay' : 'On file')}
+            </div>
           </div>
 
           <div style={{ background: SP.card, borderRadius: 14, boxShadow: SP.shadow, padding: 16, marginBottom: 16 }}>

@@ -27,8 +27,13 @@ export function evaluateSalesplayAccess(salesplayInfo, internalSub) {
   // showed "Subscribe" to merchants who could only ever hit a failed payment.
   const billingDetailsAdded = !!salesplayInfo?.data?.is_valid_card_added
   const cardAddUrl = salesplayInfo?.data?.card_add_url || null
+  // Confirmed shape (Salesplay predev2): a single object, not an array —
+  //   { payment_method_id, payment_method_type, provider, brand: "visa",
+  //     last4: "4242", is_expired: 0, title: "VISA 4242", is_card: true }
   const card = salesplayInfo?.data?.payment_methods
-  const cardLabel = card?.payment_method_id ? `${(card.brand || 'card').toUpperCase()} ····${card.last4 || ''}` : null
+  const cardBrand = card?.payment_method_id ? (card.brand || '') : null
+  const cardLast4 = card?.payment_method_id ? (card.last4 || '') : null
+  const cardExpired = !!card?.is_expired
 
   // Account credit balance — same subscription object as pricing_plans, sits
   // alongside it rather than inside it (one balance, applies whichever tier
@@ -82,7 +87,9 @@ export function evaluateSalesplayAccess(salesplayInfo, internalSub) {
     trialDays: 14, // subscription_plans.trial_days — same for all 3 plans
     billingDetailsAdded,
     cardAddUrl,
-    cardLabel,
+    cardBrand,
+    cardLast4,
+    cardExpired,
     availableCreditText,
     showPriceText,
   }

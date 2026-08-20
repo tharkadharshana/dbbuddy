@@ -595,10 +595,17 @@ def subscribe_to_plan(user_email: str, plan_id: int, period_days: Optional[int] 
 
 
 def cancel_subscription(user_email: str):
-    """Immediately cancel any active/trial subscription — used to sync down
-    when an external payment gateway (Salesplay) reports the subscription is
-    no longer valid there (failed renewal, refund, chargeback), regardless of
-    what our own period_end says."""
+    """Immediately cancel a PAID subscription — used to sync down when an
+    external payment gateway (Salesplay) reports the subscription is no longer
+    valid there (failed renewal, refund, chargeback), regardless of what our
+    own period_end says.
+
+    Trials are deliberately out of scope. A trial exists only in DataMind —
+    the gateway has never heard of it, so it reports "not subscribed"
+    (subscribe_status=0) for every trial user, on every call. Cancelling on
+    that signal killed the trial the first time the merchant refreshed the
+    page. Only a status the gateway actually owns ('active') may be synced
+    down from it."""
     conn = _get_conn()
     conn.autocommit = False
     cur = conn.cursor()
@@ -606,7 +613,7 @@ def cancel_subscription(user_email: str):
         cur.execute("""
             UPDATE user_subscriptions
             SET status = 'cancelled'
-            WHERE user_email = %s AND status IN ('trial', 'active')
+            WHERE user_email = %s AND status = 'active'
         """, (user_email,))
         conn.commit()
         if cur.rowcount:

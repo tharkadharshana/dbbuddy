@@ -8,14 +8,21 @@
  * Flow:
  *   consent  → user reads what they can do with DataMind and clicks Accept
  *   loading  → single backend call handles everything (profile, token, account)
- *   sync     → first-time workspace setup with progress bar (auto)
+ *   sync     → first-time workspace setup with progress bar (trial intent only)
  *   error    → something went wrong, with retry
+ *
+ * "Subscribe Now" skips the sync screen entirely and hands straight off to the
+ * plans screen: that merchant came to pay, so card-add and payment come first
+ * and the sync screen runs after the charge clears (EmbedApp's 'syncing'
+ * state). Sync still starts server-side here either way — only the waiting
+ * moves.
  */
 import React, { useState, useEffect, useRef } from 'react'
 import { salesplayOnboard, embedGetProviderStatus, embedGetPlans, salesplaySubscriptionInfo } from './embedApi'
 import { notifyParent } from './EmbedApp'
 import { appName, productTitle as resolveProductTitle } from './embedBranding'
 import BrandLogo from '../components/Logo'
+import EmbedSyncProgress from './EmbedSyncProgress'
 import salesplayAiLogo from '../assets/salesplay-ai-logo.svg'
 import { TIER_FEATURES, groupPlansByTier, planPrice, yearlySavingsPct, displayPlanName } from './embedSalesplayPlanFormat'
 
@@ -121,28 +128,11 @@ function Logo() {
   return <BrandLogo size={40} radius={11} shadow="0 4px 16px rgba(79,142,247,0.3)" style={{ marginBottom: 10 }} />
 }
 
-// Translates raw backend sync-progress messages (which name specific data
-// tables like "Categories" / "Receipts" / "Customers") into generic,
-// professional copy — avoids any "we're extracting your data" framing.
-function friendlySyncMsg(raw, providerName) {
-  const m = (raw || '').toLowerCase()
-  if (m.includes('sync complete') || m.includes('✅')) return 'All set!'
-  if (m.includes('row limit'))   return 'Finishing up…'
-  if (m.includes('refreshing'))  return 'Organizing your insights…'
-  if (m.includes('customers') || m.includes('receipts')) return 'Gathering your business information…'
-  if (m.includes('shops') || m.includes('categories') || m.includes('payment types') || m.includes('products')) return 'Setting up your workspace…'
-  if (m.includes('sync started')) return `Connecting to ${providerName}…`
-  return 'Setting up your workspace…'
-}
-
-// ── Main component ────────────────────────────────────────────────────────────
 export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, onComplete, onError, onClose }) {
   const sp = context?.provider_id === 'salesplay'
 
   const [phase, setPhase]       = useState('consent')  // 'consent' | 'profile' | 'account' | 'sync' | 'error'
-  const [syncMsg, setSyncMsg]   = useState('Setting up your workspace…')
-  const [syncPct, setSyncPct]   = useState(0)
-  const [syncRows, setSyncRows] = useState(0)
+  const [pendingComplete, setPendingComplete] = useState(null) // { token, profile } handed to onComplete once sync finishes
   const [errorMsg, setErrorMsg] = useState('')
   const [loading, setLoading]   = useState(false)
   const [plans, setPlans]       = useState([])
@@ -230,9 +220,13 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
   // immediately and goes straight to chat; 'explore' lands on the plans
   // screen already expanded so the user can see pricing / subscribe.
   const intentRef = useRef('trial')
+  // Which tier card was clicked, so the plans screen can go straight to that
+  // plan's receipt instead of asking the user to pick all over again.
+  const pickedPlanRef = useRef(null)
 
-  async function handleAccept(intent = 'trial') {
+  async function handleAccept(intent = 'trial', pickedPlan = null) {
     intentRef.current = intent
+    pickedPlanRef.current = pickedPlan
     setLoading(true)
     await runFlow()
     setLoading(false)
@@ -246,8 +240,11 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
       return
     }
 
-    // Single backend call — profile fetch, token creation, account setup all happen server-side
-    setPhase('loading')
+    // Single backend call — profile fetch, token creation, account setup all happen server-side.
+    // 'explore' keeps the consent screen up while this runs: that merchant clicked a
+    // priced tier, and a full-screen spinner between the click and the card is the
+    // step they read as "nothing happened". Their button already spins "Setting up…".
+    if (intentRef.current !== 'explore') setPhase('loading')
     let result
     try {
       result = await salesplayOnboard(partnerKey, aat)
@@ -263,47 +260,26 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
     // Carried through to onComplete so EmbedApp can force-show the plans
     // screen once for brand-new users regardless of computed access (their
     // trial is already silently active — this is informational/upsell).
-    result.user = { ...result.user, is_new_user: result.is_new_user, embed_intent: intentRef.current }
+    result.user = {
+      ...result.user,
+      is_new_user: result.is_new_user,
+      embed_intent: intentRef.current,
+      // { tierIndex, cycle } — the tier clicked here, so the plans screen opens
+      // that plan's receipt (or its card-add redirect) with no second pick.
+      embed_plan: pickedPlanRef.current,
+    }
 
-    if (result.sync === 'started') {
+    // Only the trial path waits on sync here. "Subscribe Now" goes straight
+    // to the plans screen — sync keeps running server-side and is shown after
+    // payment instead, so nothing delays the merchant reaching the card.
+    if (result.sync === 'started' && intentRef.current !== 'explore') {
       setPhase('sync')
+      setPendingComplete({ token: result.token, profile: result.user })
       notifyParent('dm:onboarding_sync_started')
-      pollSync(context.provider_id, result.token, result.user)
     } else {
-      notifyParent('dm:chat_open')
+      if (intentRef.current !== 'explore') notifyParent('dm:chat_open')
       onComplete(result.token, result.user)
     }
-  }
-
-  function pollSync(connId, token, profile) {
-    let attempts   = 0
-    let latestRows = 0
-    const interval = setInterval(async () => {
-      attempts++
-      try {
-        const r    = await embedGetProviderStatus(connId)
-        const prog = r.progress
-        if (prog) {
-          setSyncMsg(friendlySyncMsg(prog.message, appNm))
-          setSyncPct(prog.percent || 0)
-          setSyncRows(prog.rows_synced || 0)
-          latestRows = prog.rows_synced || latestRows
-        }
-        if (r.status === 'connected' || r.status === 'active') {
-          clearInterval(interval)
-          notifyParent('dm:sync_complete', { rows: r.last_sync_rows || latestRows })
-          setTimeout(() => onComplete(token, profile), 600)
-        } else if (r.status === 'error') {
-          clearInterval(interval)
-          setTimeout(() => onComplete(token, profile), 1500)
-        }
-      } catch {
-        if (attempts > 90) {
-          clearInterval(interval)
-          onComplete(token, profile)
-        }
-      }
-    }, 2000)
   }
 
   function fail(msg) {
@@ -557,7 +533,7 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
                                 ))}
                               </div>
                               <button
-                                onClick={() => handleAccept('explore')}
+                                onClick={() => handleAccept('explore', { tierIndex: i, cycle: spCycle })}
                                 disabled={loading}
                                 style={{
                                   width: '100%', padding: '11px', borderRadius: 9999, fontSize: 13, fontWeight: 700,
@@ -636,7 +612,10 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
             </div>
           )}
 
-          <button onClick={handleAccept} disabled={loading} style={primaryBtn(loading, sp)}>
+          {/* Arrow-wrapped, not passed bare: React hands onClick the event, which
+              landed in `intent` and made every downstream `intent === 'trial'`
+              check fail — the trial never auto-started. */}
+          <button onClick={() => handleAccept('trial')} disabled={loading} style={primaryBtn(loading, sp)}>
             {loading ? <><Spin sp={sp} /> Setting up…</> : 'Try SalesPlay AI with Starter'}
           </button>
 
@@ -670,38 +649,13 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
       )}
 
       {/* ── SYNC ───────────────────────────────────────────────────────────── */}
-      {phase === 'sync' && (
-        <div style={{ width: '100%', marginTop: 14 }}>
-          <div style={{ fontSize: 13, color: sp ? SP.text : 'var(--text2)', marginBottom: 14, minHeight: 18 }}>
-            {syncMsg}
-          </div>
-
-          <div style={{ height: 4, background: sp ? '#E2E8F0' : 'var(--bg3)', borderRadius: 2, overflow: 'hidden', marginBottom: 10 }}>
-            {syncPct > 0
-              ? <div style={{ height: '100%', width: `${syncPct}%`, background: sp ? SP.blue : 'var(--blue)', borderRadius: 2, transition: 'width .6s ease' }} />
-              : <div style={{ height: '100%', width: '30%', background: sp ? SP.blue : 'var(--blue)', borderRadius: 2, animation: 'obSlide 1.4s linear infinite' }} />
-            }
-          </div>
-
-          <div style={{ display: 'flex', justifyContent: 'center', gap: 14, fontSize: 11, color: sp ? SP.text3 : 'var(--text3)', marginBottom: 16 }}>
-            {syncRows > 0 && <span>Syncing data</span>}
-            {syncPct > 0  && <span>{syncPct}%</span>}
-          </div>
-
-          <div style={cardStyle(sp)}>
-            {[
-              { icon: '🔗', text: `Connecting to ${appNm}` },
-              { icon: '⚙️', text: 'Setting up your workspace' },
-              { icon: '🧠', text: 'Preparing your analytics' },
-              { icon: '⚡', text: 'This only happens once — future questions load instantly' },
-            ].map(({ icon, text }, i, arr) => (
-              <div key={i} style={rowStyle(sp, i === arr.length - 1)}>
-                <span style={{ fontSize: 14, flexShrink: 0 }}>{icon}</span>
-                <span style={{ fontSize: 11, color: sp ? SP.text : 'var(--text2)' }}>{text}</span>
-              </div>
-            ))}
-          </div>
-        </div>
+      {phase === 'sync' && pendingComplete && (
+        <EmbedSyncProgress
+          connId={context.provider_id}
+          appNm={appNm}
+          sp={sp}
+          onDone={() => onComplete(pendingComplete.token, pendingComplete.profile)}
+        />
       )}
 
       {/* ── ERROR ──────────────────────────────────────────────────────────── */}
