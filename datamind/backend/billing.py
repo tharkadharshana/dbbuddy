@@ -96,6 +96,14 @@ STANDARD_PLAN = "Standard"
 # surfaced to the user as a plan limit (see get_user_subscription callers).
 TOKEN_HARD_CAP = 25_000.0
 
+# ── Free-subscription mode ────────────────────────────────────────────────────
+# Launch period: everyone gets the trial, nobody is shown a price. Lives here
+# because both the embed widget and the main app gate on it, and both already
+# import from this module. Read at import, so flipping it is a backend restart
+# -- no frontend rebuild, no bundle redeploy, no database write. The clients
+# read it from GET /embed/context and GET /billing/subscription.
+SUBSCRIPTION_FREE = os.getenv("SUBSCRIPTION_FREE", "false").strip().lower() in ("1", "true", "yes")
+
 # No literal "unlimited" sentinel exists in get_plan_history_limit() (see its
 # docstring) — this is the same "big number stands in for unlimited" trick
 # the old Pro tier used (200 months as a stand-in for "since 2010"), just

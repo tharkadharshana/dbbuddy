@@ -61,7 +61,7 @@ from billing import (
     check_ai_limit, check_db_limit, purchase_addon, get_llm_usage_history,
     get_addon_pricing, charge_ai_usage, get_ai_credit_rate, set_ai_credit_rate,
     calculate_tokens, charge_tokens, get_token_usage_history,
-    check_plan_feature, get_plan_history_limit,
+    check_plan_feature, get_plan_history_limit, SUBSCRIPTION_FREE,
 )
 from embed import router as embed_router, bootstrap_embed_tables
 from feedback import router as feedback_router, bootstrap_feedback_tables
@@ -3964,11 +3964,14 @@ def billing_plans(request: Request):
 @v1.get("/billing/subscription")
 @_limiter.limit(RL_READ)
 def billing_subscription(request: Request, user: dict = Depends(current_user)):
+    # subscription_free rides along on a payload the app already fetches on
+    # load, so the launch-period switch costs no extra round trip and needs no
+    # rebuild to flip.
     try:
-        return get_user_subscription(user["email"])
+        return {**get_user_subscription(user["email"]), "subscription_free": SUBSCRIPTION_FREE}
     except Exception as e:
         log.error("Get subscription failed", user=user["email"], error=str(e))
-        return {"status": "no_subscription"}
+        return {"status": "no_subscription", "subscription_free": SUBSCRIPTION_FREE}
 
 
 class SubscribeRequest(BaseModel):
@@ -3977,6 +3980,13 @@ class SubscribeRequest(BaseModel):
 @v1.post("/billing/subscribe")
 @_limiter.limit(RL_WRITE)
 def billing_subscribe(request: Request, req: SubscribeRequest, user: dict = Depends(current_user)):
+    if SUBSCRIPTION_FREE:
+        # The UI offers no way here in free mode; a call means a stale tab.
+        raise HTTPException(
+            status_code=403,
+            detail="Subscriptions are free right now -- there is nothing to pay for. "
+                   "Please reload the page.",
+        )
     plan = get_plan_by_id(req.plan_id)
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
