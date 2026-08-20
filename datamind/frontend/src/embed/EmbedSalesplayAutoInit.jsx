@@ -471,7 +471,7 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
           )}
 
           <button onClick={handleAccept} disabled={loading} style={primaryBtn(loading, sp)}>
-            {loading ? <><Spin sp={sp} /> Setting up…</> : 'Try SalesPlay AI Beta with Starter'}
+            {loading ? <><Spin sp={sp} /> Setting up…</> : 'Try SalesPlay AI Beta'}
           </button>
 
           <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 10, lineHeight: 1.6 }}>
