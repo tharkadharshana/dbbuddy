@@ -131,6 +131,11 @@ function Logo() {
 export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, onComplete, onError, onClose }) {
   const sp = context?.provider_id === 'salesplay'
 
+  // Launch period (backend SUBSCRIPTION_FREE, served on /embed/context): no
+  // prices anywhere. One "Try <app>" button, no plan tiers, no explore
+  // accordion — and nothing to fetch pricing for.
+  const subscriptionFree = !!context?.subscription_free
+
   const [phase, setPhase]       = useState('consent')  // 'consent' | 'profile' | 'account' | 'sync' | 'error'
   const [pendingComplete, setPendingComplete] = useState(null) // { token, profile } handed to onComplete once sync finishes
   const [errorMsg, setErrorMsg] = useState('')
@@ -170,10 +175,11 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
   // Load subscription plans for the consent screen pricing section.
   // Non-fatal — if this fails, the consent screen still renders without pricing.
   useEffect(() => {
+    if (subscriptionFree) return   // no pricing section to fill
     embedGetPlans()
       .then(r => setPlans(Array.isArray(r?.plans) ? r.plans : []))
       .catch(() => setPlans([]))
-  }, [])
+  }, [subscriptionFree])
 
   // Default-select the first plan once plans load (drives the highlighted card).
   useEffect(() => {
@@ -432,9 +438,15 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
           }}>
             <div style={{ padding: 16 }}>
               <button onClick={() => handleAccept('trial')} disabled={loading} style={{ ...primaryBtn(loading, sp), marginTop: 0 }}>
-                {loading ? <><Spin sp={sp} /> Setting up…</> : 'Start Free Trial (14 Days)'}
+                {loading
+                  ? <><Spin sp={sp} /> Setting up…</>
+                  : subscriptionFree ? `Try ${appNm}` : 'Start Free Trial (14 Days)'}
               </button>
             </div>
+            {/* Pricing is hidden entirely while subscriptions are free: no
+                explore toggle, no tier cards, nothing that names a price. */}
+            {!subscriptionFree && (
+              <>
             <button
               onClick={handleToggleExplore}
               disabled={loading}
@@ -552,6 +564,8 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
                 </div>
               </div>
             </div>
+              </>
+            )}
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 14 }}>
