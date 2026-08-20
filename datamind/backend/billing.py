@@ -553,8 +553,20 @@ def get_plan_by_id(plan_id) -> Optional[Dict]:
         conn.close()
 
 
-def subscribe_to_plan(user_email: str, plan_id: int, period_days: Optional[int] = None):
+def subscribe_to_plan(user_email: str, plan_id: Optional[int] = None, period_days: Optional[int] = None):
     """Cancel existing subscription and start a new active one.
+
+    plan_id is optional and callers should normally omit it: with it left out
+    the live plan is resolved by NAME, the same way start_trial does. That is
+    the correct default because there is exactly one active plan — callers on
+    the far side of a payment gateway cannot know its id, and an id they
+    hardcode is an id that goes stale the moment the table is reseeded.
+
+    Resolving by name also sidesteps subscription_plans.id being whatever the
+    deployment happens to have: the bootstrap declares INT AUTO_INCREMENT, but
+    a database created before that runs may still have a VARCHAR id, in which
+    case an INSERT with no id lands the empty string rather than a number.
+    `name` is UNIQUE in both, so it is the dependable key.
 
     period_days overrides the plan's default validity_days — needed for
     external payment gateways (e.g. Salesplay) that sell the same plan on
@@ -571,10 +583,26 @@ def subscribe_to_plan(user_email: str, plan_id: int, period_days: Optional[int] 
             WHERE user_email = %s AND status IN ('trial', 'active')
         """, (user_email,))
 
-        cur.execute("SELECT validity_days FROM subscription_plans WHERE id = %s", (plan_id,))
-        plan = cur.fetchone()
-        if not plan:
-            raise ValueError(f"Plan {plan_id} not found")
+        # is_active is checked in both branches on purpose. Activating a
+        # retired plan after a real charge is silent and expensive to unpick;
+        # failing here is loud and the charge can be reconciled.
+        if plan_id is None:
+            cur.execute(
+                "SELECT id, validity_days FROM subscription_plans WHERE name = %s AND is_active = 1",
+                (STANDARD_PLAN,),
+            )
+            plan = cur.fetchone()
+            if not plan:
+                raise ValueError(f"No active plan named {STANDARD_PLAN!r}")
+            plan_id = plan["id"]
+        else:
+            cur.execute(
+                "SELECT id, validity_days FROM subscription_plans WHERE id = %s AND is_active = 1",
+                (plan_id,),
+            )
+            plan = cur.fetchone()
+            if not plan:
+                raise ValueError(f"Plan {plan_id} not found or not active")
 
         today = date.today()
         days = period_days if period_days else plan["validity_days"]
