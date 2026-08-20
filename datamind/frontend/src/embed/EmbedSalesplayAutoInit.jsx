@@ -598,7 +598,10 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
             </div>
           )}
 
-          <button onClick={handleAccept} disabled={loading} style={primaryBtn(loading, sp)}>
+          {/* Arrow-wrapped, not passed bare: React hands onClick the event, which
+              landed in `intent` and made every downstream `intent === 'trial'`
+              check fail — the trial never auto-started. */}
+          <button onClick={() => handleAccept('trial')} disabled={loading} style={primaryBtn(loading, sp)}>
             {loading ? <><Spin sp={sp} /> Setting up…</> : 'Try SalesPlay AI with Starter'}
           </button>
 
