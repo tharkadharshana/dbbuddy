@@ -69,12 +69,6 @@ function parseAmountText(text) {
 const CARD_POLL_INTERVAL_MS = Number(import.meta.env.VITE_SALESPLAY_CARD_POLL_INTERVAL_MS) || 3000
 const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 
-// ponytail: tier index → DataMind subscription_plans.id/name. Matches the
-// current DB seed (Standard=1, Growth=2, Pro=3, sort_order 1/2/3 — same order
-// as ascending price, same order Salesplay's tiers are grouped in above).
-// Revisit if subscription_plans is ever reseeded with different ids/order.
-const TIER_TO_INTERNAL_PLAN_ID = [1, 2, 3]
-
 // Card-network marks, drawn inline rather than fetched — the receipt is the
 // one screen where the merchant is about to be charged, and a card that looks
 // like their actual card reads as trustworthy. Salesplay sends `brand` from
@@ -276,9 +270,11 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
         // Confirmed with Salesplay directly: literal "MANUAL", not the plan's
         // billing_type (MONTHLY/YEARLY) — that's a display field, not this one.
         subscription_activation_type: 'MANUAL',
-        // The backend activates this DataMind plan synchronously the instant
-        // Salesplay confirms the charge — see TIER_TO_INTERNAL_PLAN_ID above.
-        internal_plan_id: TIER_TO_INTERNAL_PLAN_ID[plan._tierIndex] || 1,
+        // The backend activates our own plan synchronously the instant Salesplay
+        // confirms the charge. It resolves WHICH plan itself, by name — this
+        // used to send a subscription_plans.id mapped from tier position, which
+        // is an id the browser cannot know and that went stale on reseed.
+        // The billing cycle is still ours to send: it is what the merchant picked.
         internal_period_days: plan.billing_type === 'YEARLY' ? 365 : 30,
       })
 
