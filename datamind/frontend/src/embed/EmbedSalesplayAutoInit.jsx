@@ -22,6 +22,7 @@ import { salesplayOnboard, embedGetProviderStatus, embedGetPlans, salesplaySubsc
 import { notifyParent } from './EmbedApp'
 import { appName, productTitle as resolveProductTitle } from './embedBranding'
 import BrandLogo from '../components/Logo'
+import BetaBadge from '../components/BetaBadge'
 import EmbedSyncProgress from './EmbedSyncProgress'
 import salesplayAiLogo from '../assets/salesplay-ai-logo.svg'
 import { TIER_FEATURES, groupPlansByTier, planPrice, yearlySavingsPct, displayPlanName } from './embedSalesplayPlanFormat'
@@ -343,6 +344,7 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
             }}>
               {productTitle}
             </h2>
+            {subscriptionFree && <BetaBadge size={11} style={{ alignSelf: 'center' }} />}
           </div>
           <p style={{ fontSize: 14, lineHeight: '22px', color: SP.text, marginBottom: 24 }}>
             Ask questions in your own language, discover past performance and emerging trends.
