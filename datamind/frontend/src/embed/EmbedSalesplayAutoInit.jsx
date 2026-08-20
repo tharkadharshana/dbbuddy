@@ -220,9 +220,13 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
   // immediately and goes straight to chat; 'explore' lands on the plans
   // screen already expanded so the user can see pricing / subscribe.
   const intentRef = useRef('trial')
+  // Which tier card was clicked, so the plans screen can go straight to that
+  // plan's receipt instead of asking the user to pick all over again.
+  const pickedPlanRef = useRef(null)
 
-  async function handleAccept(intent = 'trial') {
+  async function handleAccept(intent = 'trial', pickedPlan = null) {
     intentRef.current = intent
+    pickedPlanRef.current = pickedPlan
     setLoading(true)
     await runFlow()
     setLoading(false)
@@ -236,8 +240,11 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
       return
     }
 
-    // Single backend call — profile fetch, token creation, account setup all happen server-side
-    setPhase('loading')
+    // Single backend call — profile fetch, token creation, account setup all happen server-side.
+    // 'explore' keeps the consent screen up while this runs: that merchant clicked a
+    // priced tier, and a full-screen spinner between the click and the card is the
+    // step they read as "nothing happened". Their button already spins "Setting up…".
+    if (intentRef.current !== 'explore') setPhase('loading')
     let result
     try {
       result = await salesplayOnboard(partnerKey, aat)
@@ -253,7 +260,14 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
     // Carried through to onComplete so EmbedApp can force-show the plans
     // screen once for brand-new users regardless of computed access (their
     // trial is already silently active — this is informational/upsell).
-    result.user = { ...result.user, is_new_user: result.is_new_user, embed_intent: intentRef.current }
+    result.user = {
+      ...result.user,
+      is_new_user: result.is_new_user,
+      embed_intent: intentRef.current,
+      // { tierIndex, cycle } — the tier clicked here, so the plans screen opens
+      // that plan's receipt (or its card-add redirect) with no second pick.
+      embed_plan: pickedPlanRef.current,
+    }
 
     // Only the trial path waits on sync here. "Subscribe Now" goes straight
     // to the plans screen — sync keeps running server-side and is shown after
@@ -519,7 +533,7 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
                                 ))}
                               </div>
                               <button
-                                onClick={() => handleAccept('explore')}
+                                onClick={() => handleAccept('explore', { tierIndex: i, cycle: spCycle })}
                                 disabled={loading}
                                 style={{
                                   width: '100%', padding: '11px', borderRadius: 9999, fontSize: 13, fontWeight: 700,

@@ -123,6 +123,7 @@ function EmbedApp() {
   const [aatToken, setAatToken] = useState('')
   const [subAccess, setSubAccess] = useState(null) // { hasAccess, trialAvailable, blockReason, plans }
   const [plansStartExpanded, setPlansStartExpanded] = useState(false) // consent screen's "Explore plans" was clicked — land on salesplay_plans already expanded
+  const [plansAutoPick, setPlansAutoPick] = useState(null) // { tierIndex, cycle } — a tier was clicked on the consent screen; open its receipt directly
 
   const layoutBar = params.get('layout') === 'bar'
   const [expanded, setExpanded]         = useState(!layoutBar)
@@ -265,6 +266,7 @@ function EmbedApp() {
     if (userData) localStorage.setItem('dm_embed_user', JSON.stringify(userData))
     const intent = userData?.embed_intent // 'trial' | 'explore' — which consent-screen button was clicked
     setPlansStartExpanded(intent === 'explore')
+    setPlansAutoPick(userData?.embed_plan || null)
 
     // Salesplay: onboarding no longer starts a trial by itself, so a brand-new
     // merchant has no subscription yet — checkSalesplayAccess reports
@@ -487,6 +489,7 @@ function EmbedApp() {
         availableCreditText={subAccess?.availableCreditText}
         showPriceText={subAccess?.showPriceText}
         initialExpanded={plansStartExpanded}
+        autoPick={plansAutoPick}
         onTrialSelected={handleTrialSelected}
         onSubscribed={handlePlanSubscribed}
         onRefreshAccess={handleRefreshAccess}

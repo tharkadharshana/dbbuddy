@@ -137,13 +137,13 @@ function Spin({ color = '#fff' }) {
   return <div style={{ width:13, height:13, border:`2px solid ${color === '#fff' ? 'rgba(255,255,255,0.3)' : 'rgba(0,88,190,0.25)'}`, borderTopColor:color, borderRadius:'50%', animation:'spin 0.7s linear infinite' }} />
 }
 
-export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, trialAvailable, blockReason, isPaidQuotaBlocked, trialDays = 14, billingDetailsAdded, cardAddUrl, cardBrand, cardLast4, cardExpired, availableCreditText, showPriceText, initialExpanded = false, onTrialSelected, onSubscribed, onRefreshAccess, onClose }) {
+export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, trialAvailable, blockReason, isPaidQuotaBlocked, trialDays = 14, billingDetailsAdded, cardAddUrl, cardBrand, cardLast4, cardExpired, availableCreditText, showPriceText, initialExpanded = false, autoPick = null, onTrialSelected, onSubscribed, onRefreshAccess, onClose }) {
   const [selectedPlan, setSelectedPlan] = useState(null) // { ...plan, _tierIndex } under review on the receipt screen
   const [checking, setChecking] = useState(false) // re-checking access after returning from card_add_url (manual "Continue")
   const [awaitingCard, setAwaitingCard] = useState(false) // polling for a card add — grays out the screen
   const [confirmBusy, setConfirmBusy] = useState(false) // paying + confirming activation
   const [paidPending, setPaidPending] = useState(false) // charge succeeded — blocks re-paying even if the confirm check below fails
-  const [billingCycle, setBillingCycle] = useState('MONTHLY') // global toggle — one cycle for all 3 tiers
+  const [billingCycle, setBillingCycle] = useState(autoPick?.cycle === 'YEARLY' ? 'YEARLY' : 'MONTHLY') // global toggle — one cycle for all 3 tiers
   const [plansExpanded, setPlansExpanded] = useState(initialExpanded) // trial-available plan list starts collapsed to just the trial CTA, unless the consent screen's "Explore plans" sent us here already open
   const [error, setError] = useState('')
   const [preview, setPreview] = useState(null) // raw order/preview response for the selected plan
@@ -218,6 +218,19 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
     cardPollActive.current = false
     setAwaitingCard(false)
   }
+
+  // A tier was already clicked on the consent screen — act on it instead of
+  // re-rendering the same list and asking for the same click twice. Runs once:
+  // after this the user owns the screen, so a later cancel/back must not
+  // re-trigger it.
+  const autoPickDone = useRef(false)
+  useEffect(() => {
+    if (autoPickDone.current || !autoPick || isPaidQuotaBlocked) return
+    const plan = displayPlans?.[autoPick.tierIndex]
+    if (!plan) return // plans not loaded yet, or that cycle isn't configured — leave the list up
+    autoPickDone.current = true
+    handleChoosePlan(plan, autoPick.tierIndex)
+  }, [autoPick, displayPlans, isPaidQuotaBlocked])
 
   function handleChoosePlan(plan, tierIndex) {
     setError('')
@@ -463,6 +476,15 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
           <div style={{ width: 28, height: 28, border: '3px solid rgba(0,88,190,0.2)', borderTopColor: SP.blue, borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
           <div style={{ fontSize: 13, fontWeight: 600, color: SP.heading }}>Waiting for your payment method…</div>
           <div style={{ fontSize: 12, color: SP.text3, maxWidth: 240, textAlign: 'center' }}>Finish adding your card in the other tab — we'll pick it up automatically.</div>
+          {/* The auto-pick path reaches handleChoosePlan from an effect, not a
+              click, so its window.open can be popup-blocked. This link is the
+              same URL behind a real gesture — the only way back if that happens. */}
+          {cardAddUrl && (
+            <a href={cardAddUrl} target="_blank" rel="noopener noreferrer"
+              style={{ fontSize: 12, fontWeight: 600, color: SP.blue, textDecoration: 'underline' }}>
+              Didn't open? Add your card here
+            </a>
+          )}
           <button onClick={handleCancelCardWait} style={{ background: 'none', border: 'none', color: SP.blue, fontSize: 12, fontWeight: 600, cursor: 'pointer', marginTop: 4 }}>
             Cancel
           </button>
