@@ -382,37 +382,13 @@ def bootstrap_billing_tables():
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """)
 
-        # Seed plans  (name, price_usd, price_cents, ai_credits, db_rows, sort_order)
-        plans = [
-            ("Starter", "5.00",   500,   200,  2_000_000,    1),
-            ("Growth",  "10.00", 1000,   500,  5_000_000,    2),
-            ("Pro",     "25.00", 2500,  2000, 20_000_000,    3),
-        ]
-        for name, price_usd, price_cents, ai_credits, db_rows, sort_order in plans:
-            cur.execute("SELECT id FROM subscription_plans WHERE name = %s", (name,))
-            row = cur.fetchone()
-            if row:
-                cur.execute("""
-                    UPDATE subscription_plans
-                    SET price_usd=%s, price_cents=%s, ai_credits=%s, db_rows=%s,
-                        trial_days=14, validity_days=30, is_active=1, sort_order=%s
-                    WHERE id=%s
-                """, (price_usd, price_cents, ai_credits, db_rows, sort_order, row["id"]))
-            else:
-                cur.execute("""
-                    INSERT INTO subscription_plans
-                        (name, price_usd, price_cents, ai_credits,
-                         db_rows, trial_days, validity_days, is_active, sort_order)
-                    VALUES (%s,%s,%s,%s,%s,14,30,1,%s)
-                """, (name, price_usd, price_cents, ai_credits, db_rows, sort_order))
-
-        # Seed unified token limits — must match _TOKEN_LIMITS dict below
-        _TOKEN_LIMITS_SEED = {"Starter": 200.0, "Growth": 500.0, "Pro": 2000.0}
-        for _pname, _tlimit in _TOKEN_LIMITS_SEED.items():
-            cur.execute(
-                "UPDATE subscription_plans SET tokens_limit=%s WHERE name=%s",
-                (_tlimit, _pname),
-            )
+        # Plans are NOT seeded here. Beta and dev share one database, and
+        # subscription_plans is global config with no user column — both apps
+        # read the same rows. Beta used to UPDATE Starter/Growth/Pro back to
+        # is_active=1 here while dev's bootstrap sets them to is_active=0 and
+        # upserts a single 'Standard' plan, so whichever server restarted last
+        # decided which app broke. dev owns this table now; beta only reads it.
+        # See start_trial() below, which grants the trial on Standard.
 
         conn.commit()
         log.info("Billing tables bootstrapped")
