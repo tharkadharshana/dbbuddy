@@ -16,6 +16,7 @@ import EmbedOnboarding from './EmbedOnboarding'
 import EmbedChat from './EmbedChat'
 import EmbedSalesplayAutoInit from './EmbedSalesplayAutoInit'
 import EmbedSalesplayPlans from './EmbedSalesplayPlans'
+import EmbedFreeBlocked from './EmbedFreeBlocked'
 import EmbedSyncProgress from './EmbedSyncProgress'
 import EmbedSearchBar from './EmbedSearchBar'
 import EmbedFeedbackModal from './EmbedFeedbackModal'
@@ -122,6 +123,9 @@ function EmbedApp() {
   const [errorMsg, setError]    = useState('')
   const [aatToken, setAatToken] = useState('')
   const [subAccess, setSubAccess] = useState(null) // { hasAccess, trialAvailable, blockReason, plans }
+  // Backend SUBSCRIPTION_FREE, served on /embed/context. While on, the plans
+  // screen is never routed to — see routeNoAccess below.
+  const subscriptionFree = !!context?.subscription_free
   const [plansStartExpanded, setPlansStartExpanded] = useState(false) // consent screen's "Explore plans" was clicked — land on salesplay_plans already expanded
   const [plansAutoPick, setPlansAutoPick] = useState(null) // { tierIndex, cycle } — a tier was clicked on the consent screen; open its receipt directly
 
@@ -209,18 +213,14 @@ function EmbedApp() {
                   setState('chat')
                   notifyParent('dm:chat_open')
                 } else {
-                  setSubAccess(access)
-                  setState('salesplay_plans')
-                  notifyParent('dm:onboarding_start')
+                  await routeNoAccess(access)
                 }
               } catch {
                 // Still unreachable after a retry — don't fail open to chat,
                 // that would skip the plans screen for a merchant who never
                 // actually subscribed. Show plans with no data; its own
                 // "Continue" button lets them retry the check manually.
-                setSubAccess(null)
-                setState('salesplay_plans')
-                notifyParent('dm:onboarding_start')
+                await routeNoAccess(null)
               }
             } else {
               // New merchant — show consent screen before doing anything.
@@ -261,6 +261,32 @@ function EmbedApp() {
     return () => window.removeEventListener('message', handleIncoming)
   }, [partnerKey])
 
+  // Every "this merchant can't get in" path goes through here, so free mode
+  // has exactly one place to diverge instead of four scattered setState calls.
+  //
+  // While subscriptions are free the plans screen is never a destination: a
+  // merchant who has never subscribed is simply given the trial, and one who
+  // can't be (already used it, quota gone, or we couldn't check) gets an
+  // explanation instead of a card form.
+  async function routeNoAccess(access) {
+    if (subscriptionFree) {
+      if (access?.trialAvailable) {
+        try {
+          await handleTrialSelected()
+          return
+        } catch { /* fall through to the explanation screen */ }
+      }
+      setSubAccess(access)
+      setState('free_blocked')
+      notifyParent('dm:onboarding_start')
+      return
+    }
+
+    setSubAccess(access)
+    setState('salesplay_plans')
+    notifyParent('dm:onboarding_start')
+  }
+
   async function handleOnboardingComplete(token, userData) {
     localStorage.setItem('dm_embed_token', token)
     if (userData) localStorage.setItem('dm_embed_user', JSON.stringify(userData))
@@ -286,16 +312,18 @@ function EmbedApp() {
           } catch { /* fall through to plans screen so the user can retry there */ }
         }
 
-        setSubAccess(access)
-        setState(access.hasAccess ? 'chat' : 'salesplay_plans')
-        notifyParent(access.hasAccess ? 'dm:chat_open' : 'dm:onboarding_start')
+        if (access.hasAccess) {
+          setSubAccess(access)
+          setState('chat')
+          notifyParent('dm:chat_open')
+        } else {
+          await routeNoAccess(access)
+        }
         return
       } catch {
         // Still unreachable after a retry — don't fail open to chat, same
         // reasoning as the returning-merchant check above.
-        setSubAccess(null)
-        setState('salesplay_plans')
-        notifyParent('dm:onboarding_start')
+        await routeNoAccess(null)
         return
       }
     }
@@ -346,6 +374,20 @@ function EmbedApp() {
     } catch {
       return null
     }
+  }
+
+  // Free mode's blocked screen shows a retry only when the access check itself
+  // failed. Re-run it and route on the real answer — access may now be fine
+  // (trial granted, quota reset), so this can land the merchant straight in chat.
+  async function handleFreeBlockedRetry() {
+    const access = await checkSalesplayAccess(partnerKey, aatToken)
+    if (access.hasAccess) {
+      setSubAccess(access)
+      setState('chat')
+      notifyParent('dm:chat_open')
+      return
+    }
+    await routeNoAccess(access)
   }
 
   function handleExpired() {
@@ -469,6 +511,16 @@ function EmbedApp() {
           />
         </div>
       </div>
+    )
+  } else if (state === 'free_blocked') {
+    content = (
+      <EmbedFreeBlocked
+        context={context}
+        reason={subAccess?.blockReason}
+        trialDays={subAccess?.trialDays || 14}
+        onRetry={handleFreeBlockedRetry}
+        onClose={handleClose}
+      />
     )
   } else if (state === 'salesplay_plans') {
     content = (
