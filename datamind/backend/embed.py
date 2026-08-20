@@ -821,6 +821,24 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
 _SALESPLAY_SUBSCRIPTION_BASE = os.getenv("SALESPLAY_SUBSCRIPTION_BASE_URL", _SALESPLAY_BASE)
 
 
+def _reject_if_subscription_free():
+    """Refuse to take money while SUBSCRIPTION_FREE is on.
+
+    The widget already hides every route to these endpoints in free mode, so
+    reaching them means a stale iframe that was loaded before the flag went
+    on, or a direct call. Either way the merchant's card must not be charged
+    during a period we advertised as free -- a wrong charge is far more
+    expensive to undo than a failed request.
+    """
+    if SUBSCRIPTION_FREE:
+        raise HTTPException(
+            status_code=403,
+            detail="Subscriptions are free right now -- there is nothing to pay for. "
+                   "Please reload the page.",
+        )
+
+
+
 @router.get("/salesplay/subscription/info")
 def salesplay_subscription_info(request: Request, partner_key: str, aat: str, user: dict = Depends(current_user)):
     """
@@ -906,6 +924,7 @@ def salesplay_subscription_payment(request: Request, req: SalesplaySubscriptionP
     response carries a redirect link the frontend must send the user to.
     """
     _salesplay_guard(req.partner_key, request)
+    _reject_if_subscription_free()
     body = req.dict(exclude={"partner_key", "aat", "internal_plan_id", "internal_period_days"}, exclude_none=True)
     url = f"{_SALESPLAY_SUBSCRIPTION_BASE}/subscriptions/payment"
     log.debug("Salesplay subscription API request", method="POST", url=url, body=body)
@@ -967,6 +986,7 @@ def salesplay_subscription_preview(request: Request, req: SalesplaySubscriptionP
     itself; this endpoint is the only source for what gets shown/charged.
     """
     _salesplay_guard(req.partner_key, request)
+    _reject_if_subscription_free()
     body = req.dict(exclude={"partner_key", "aat"}, exclude_none=True)
     url = f"{_SALESPLAY_SUBSCRIPTION_BASE}/subscriptions/order/preview"
     log.debug("Salesplay subscription API request", method="POST", url=url, body=body)
