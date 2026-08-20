@@ -440,7 +440,7 @@ def _get_period_usage(cur, user_email: str, period_start) -> dict:
 
 # ── Public functions ──────────────────────────────────────────────────────────
 
-def start_trial(user_email: str, plan_name: str = "Starter"):
+def start_trial(user_email: str, plan_name: str = "Standard"):
     """Start a 14-day trial for a newly registered user. No-op if subscription exists."""
     conn = _get_conn()
     conn.autocommit = False
