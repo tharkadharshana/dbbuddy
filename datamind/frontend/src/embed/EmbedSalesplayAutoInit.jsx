@@ -26,6 +26,7 @@ import BetaBadge from '../components/BetaBadge'
 import EmbedSyncProgress from './EmbedSyncProgress'
 import salesplayAiLogo from '../assets/salesplay-ai-logo.svg'
 import { TIER_FEATURES, groupPlansByTier, planPrice, yearlySavingsPct, displayPlanName } from './embedSalesplayPlanFormat'
+import { fmtTok } from '../formatTokens'
 
 // ── SalesPlay visual language (mirrors EmbedChat's isSalesplay branch) ───────
 const SP = {
@@ -42,16 +43,6 @@ const SP = {
   shadow:    '0px 4px 20px 0px rgba(84,95,115,0.12)',
 }
 
-// Backend stores small "AI credit" values (e.g. 50); the Billing page displays
-// these multiplied out as "Tokens" (200 -> 2M). Mirrors PLAN_FEATURES/fmtTok
-// in pages/BillingPage.jsx so the embed consent screen matches exactly.
-const TDM = 10_000
-const fmtTok = (raw) => {
-  const n = (raw || 0) * TDM
-  if (n >= 1_000_000) return `${parseFloat((n / 1_000_000).toFixed(2))}M`
-  if (n >= 1_000)     return `${parseFloat((n / 1_000).toFixed(1))}K`
-  return Math.round(n).toLocaleString()
-}
 
 const PLAN_FEATURES = {
   Starter: [

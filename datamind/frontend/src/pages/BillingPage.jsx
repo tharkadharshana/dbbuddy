@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { fetchBillingPlans, fetchSubscription, fetchBillingUsage, subscribeToPlan, purchaseAddon, startTrial } from '../utils/api'
 import { APP_NAME } from '../appName'
 import { Spinner } from '../components/UI'
+import { fmtTok } from '../formatTokens'
 
 // While in beta there is no live payment gateway — plans/add-ons are shown
 // for preview only. Set to false once payments go live.
@@ -9,13 +10,6 @@ const BETA_MODE = true
 const SUPPORT_EMAIL = 'support@datamind.ai'
 const BETA_DISABLED_STYLE = { opacity: 0.5, pointerEvents: 'none', filter: 'grayscale(0.4)' }
 
-const TDM = 10_000 // Token Display Multiplier — backend stores small values, display as large
-const fmtTok = (raw) => {
-  const n = (raw || 0) * TDM
-  if (n >= 1_000_000) return `${parseFloat((n / 1_000_000).toFixed(2))}M`
-  if (n >= 1_000)     return `${parseFloat((n / 1_000).toFixed(1))}K`
-  return Math.round(n).toLocaleString()
-}
 
 // ── Plan definitions ──────────────────────────────────────────────────────────
 const PLAN_FEATURES = {
