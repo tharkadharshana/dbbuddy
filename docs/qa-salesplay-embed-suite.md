@@ -35,6 +35,10 @@ One of those claims was **false** when this suite was first run. See
 
 - The backend's own Python interpreter (needs `mysql-connector-python`,
   `python-dotenv`).
+- Windows or POSIX. Stopping an instance kills the process tree — `taskkill /T`
+  on Windows, `os.killpg` elsewhere (instances are started in their own process
+  group for exactly this). Freeing a stuck port needs `Get-NetTCPConnection` on
+  Windows and `lsof` on POSIX.
 - `datamind/backend/.env` — database credentials and Salesplay base URLs are
   read from it. **The suite never edits this file.**
 - One free TCP port per instance.
@@ -191,6 +195,27 @@ Fixed by parking the connection at module scope. The reference *is* the
 mechanism: `GET_LOCK` lives on a session, and with a pooled connection, not
 closing it is not enough.
 
+Parking it introduced two follow-on hazards, both fixed in the same function:
+
+- **Re-entrancy.** The watchdog relaunches the scheduler loop when its thread
+  dies. That relaunch calls `_try_acquire_scheduler_lock` again, which would
+  borrow a *fresh* connection and lose `GET_LOCK` to our **own** parked
+  session — the thread exits, the watchdog has already `break`ed, and syncs
+  stop for the life of the process while no other instance can take over
+  either. `_try_acquire_scheduler_lock` now returns `True` immediately if this
+  process already holds the lock.
+- **Idle timeout.** The parked connection is never used again (ticks borrow
+  their own), so MySQL's `wait_timeout` — 8 hours by default — would close it
+  and silently free the lock, restoring the duplicate-scheduler symptom. The
+  tick loop now calls `_scheduler_lock_held()` every 60s, which pings with
+  `reconnect=False` on purpose: a reconnect would open a new session that does
+  **not** hold the lock while we carried on believing it did. If the lock is
+  genuinely gone and cannot be re-acquired, the loop stands down.
+
+Accepted cost: the parked connection never returns to the pool, so its
+semaphore permit is never released and the scheduler-owning worker runs at
+`DB_POOL_SIZE - 1`. One permit out of 20, for a lock that actually holds.
+
 Regression guard: the two `INFRA` scheduler checks above. They read each
 instance's log for the acquisition message **and** query `IS_USED_LOCK`,
 because winning-then-dropping and two-winners fail differently.
@@ -209,6 +234,13 @@ retried with a backoff multiplier).
 
 The suite asserts this happens, so it is documented behaviour rather than a
 production surprise. **Coordinate restart windows across instances.**
+
+The check only ever stages an integration belonging to one of **this run's**
+merchants, waits for in-flight syncs to finish first (onboarding triggers one,
+and a live sync writes its own status underneath you), and restores the exact
+`status` and `last_error` it found — in a `finally`, so an aborted restart
+cannot leave a row stuck in `syncing`. The database is shared with real
+accounts; the check must not touch them.
 
 ### 3. `get_ai_pos_info` returns 404 on predev2 — ENVIRONMENT
 
@@ -328,7 +360,7 @@ VITE_BACKEND=http://localhost:8002 npm run dev -- --port 5175
 
 Two instances, one database, seven aats, `--payment` not requested:
 
-```
+```text
 33 passed, 0 failed, 1 skipped
 ```
 

@@ -131,6 +131,29 @@ def http(method, url, body=None, token=None, timeout=60):
         return 0, str(e)
 
 
+# -------------------------------------------------------------- process control
+
+IS_WINDOWS = os.name == "nt"
+
+
+def _kill_tree(pid):
+    """Kill a process and its children.
+
+    uvicorn spawns a worker child that outlives a parent-only kill and keeps
+    holding the port, so the whole tree has to go - see Instance.stop().
+    Windows has no os.killpg, hence taskkill /T; elsewhere SIGKILL the process
+    group the child was started in.
+    """
+    if IS_WINDOWS:
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
+        return
+    import signal
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
 # -------------------------------------------------------------------- instance
 
 class Instance:
@@ -174,6 +197,8 @@ class Instance:
         self.proc = subprocess.Popen(
             [self.python, "start.py"], cwd=self.backend_dir, env=env,
             stdout=log, stderr=subprocess.STDOUT,
+            # Own process group so _kill_tree can reach uvicorn's worker child.
+            **({} if IS_WINDOWS else {"start_new_session": True}),
         )
         print(f"  [{self.name}] starting on {self.port} "
               f"(SUBSCRIPTION_FREE={env['SUBSCRIPTION_FREE']}) pid={self.proc.pid}")
@@ -198,8 +223,7 @@ class Instance:
         every flip assertion after that is a lie. Kill the tree, then verify.
         """
         if self.proc and self.proc.poll() is None:
-            subprocess.run(["taskkill", "/PID", str(self.proc.pid), "/T", "/F"],
-                           capture_output=True)
+            _kill_tree(self.proc.pid)
             self.proc = None
         # Belt and braces: anything still listening on our port dies too,
         # including an orphan from an earlier run this object never owned.
@@ -215,13 +239,19 @@ class Instance:
                          f"backend whose SUBSCRIPTION_FREE is unknown.")
 
     def _kill_port_owner(self):
-        subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             f"Get-NetTCPConnection -LocalPort {self.port} -State Listen "
-             f"-ErrorAction SilentlyContinue | ForEach-Object "
-             f"{{ taskkill /PID $_.OwningProcess /T /F }}"],
-            capture_output=True,
-        )
+        """Kill whatever still listens on our port, whoever started it."""
+        if IS_WINDOWS:
+            subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 f"Get-NetTCPConnection -LocalPort {self.port} -State Listen "
+                 f"-ErrorAction SilentlyContinue | ForEach-Object "
+                 f"{{ taskkill /PID $_.OwningProcess /T /F }}"],
+                capture_output=True,
+            )
+        else:
+            subprocess.run(["bash", "-c",
+                            f"lsof -ti tcp:{self.port} -sTCP:LISTEN | xargs -r kill -9"],
+                           capture_output=True)
 
     def restart(self, subscription_free=None):
         self.stop()
@@ -630,33 +660,71 @@ def check_scheduler_lock(r, instances, conn):
             "nobody holds it - the lock connection was returned to the pool")
 
 
-def check_restart_sweep(r, instances, conn):
+def check_restart_sweep(r, instances, conn, qa_emails):
     """bootstrap_integration_tables clears 'syncing' with no tenant filter, so
     restarting one instance errors in-flight syncs belonging to the other. This
     is the one real shared-database defect - assert it so it is documented
-    behaviour rather than a production surprise."""
+    behaviour rather than a production surprise.
+
+    Only ever touches an integration belonging to one of THIS RUN's merchants.
+    The database is shared with real accounts: an earlier version took whatever
+    `LIMIT 1` returned and restored it to a hardcoded status='active',
+    last_error=NULL - which would silently reactivate someone's paused or
+    errored integration and erase the error text explaining why.
+    """
     print("\n  -- INFRA: cross-instance restart sweep")
-    victim = instances[0]
     other = instances[1] if len(instances) > 1 else None
     if not other:
         r.skip("INFRA", "restart sweep crosses instances", "only one instance configured")
         return
-
-    row = db_one(conn, "SELECT id, user_email, status FROM user_integrations LIMIT 1")
-    if not row:
-        r.skip("INFRA", "restart sweep crosses instances", "no integrations to mark")
+    if not qa_emails:
+        r.skip("INFRA", "restart sweep crosses instances", "no QA merchant onboarded")
         return
 
-    db_exec(conn, "UPDATE user_integrations SET status='syncing' WHERE id=%s", (row["id"],))
-    other.restart()
-    after = db_one(conn, "SELECT status, last_error FROM user_integrations WHERE id=%s",
-                   (row["id"],))
-    swept = after and after["status"] == "error"
-    r.check("INFRA", "restarting one instance sweeps the other's 'syncing' rows",
-            bool(swept),
-            "confirmed - known defect, integrations.py:398" if swept else f"got {after}")
-    db_exec(conn, "UPDATE user_integrations SET status='active', last_error=NULL "
-                  "WHERE id=%s", (row["id"],))
+    placeholders = ','.join(['%s'] * len(qa_emails))
+
+    # Onboarding kicks off a sync, and a sync in flight writes its own status.
+    # Marking a row 'syncing' underneath one means the real worker sets it back
+    # to 'active' on completion and the sweep looks like it did not happen.
+    # Wait for this run's merchants to go quiet before staging anything.
+    deadline = time.time() + 90
+    while time.time() < deadline:
+        busy = db_one(conn, f"""
+            SELECT COUNT(*) AS n FROM user_integrations
+            WHERE user_email IN ({placeholders}) AND status = 'syncing'
+        """, qa_emails)
+        if not busy or busy["n"] == 0:
+            break
+        print(f"       waiting for {busy['n']} in-flight sync(s) to finish")
+        time.sleep(5)
+
+    row = db_one(conn, f"""
+        SELECT id, user_email, status, last_error FROM user_integrations
+        WHERE user_email IN ({placeholders}) AND status <> 'syncing'
+        LIMIT 1
+    """, qa_emails)
+    if not row:
+        r.skip("INFRA", "restart sweep crosses instances",
+               "no idle integration for this run's merchants")
+        return
+
+    print(f"       using {row['user_email']} (integration {row['id']})")
+    try:
+        db_exec(conn, "UPDATE user_integrations SET status='syncing' WHERE id=%s",
+                (row["id"],))
+        other.restart()
+        after = db_one(conn, "SELECT status, last_error FROM user_integrations "
+                             "WHERE id=%s", (row["id"],))
+        swept = after and after["status"] == "error"
+        r.check("INFRA", "restarting one instance sweeps the other's 'syncing' rows",
+                bool(swept),
+                "confirmed - known defect, integrations.py:398" if swept else f"got {after}")
+    finally:
+        # finally, not a trailing statement: if the restart raises (SystemExit
+        # when a port will not free), the row must not be left stuck 'syncing'.
+        # Restore what was actually there, not an assumed 'active'.
+        db_exec(conn, "UPDATE user_integrations SET status=%s, last_error=%s "
+                      "WHERE id=%s", (row["status"], row["last_error"], row["id"]))
 
 
 # ------------------------------------------------------------------------ main
@@ -789,7 +857,10 @@ def cmd_run(cfg, instances, args):
                           aat_for("A3_paid_active"), "A3", skip=not args.payment)
 
     if not args.skip_sweep:
-        check_restart_sweep(r, instances, conn)
+        # Scope the sweep to merchants this run actually onboarded, so it can
+        # never disturb a real account's integration in the shared database.
+        qa_emails = [got[0] for got in (b1, b2, b3, a1, a3) if got and got[0]]
+        check_restart_sweep(r, instances, conn, qa_emails)
 
     print("\n" + "=" * 78)
     print("PHASE 2 - end the free period: flip every beta instance to paid")
