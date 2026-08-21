@@ -1216,6 +1216,20 @@ def _start_sync_thread(integration_id: int, user_email: str, provider_id: str,
 _scheduler_thread: Optional[threading.Thread] = None
 
 
+# The connection holding GET_LOCK('datamind_scheduler'), parked at module level.
+#
+# This reference is the whole mechanism, not bookkeeping. GET_LOCK lives on a
+# session, so the lock survives exactly as long as the connection does. These
+# are POOLED connections: not calling .close() is not enough, because once the
+# last Python reference goes out of scope the connection is garbage-collected
+# straight back into the pool, the session resets, and the lock silently drops.
+#
+# Symptom when this is missing: every backend logs "acquired DB advisory lock"
+# and IS_USED_LOCK() reports nobody holding it — so N backends sharing one
+# database all run the scheduler and sync every integration N times over.
+_scheduler_lock_conn = None
+
+
 def _try_acquire_scheduler_lock() -> bool:
     """
     Attempt to acquire a DB-level advisory lock for the scheduler.
@@ -1223,6 +1237,7 @@ def _try_acquire_scheduler_lock() -> bool:
     Uses GET_LOCK() with a 0-second timeout so non-winners return immediately.
     The lock is held for the lifetime of the connection — released on conn.close().
     """
+    global _scheduler_lock_conn
     try:
         conn = _get_internal_conn()
         cursor = conn.cursor()
@@ -1230,8 +1245,9 @@ def _try_acquire_scheduler_lock() -> bool:
         result = cursor.fetchone()
         acquired = result and result[0] == 1
         if acquired:
-            # Intentionally do NOT close this connection — releasing it drops the lock.
-            # The connection is kept open for the scheduler's lifetime.
+            # Park the connection at module scope so it is never collected and
+            # never returns to the pool — that is what keeps the lock held.
+            _scheduler_lock_conn = conn
             log.info("Scheduler: acquired DB advisory lock — this worker owns the scheduler")
         else:
             conn.close()
