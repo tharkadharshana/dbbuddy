@@ -47,3 +47,7 @@ check_messages.py
 check_shop.py
 healthcheck.py
 reset_qa_usage.py
+
+# QA runner config — holds live Salesplay aats. Never commit.
+scripts/qa_*.local.json
+scripts/.qa_instance_*.log
