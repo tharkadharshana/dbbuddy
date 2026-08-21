@@ -1227,7 +1227,35 @@ _scheduler_thread: Optional[threading.Thread] = None
 # Symptom when this is missing: every backend logs "acquired DB advisory lock"
 # and IS_USED_LOCK() reports nobody holding it — so N backends sharing one
 # database all run the scheduler and sync every integration N times over.
+#
+# Cost, accepted deliberately: this connection is never returned to the pool,
+# so its semaphore permit is never released and the scheduler-owning worker
+# runs at DB_POOL_SIZE - 1 for its lifetime. One permit out of 20 is a fair
+# price for the lock actually holding.
 _scheduler_lock_conn = None
+
+
+def _scheduler_lock_held() -> bool:
+    """Is our parked lock session still alive?
+
+    ping(reconnect=False) deliberately: reconnecting would open a NEW session
+    that does NOT hold the lock, and we would carry on scheduling while
+    believing we own it — the exact duplicate-scheduler bug this whole
+    mechanism exists to prevent, only harder to spot.
+
+    MySQL closes an idle session after wait_timeout (8h by default), and this
+    connection is otherwise never used again — ticks borrow their own. So this
+    is called once per tick to keep it warm, not merely as a sanity check.
+    """
+    conn = _scheduler_lock_conn
+    if conn is None:
+        return False
+    try:
+        conn.ping(reconnect=False)
+        return True
+    except Exception as e:
+        log.warning("Scheduler: lock session lost", error=str(e))
+        return False
 
 
 def _try_acquire_scheduler_lock() -> bool:
@@ -1238,6 +1266,15 @@ def _try_acquire_scheduler_lock() -> bool:
     The lock is held for the lifetime of the connection — released on conn.close().
     """
     global _scheduler_lock_conn
+    # Already ours. The watchdog relaunches _loop when the scheduler thread
+    # dies, and without this the relaunch would borrow a fresh connection, lose
+    # GET_LOCK to our OWN parked session, exit — and the watchdog has already
+    # break'd, so syncs would stop for the lifetime of the process while no
+    # other instance could take over either.
+    if _scheduler_lock_held():
+        log.info("Scheduler: this process already holds the lock — reusing it")
+        return True
+    _scheduler_lock_conn = None  # stale session; drop it before re-acquiring
     try:
         conn = _get_internal_conn()
         cursor = conn.cursor()
@@ -1280,6 +1317,14 @@ def _launch_scheduler_thread():
             except Exception as e:
                 log.error("Scheduler tick failed", error=str(e))
             time.sleep(60)
+            # Keep the lock session warm, and stop scheduling the moment it is
+            # gone. Without this, wait_timeout eventually closes the idle
+            # connection, the lock frees, another instance acquires it, and
+            # both process every integration — while this loop carries on
+            # believing it is the only scheduler.
+            if not _scheduler_lock_held() and not _try_acquire_scheduler_lock():
+                log.warning("Scheduler: lost the lock to another worker — standing down")
+                return
 
     _scheduler_thread = threading.Thread(target=_loop, daemon=True, name="datamind-scheduler")
     _scheduler_thread.start()
