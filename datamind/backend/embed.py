@@ -25,7 +25,7 @@ from fastapi import APIRouter, HTTPException, Request, Depends
 from pydantic import BaseModel, Field
 
 from logger import get_logger
-from auth import create_user, authenticate_user, create_token, update_user_settings, current_user
+from auth import create_user, authenticate_user, create_token, update_user_settings, current_user, optional_current_user
 from billing import start_trial, subscribe_to_plan, cancel_subscription, SUBSCRIPTION_FREE
 from integrations import connect_provider, connect_integration
 from pool import get_internal_conn as _get_conn
@@ -828,7 +828,7 @@ def _reject_if_subscription_free():
 
 
 @router.get("/salesplay/subscription/info")
-def salesplay_subscription_info(request: Request, partner_key: str, aat: str, user: dict = Depends(current_user)):
+def salesplay_subscription_info(request: Request, partner_key: str, aat: str, user: Optional[dict] = Depends(optional_current_user)):
     """
     Proxy: GET {base}/subscriptions/get_ai_pos_info
     Returns Salesplay's raw state unchanged (frontend reads plans/card info
@@ -841,6 +841,12 @@ def salesplay_subscription_info(request: Request, partner_key: str, aat: str, us
     immediately regardless of our own period_end. activation_status is NOT
     checked (Salesplay-confirmed: was laggy after payment, no longer relied
     on for anything).
+
+    user is optional: the consent screen's "Explore plans" toggle
+    (EmbedSalesplayAutoInit.jsx) calls this with only partner_key+aat, before
+    any DataMind account/dm_embed_token exists, purely to preview pricing —
+    requiring current_user here made that call 401 unconditionally. The
+    sync-down below only runs when a signed-in user is actually present.
     """
     _salesplay_guard(partner_key, request)
     url = f"{_SALESPLAY_SUBSCRIPTION_BASE}/subscriptions/get_ai_pos_info"
@@ -858,7 +864,7 @@ def salesplay_subscription_info(request: Request, partner_key: str, aat: str, us
             raise HTTPException(status_code=502, detail=_salesplay_error(resp, "Could not reach Salesplay API. Please try again."))
         data = resp.json()
         sub = (data.get("data") or {}).get("subscription") or []
-        if sub and (sub[0].get("is_expired") == 1 or sub[0].get("subscribe_status") == 0):
+        if user and sub and (sub[0].get("is_expired") == 1 or sub[0].get("subscribe_status") == 0):
             try:
                 cancel_subscription(user["email"])
             except Exception as e:

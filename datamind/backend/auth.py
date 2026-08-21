@@ -320,3 +320,15 @@ def current_user(creds: HTTPAuthorizationCredentials = Depends(bearer)):
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
     return user
+
+
+def optional_current_user(creds: HTTPAuthorizationCredentials = Depends(bearer)):
+    """Same as current_user, but returns None instead of 401 when no Authorization
+    header is present — for endpoints that must also work before a DataMind account
+    exists (e.g. the embed's pre-onboarding Salesplay subscription/info proxy), where
+    a signed-in user only changes what the response does, not whether it's allowed.
+    A present-but-invalid token still raises, same as current_user.
+    """
+    if not creds:
+        return None
+    return current_user(creds)
