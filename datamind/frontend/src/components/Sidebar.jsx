@@ -2,6 +2,7 @@ import React, { useState, useRef } from 'react'
 import { deleteConversation } from '../utils/api'
 import { APP_NAME } from '../appName'
 import Logo from './Logo'
+import BetaBadge from './BetaBadge'
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
 const IC = {
@@ -285,7 +286,8 @@ function NavItem({ id, label, icon, active, setActive, badge }) {
 }
 
 export default function Sidebar({ active, setActive, connection, cacheStatus, theme, setTheme,
-                                   conversations, activeConvId, onConvSelect, onConvCreate, onConvDelete }) {
+                                   conversations, activeConvId, onConvSelect, onConvCreate, onConvDelete,
+                                   subscriptionFree = false }) {
   const cacheOk      = cacheStatus?.cached
   const cacheBuilding= cacheStatus?.build?.status === 'building'
 
@@ -302,7 +304,7 @@ export default function Sidebar({ active, setActive, connection, cacheStatus, th
           <div>
             <div style={{ fontWeight:700, fontSize:14, lineHeight:1.1, display:'flex', alignItems:'center', gap:5 }}>
               {APP_NAME}
-              <span style={{ fontSize:9, fontWeight:700, letterSpacing:'0.06em', background:'var(--blue-dim)', color:'var(--blue)', borderRadius:4, padding:'1px 5px', verticalAlign:'middle' }}>BETA</span>
+              {subscriptionFree && <BetaBadge />}
             </div>
             <div style={{ fontSize:10, color:'var(--text3)' }}>AI Analytics</div>
           </div>

@@ -1,14 +1,8 @@
 import React, { useState, useEffect } from 'react'
 import { fetchBillingUsage } from '../utils/api'
 import { Card, Spinner, Badge } from '../components/UI'
+import { fmtTok } from '../formatTokens'
 
-const TDM = 10_000
-const fmtTok = (raw) => {
-  const n = (raw || 0) * TDM
-  if (n >= 1_000_000) return `${parseFloat((n / 1_000_000).toFixed(2))}M`
-  if (n >= 1_000)     return `${parseFloat((n / 1_000).toFixed(1))}K`
-  return Math.round(n).toLocaleString()
-}
 
 const OP_LABELS = {
   llm:                 'AI Query',

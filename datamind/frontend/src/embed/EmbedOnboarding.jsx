@@ -14,6 +14,7 @@ import {
 import { notifyParent } from './EmbedApp'
 import { appName, productTitle } from './embedBranding'
 import Logo from '../components/Logo'
+import { fmtTok as _fmtTok } from '../formatTokens'
 
 // ── Shared styles ─────────────────────────────────────────────────────────────
 const inp = {
@@ -442,13 +443,6 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete, onClo
 }
 
 // ── Plan card subcomponent ─────────────────────────────────────────────────────
-const _TDM = 10_000
-function _fmtTok(raw) {
-  const n = (raw || 0) * _TDM
-  if (n >= 1_000_000) return `${parseFloat((n / 1_000_000).toFixed(2))}M`
-  if (n >= 1_000)     return `${parseFloat((n / 1_000).toFixed(1))}K`
-  return Math.round(n).toLocaleString()
-}
 
 function PlanCard({ plan, selected, onSelect }) {
   const price = `$${(plan.price_cents / 100).toFixed(0)}/mo`

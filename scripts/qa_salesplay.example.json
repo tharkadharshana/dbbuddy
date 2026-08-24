@@ -1,0 +1,33 @@
+{
+  "_comment": "Template for the Salesplay embed QA suite. Copy to qa_salesplay.local.json (gitignored) and fill in real aats. Add or remove entries in 'instances' to QA three or more backends against one database - the runner reads this list, nothing is hardcoded.",
+
+  "partner_key": "sp_dev_test",
+
+  "backend_dir": "datamind/backend",
+  "python": "python",
+
+  "instances": [
+    { "name": "A", "port": 8000, "subscription_free": false, "label": "paid  (SUBSCRIPTION_FREE=false)" },
+    { "name": "B", "port": 8001, "subscription_free": true,  "label": "beta  (SUBSCRIPTION_FREE=true)" }
+  ],
+
+  "aats": {
+    "aat1": "<salesplay app access token 1>",
+    "aat2": "<salesplay app access token 2>",
+    "aat3": "<salesplay app access token 3>",
+    "aat4": "<salesplay app access token 4>",
+    "aat5": "<salesplay app access token 5 - this one gets charged>",
+    "aat6": "<spare>",
+    "aat7": "<spare>"
+  },
+
+  "scenarios": {
+    "B1_fresh_beta":   { "aat": "aat1", "instance": "B" },
+    "B2_trial_beta":   { "aat": "aat2", "instance": "B" },
+    "B3_expired_beta": { "aat": "aat3", "instance": "B" },
+    "A1_fresh_paid":   { "aat": "aat4", "instance": "A" },
+    "A3_paid_active":  { "aat": "aat5", "instance": "A", "manual_payment": true },
+    "spare1":          { "aat": "aat6", "instance": "A" },
+    "spare2":          { "aat": "aat7", "instance": "B" }
+  }
+}

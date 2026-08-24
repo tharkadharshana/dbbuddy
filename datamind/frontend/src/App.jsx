@@ -266,6 +266,7 @@ export default function App() {
         onConvSelect={handleConvSelect}
         onConvCreate={() => navigate('chat', null)}
         onConvDelete={handleConvDeleted}
+        subscriptionFree={!!sub?.subscription_free}
       />
       <main style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', minWidth:0 }}>
         {/* BILLING HIDDEN — <UsageLimitBanner sub={sub} onNavigate={setPage} /> */}

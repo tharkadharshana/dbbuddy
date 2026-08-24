@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 
 from logger import get_logger
 from auth import create_user, authenticate_user, create_token, update_user_settings, current_user, optional_current_user
-from billing import start_trial, subscribe_to_plan, cancel_subscription
+from billing import start_trial, subscribe_to_plan, cancel_subscription, SUBSCRIPTION_FREE
 from integrations import connect_provider, connect_integration
 from pool import get_internal_conn as _get_conn
 
@@ -195,6 +195,9 @@ def get_embed_context(pk: str):
         "app_name":        os.getenv("APP_NAME", "SalesPlay AI"),
         "branding":        branding,
         "allowed_origins": allowed_origins,
+        # Launch-period switch. The widget reads this on every load, so
+        # turning the paid flow back on is a backend restart, not a rebuild.
+        "subscription_free": SUBSCRIPTION_FREE,
     }
 
 
@@ -806,6 +809,24 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
 _SALESPLAY_SUBSCRIPTION_BASE = os.getenv("SALESPLAY_SUBSCRIPTION_BASE_URL", _SALESPLAY_BASE)
 
 
+def _reject_if_subscription_free():
+    """Refuse to take money while SUBSCRIPTION_FREE is on.
+
+    The widget already hides every route to these endpoints in free mode, so
+    reaching them means a stale iframe that was loaded before the flag went
+    on, or a direct call. Either way the merchant's card must not be charged
+    during a period we advertised as free -- a wrong charge is far more
+    expensive to undo than a failed request.
+    """
+    if SUBSCRIPTION_FREE:
+        raise HTTPException(
+            status_code=403,
+            detail="Subscriptions are free right now -- there is nothing to pay for. "
+                   "Please reload the page.",
+        )
+
+
+
 @router.get("/salesplay/subscription/info")
 def salesplay_subscription_info(request: Request, partner_key: str, aat: str, user: Optional[dict] = Depends(optional_current_user)):
     """
@@ -875,15 +896,19 @@ class SalesplaySubscriptionPaymentRequest(BaseModel):
     # subscribe" on every attempt.
     payment_action: str = ""
     auth_payment_intent_id: str = ""
-    # DataMind's own plan to activate the moment Salesplay confirms the charge
-    # (id from subscription_plans — 1/2/3 for Starter/Growth/Pro) and how many
-    # days that purchase covers (30 monthly, 365 yearly). We don't wait on
-    # Salesplay's activation_status to flip before granting access — that lag
-    # is unbounded (confirmed: still 0 after 2.5+ minutes on predev2). The
-    # money already moved the instant Salesplay returned "success", so we
-    # activate our own side immediately and independently.
-    internal_plan_id: int
+    # How many days this purchase covers (30 monthly, 365 yearly). This one is
+    # genuinely the frontend's to decide — it is the billing cycle the merchant
+    # picked. We don't wait on Salesplay's activation_status to flip before
+    # granting access — that lag is unbounded (confirmed: still 0 after 2.5+
+    # minutes on predev2). The money already moved the instant Salesplay
+    # returned "success", so we activate our own side immediately.
     internal_period_days: int
+    # DEPRECATED and ignored. The browser used to name the plan to activate,
+    # mapping tier position to a hardcoded subscription_plans.id — which is an
+    # id it cannot know and that goes stale on any reseed. The plan is now
+    # resolved server-side by name. Still accepted so an iframe cached from
+    # before this change completes its charge instead of failing validation.
+    internal_plan_id: Optional[int] = None
 
 
 @router.post("/salesplay/subscription/payment")
@@ -897,6 +922,7 @@ def salesplay_subscription_payment(request: Request, req: SalesplaySubscriptionP
     response carries a redirect link the frontend must send the user to.
     """
     _salesplay_guard(req.partner_key, request)
+    _reject_if_subscription_free()
     body = req.dict(exclude={"partner_key", "aat", "internal_plan_id", "internal_period_days"}, exclude_none=True)
     url = f"{_SALESPLAY_SUBSCRIPTION_BASE}/subscriptions/payment"
     log.debug("Salesplay subscription API request", method="POST", url=url, body=body)
@@ -921,14 +947,14 @@ def salesplay_subscription_payment(request: Request, req: SalesplaySubscriptionP
             raise HTTPException(status_code=502, detail=_salesplay_error(resp, "Payment could not be completed. Please try again."))
         if result.get("status") == "success":
             try:
-                subscribe_to_plan(user["email"], req.internal_plan_id, period_days=req.internal_period_days)
+                subscribe_to_plan(user["email"], period_days=req.internal_period_days)
             except Exception as e:
                 # The charge already succeeded on Salesplay's side — a failure here
                 # is a real inconsistency (paid but not activated), not something to
                 # silently swallow. Log loudly; still return the payment success so
                 # the frontend doesn't tell the user their card was charged for nothing.
                 log.error("Internal plan activation failed after successful Salesplay charge",
-                          email=user["email"], plan_id=req.internal_plan_id, error=str(e))
+                          email=user["email"], period_days=req.internal_period_days, error=str(e))
         return result
     except HTTPException:
         raise
@@ -958,6 +984,7 @@ def salesplay_subscription_preview(request: Request, req: SalesplaySubscriptionP
     itself; this endpoint is the only source for what gets shown/charged.
     """
     _salesplay_guard(req.partner_key, request)
+    _reject_if_subscription_free()
     body = req.dict(exclude={"partner_key", "aat"}, exclude_none=True)
     url = f"{_SALESPLAY_SUBSCRIPTION_BASE}/subscriptions/order/preview"
     log.debug("Salesplay subscription API request", method="POST", url=url, body=body)
