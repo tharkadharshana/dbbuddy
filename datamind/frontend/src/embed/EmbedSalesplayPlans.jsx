@@ -26,9 +26,8 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { salesplaySubscriptionPayment, salesplaySubscriptionPreview } from './embedApi'
 import { notifyParent } from './EmbedApp'
-import { appName } from './embedBranding'
-import BrandLogo from '../components/Logo'
-import salesplayLogo from '../assets/salesplay-logo.svg'
+import { appName, resolveBrand } from './embedBranding'
+import BrandLogo from './BrandLogo'
 import { TIER_FEATURES, groupPlansByTier, planPrice, yearlySavingsPct, displayPlanName } from './embedSalesplayPlanFormat'
 
 const SP = {
@@ -47,7 +46,8 @@ const SP = {
   shadow:    '0px 4px 20px 0px rgba(84,95,115,0.12)',
 }
 
-const SUPPORT_EMAIL = 'support@datamind.ai'
+// Support address comes from the brand row: sending a whitelabel's
+// merchant to another company's support desk is worse than showing none.
 
 const REASON_COPY = {
   trial_expired:  (days) => `Your ${days}-day free trial has ended.`,
@@ -143,6 +143,7 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
   const [preview, setPreview] = useState(null) // raw order/preview response for the selected plan
   const [previewLoading, setPreviewLoading] = useState(false)
   const [paymentSuccess, setPaymentSuccess] = useState(false) // charge confirmed — shows the checkmark before handing off to chat
+  const brand = resolveBrand(context)
   const appNm = appName(context)
   const cardPollActive = useRef(false)
 
@@ -235,7 +236,7 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
     // which beats letting them into a charge that can only fail.
     if (!billingDetailsAdded) {
       if (!cardAddUrl) {
-        setError('Add a payment method in Salesplay before subscribing.')
+        setError(`Add a payment method in ${brand.companyName} before subscribing.`)
         return
       }
       notifyParent('dm:redirect', { url: cardAddUrl })
@@ -254,7 +255,7 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
     // that the screen we came from checked — a refresh poll can flip it while
     // this screen is open.
     if (!billingDetailsAdded) {
-      setError('Add a payment method in Salesplay before subscribing.')
+      setError(`Add a payment method in ${brand.companyName} before subscribing.`)
       setSelectedPlan(null) // back to the plans list, which offers the card-add route
       return
     }
@@ -500,7 +501,7 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
         // Salesplay's subscription is already active this cycle — nothing to
         // buy here. Extra usage is an addon, not sold through this screen.
         <div style={{ textAlign: 'center', paddingTop: 24 }}>
-          <BrandLogo size={40} radius={11} shadow="0 4px 16px rgba(0,88,190,0.3)" style={{ marginBottom: 10 }} />
+          <BrandLogo brand={brand} size={40} radius={11} style={{ marginBottom: 10 }} />
           <h2 style={{
             fontFamily: "'Manrope', 'Plus Jakarta Sans', sans-serif",
             fontSize: 22, lineHeight: '30px', letterSpacing: '-0.02em', fontWeight: 800,
@@ -513,21 +514,21 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
             To get more usage added to your current plan, contact support.
           </p>
           <a
-            href={`mailto:${SUPPORT_EMAIL}`}
+            href={`mailto:${brand.supportEmail || ''}`}
             style={{
               display: 'inline-block', padding: '12px 22px', borderRadius: 9999,
               fontSize: 13, fontWeight: 700, background: SP.blue, color: '#fff',
               textDecoration: 'none', boxShadow: '0 4px 12px rgba(0,88,190,0.35)',
             }}
           >
-            Contact support → {SUPPORT_EMAIL}
+            Contact support → {brand.supportEmail}
           </a>
         </div>
       ) : selectedPlan ? (
         // ── Receipt / confirm screen ──────────────────────────────────────
         <div style={{ opacity: grayedOut ? 0.4 : 1, pointerEvents: grayedOut ? 'none' : 'auto' }}>
           <div style={{ textAlign: 'center', marginBottom: 18 }}>
-            <BrandLogo size={40} radius={11} shadow="0 4px 16px rgba(0,88,190,0.3)" style={{ marginBottom: 10 }} />
+            <BrandLogo brand={brand} size={40} radius={11} style={{ marginBottom: 10 }} />
             <h2 style={{
               fontFamily: "'Manrope', 'Plus Jakarta Sans', sans-serif",
               fontSize: 22, lineHeight: '30px', letterSpacing: '-0.02em', fontWeight: 800,
@@ -562,7 +563,7 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
               <span>{cardLast4 || '••••'}</span>
             </div>
             <div style={{ fontSize: 11, color: cardExpired ? '#FFC9C4' : 'rgba(255,255,255,0.7)' }}>
-              {cardExpired ? 'This card has expired — update it in Salesplay' : (cardLast4 ? 'On file with Salesplay' : 'On file')}
+              {cardExpired ? `This card has expired — update it in ${brand.companyName}` : (cardLast4 ? `On file with ${brand.companyName}` : 'On file')}
             </div>
           </div>
 
@@ -615,7 +616,7 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
                 </svg>
               </div>
               <div style={{ fontSize: 15, fontWeight: 700, color: SP.heading }}>Payment successful</div>
-              <div style={{ fontSize: 12, color: SP.text3, marginTop: 2 }}>salesplay AI</div>
+              <div style={{ fontSize: 12, color: SP.text3, marginTop: 2 }}>{appNm}</div>
             </div>
           ) : paidPending ? (
             // Charge already went through — this only re-checks, never re-pays.
@@ -675,7 +676,7 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
           height: '100%', display: 'flex', flexDirection: 'column',
           justifyContent: 'center', alignItems: 'center', textAlign: 'center',
         }}>
-          <BrandLogo size={40} radius={11} shadow="0 4px 16px rgba(0,88,190,0.3)" style={{ marginBottom: 10 }} />
+          <BrandLogo brand={brand} size={40} radius={11} style={{ marginBottom: 10 }} />
           <h2 style={{
             fontFamily: "'Manrope', 'Plus Jakarta Sans', sans-serif",
             fontSize: 22, lineHeight: '30px', letterSpacing: '-0.02em', fontWeight: 800,
@@ -742,7 +743,7 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
         // ── Plan list — no trial (blocked/expired) — straight list ────────
         <div style={{ opacity: grayedOut ? 0.4 : 1, pointerEvents: grayedOut ? 'none' : 'auto' }}>
           <div style={{ textAlign: 'center', marginBottom: 18 }}>
-            <BrandLogo size={40} radius={11} shadow="0 4px 16px rgba(0,88,190,0.3)" style={{ marginBottom: 10 }} />
+            <BrandLogo brand={brand} size={40} radius={11} style={{ marginBottom: 10 }} />
             <h2 style={{
               fontFamily: "'Manrope', 'Plus Jakarta Sans', sans-serif",
               fontSize: 22, lineHeight: '30px', letterSpacing: '-0.02em', fontWeight: 800,

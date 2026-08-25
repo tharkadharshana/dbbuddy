@@ -442,6 +442,39 @@ def embed_init(request: Request, req: EmbedInitRequest):
 
 # ── Salesplay auto-init endpoints ─────────────────────────────────────────────
 
+class PartnerConnectRequest(BaseModel):
+    partner_key: str
+    credentials: dict
+
+
+@router.post("/partner/connect")
+def partner_connect(request: Request, req: PartnerConnectRequest,
+                    user: dict = Depends(current_user)):
+    """Connect the brand's integration for the signed-in merchant.
+
+    The widget used to send provider_id in the body, which put the
+    integration's name in a request every whitelabel merchant can read. The
+    provider comes from the partner row instead -- the widget never needs to
+    know it.
+    """
+    partner = _get_partner(req.partner_key)
+    if not partner:
+        raise HTTPException(status_code=404, detail="Invalid or inactive partner key.")
+    _require_allowed_origin(partner, request)
+    try:
+        connect_provider(
+            user_email  = user["email"],
+            provider_id = partner["provider_id"],
+            credentials = req.credentials,
+        )
+    except ValueError:
+        raise HTTPException(status_code=422, detail=_msg(partner, ERR_TOKEN_INVALID))
+    except Exception as e:
+        log.error("Embed: partner connect failed", user=user["email"], error=str(e))
+        raise HTTPException(status_code=500, detail="Failed to connect. Please try again.")
+    return {"ok": True}
+
+
 @router.get("/partner/sync-status")
 def partner_sync_status(request: Request, partner_key: str,
                         user: dict = Depends(current_user)):

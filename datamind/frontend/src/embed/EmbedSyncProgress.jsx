@@ -53,7 +53,7 @@ function friendlySyncMsg(raw, providerName) {
   return 'Setting up your workspace…'
 }
 
-export default function EmbedSyncProgress({ connId, appNm, sp = true, onDone }) {
+export default function EmbedSyncProgress({ partnerKey, appNm, sp = true, onDone }) {
   const [msg, setMsg]   = useState('Setting up your workspace…')
   const [pct, setPct]   = useState(0)
   const [rows, setRows] = useState(0)
@@ -73,7 +73,7 @@ export default function EmbedSyncProgress({ connId, appNm, sp = true, onDone }) 
     const interval = setInterval(async () => {
       attempts++
       try {
-        const r = await embedGetProviderStatus(connId)
+        const r = await embedGetProviderStatus(partnerKey)
         const prog = r.progress
         if (prog) {
           setMsg(friendlySyncMsg(prog.message, appNm))
@@ -92,7 +92,7 @@ export default function EmbedSyncProgress({ connId, appNm, sp = true, onDone }) 
       }
     }, 2000)
     return () => clearInterval(interval)
-  }, [connId]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [partnerKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div style={{ width: '100%', marginTop: 14 }}>

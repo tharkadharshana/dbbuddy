@@ -20,8 +20,8 @@ import EmbedFreeBlocked from './EmbedFreeBlocked'
 import EmbedSyncProgress from './EmbedSyncProgress'
 import EmbedSearchBar from './EmbedSearchBar'
 import EmbedFeedbackModal from './EmbedFeedbackModal'
-import { appName } from './embedBranding'
-import BrandLogo from '../components/Logo'
+import { appName, resolveBrand, applyBrandChrome } from './embedBranding'
+import BrandLogo from './BrandLogo'
 
 // Combines Salesplay's raw subscription state (card/plans — it's the payment
 // gateway) with DataMind's own billing (trial days, tokens — the actual
@@ -180,11 +180,11 @@ function EmbedApp() {
         const aat = params.get('aat') || ''
         setAatToken(aat)
 
-        if (ctx.provider_id === 'salesplay') {
+        if (ctx.flow === 'partner') {
           // Salesplay flow: use the AAT to determine the merchant identity,
           // then decide whether to show the consent/onboard screen or go straight to chat.
           if (!aat) {
-            setError(`Session token not found. Please access ${appName(ctx)} through the Salesplay backoffice.`)
+            setError(`Session token not found. Please open ${appName(ctx)} from the ${resolveBrand(ctx).companyName} backoffice.`)
             setState('error')
             return
           }
@@ -224,16 +224,16 @@ function EmbedApp() {
               }
             } else {
               // New merchant — show consent screen before doing anything.
-              setState('salesplay_init')
+              setState('partner_init')
               notifyParent('dm:onboarding_start')
             }
           } catch (err) {
             if (err.response?.status === 401) {
-              setError('Salesplay session expired. Please refresh the page.')
+              setError(`${resolveBrand(context).companyName} session expired. Please refresh the page.`)
               setState('error')
             } else {
               // API unreachable — fall back to consent screen so the user can retry.
-              setState('salesplay_init')
+              setState('partner_init')
               notifyParent('dm:onboarding_start')
             }
           }
@@ -283,7 +283,7 @@ function EmbedApp() {
     }
 
     setSubAccess(access)
-    setState('salesplay_plans')
+    setState('partner_plans')
     notifyParent('dm:onboarding_start')
   }
 
@@ -297,7 +297,7 @@ function EmbedApp() {
     // Salesplay: onboarding no longer starts a trial by itself, so a brand-new
     // merchant has no subscription yet — checkSalesplayAccess reports
     // hasAccess: false and this naturally routes to the plans screen.
-    if (context?.provider_id === 'salesplay' && aatToken) {
+    if (context?.flow === 'partner' && aatToken) {
       try {
         const access = await checkSalesplayAccessRetrying(partnerKey, aatToken)
 
@@ -435,11 +435,13 @@ function EmbedApp() {
     )
   }
 
-  // Apply accent colour from partner branding if provided
-  const accentColor = context?.branding?.accent_color
-  if (accentColor) {
-    document.documentElement.style.setProperty('--blue', accentColor)
-  }
+  // Title, favicon and accent all come from the brand at runtime. They cannot
+  // come from the HTML file or the build: one bundle serves every brand.
+  const brand = resolveBrand(context)
+
+  useEffect(() => {
+    if (context) applyBrandChrome(brand)
+  }, [context])
 
   // Ask for a rating before actually closing/minimizing the widget — only if
   // the user sent at least one message this session, hasn't already submitted
@@ -479,7 +481,7 @@ function EmbedApp() {
   }
 
   let content
-  if (state === 'salesplay_init') {
+  if (state === 'partner_init') {
     content = (
       <EmbedSalesplayAutoInit
         context={context}
@@ -499,13 +501,13 @@ function EmbedApp() {
         height: '100%', padding: '24px 20px', textAlign: 'center',
         background: 'linear-gradient(180deg, #F0F4F8 0%, #F7F9FB 100%)',
       }}>
-        <BrandLogo size={40} radius={11} shadow="0 4px 16px rgba(0,88,190,0.3)" style={{ marginBottom: 10 }} />
+        <BrandLogo brand={brand} size={40} radius={11} style={{ marginBottom: 10 }} />
         <div style={{ fontSize: 15, fontWeight: 700, color: '#191C1E', marginBottom: 4 }}>
           {appName(context)}
         </div>
         <div style={{ width: '100%', maxWidth: 360 }}>
           <EmbedSyncProgress
-            connId={context?.provider_id}
+            partnerKey={partnerKey}
             appNm={appName(context)}
             onDone={handleSyncDone}
           />
@@ -522,7 +524,7 @@ function EmbedApp() {
         onClose={handleClose}
       />
     )
-  } else if (state === 'salesplay_plans') {
+  } else if (state === 'partner_plans') {
     content = (
       <EmbedSalesplayPlans
         context={context}
@@ -574,7 +576,7 @@ function EmbedApp() {
     <>
       {content}
       {feedbackAfter && (
-        <EmbedFeedbackModal onSubmit={handleFeedbackSubmit} onRemindLater={handleRemindLater} />
+        <EmbedFeedbackModal onSubmit={handleFeedbackSubmit} onRemindLater={handleRemindLater} appNm={appName(context)} />
       )}
     </>
   )

@@ -10,6 +10,8 @@
  */
 import axios from 'axios'
 
+// Same origin, always. Each brand is served from its own domain, so an
+// absolute base would point every brand at whichever one was built.
 const BASE_URL = import.meta.env.VITE_API_URL || ''
 
 const api = axios.create({ baseURL: BASE_URL + '/api' })
@@ -48,10 +50,12 @@ export const embedLogin = (email, password) =>
 export const embedValidateProviderCreds = (provider_id, credentials) =>
   api.post('/providers/validate', { provider_id, credentials }).then(r => r.data)
 
-export const embedConnectProvider = (provider_id, credentials, token) =>
+// Keyed on the partner, not the provider: sending provider_id put the
+// integration's name in a request body the merchant can read.
+export const embedConnectProvider = (partnerKey, credentials, token) =>
   api.post(
-    '/providers/connect',
-    { provider_id, credentials },
+    '/embed/partner/connect',
+    { partner_key: partnerKey, credentials },
     { headers: { Authorization: `Bearer ${token}` } }
   ).then(r => r.data)
 

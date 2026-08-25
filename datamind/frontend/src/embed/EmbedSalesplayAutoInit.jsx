@@ -20,15 +20,14 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { salesplayOnboard, embedGetProviderStatus, embedGetPlans, salesplaySubscriptionInfo } from './embedApi'
 import { notifyParent } from './EmbedApp'
-import { appName, productTitle as resolveProductTitle } from './embedBranding'
-import BrandLogo from '../components/Logo'
+import { appName, productTitle as resolveProductTitle, resolveBrand } from './embedBranding'
+import BrandLogo from './BrandLogo'
 import BetaBadge from '../components/BetaBadge'
 import EmbedSyncProgress from './EmbedSyncProgress'
-import salesplayAiLogo from '../assets/salesplay-ai-logo.svg'
 import { TIER_FEATURES, groupPlansByTier, planPrice, yearlySavingsPct, displayPlanName } from './embedSalesplayPlanFormat'
 import { fmtTok } from '../formatTokens'
 
-// ── SalesPlay visual language (mirrors EmbedChat's isSalesplay branch) ───────
+// ── SalesPlay visual language (mirrors EmbedChat's isPartnerFlow branch) ───────
 const SP = {
   bg:        'linear-gradient(180deg, #F0F4F8 0%, #F7F9FB 100%)',
   card:      '#FFFFFF',
@@ -116,12 +115,12 @@ function Spin({ sp }) {
   )
 }
 
-function Logo() {
-  return <BrandLogo size={40} radius={11} shadow="0 4px 16px rgba(79,142,247,0.3)" style={{ marginBottom: 10 }} />
+function Logo({ brand }) {
+  return <BrandLogo brand={brand} size={40} radius={11} style={{ marginBottom: 10 }} />
 }
 
 export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, onComplete, onError, onClose }) {
-  const sp = context?.provider_id === 'salesplay'
+  const sp = context?.flow === 'partner'
 
   // Launch period (backend SUBSCRIPTION_FREE, served on /embed/context): no
   // prices anywhere. One "Try <app>" button, no plan tiers, no explore
@@ -184,9 +183,10 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
   // through React state and can be empty on the first render in some React versions.
   const aat = aatToken || new URLSearchParams(window.location.search).get('aat') || ''
 
+  const brand         = resolveBrand(context)
   const productTitle  = resolveProductTitle(context)
   const appNm         = appName(context)
-  const providerName  = context?.partner_name || 'Salesplay'
+  const providerName  = brand.companyName
 
   // "Explore plans" toggle — pure preview, no account created. Fetches once
   // on first expand, then just toggles open/closed.
@@ -234,7 +234,7 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
     setErrorMsg('')
 
     if (!aat) {
-      fail(`Session token not found. Please access ${appNm} through the Salesplay backoffice.`)
+      fail(`Session token not found. Please open ${appNm} from the ${brand.companyName} backoffice.`)
       return
     }
 
@@ -316,7 +316,7 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
       )}
       {sp && phase === 'consent' ? null : (
         <>
-          <Logo />
+          <Logo brand={brand} />
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, fontWeight: 700, color: sp ? SP.heading : 'var(--text)', marginBottom: 4 }}>
             {productTitle}
           </div>
@@ -327,7 +327,7 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
       {phase === 'consent' && (sp ? (
         <div style={{ width: '100%' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, margin: '14px 0 10px' }}>
-            <img src={salesplayAiLogo} alt="" style={{ height: 60, flexShrink: 0 }} />
+            <BrandLogo brand={brand} size={60} radius={12} style={{ flexShrink: 0 }} />
             <h2 style={{
               fontFamily: "'Manrope', 'Plus Jakarta Sans', sans-serif",
               fontSize: 26, lineHeight: '34px', letterSpacing: '-0.02em', fontWeight: 800,
@@ -567,10 +567,10 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
 
           <div style={{ fontSize: 11, color: SP.text, marginTop: 10, lineHeight: 1.6 }}>
             By continuing, you agree to {appNm}'s{' '}
-            <a href="https://salesplay.com/docs/SalesPlayAI_Terms_and_Conditions.pdf" target="_blank" rel="noopener noreferrer"
+            <a href={brand.termsUrl || "#"} target="_blank" rel="noopener noreferrer"
               style={{ color: SP.blue, textDecoration: 'underline' }}>Terms and Conditions</a>
             {' '}and{' '}
-            <a href="https://salesplay.com/docs/SalesPlayAI_Privacy_Policy.pdf" target="_blank" rel="noopener noreferrer"
+            <a href={brand.privacyUrl || "#"} target="_blank" rel="noopener noreferrer"
               style={{ color: SP.blue, textDecoration: 'underline' }}>Privacy Policy</a>.
           </div>
         </div>
@@ -623,15 +623,15 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
               landed in `intent` and made every downstream `intent === 'trial'`
               check fail — the trial never auto-started. */}
           <button onClick={() => handleAccept('trial')} disabled={loading} style={primaryBtn(loading, sp)}>
-            {loading ? <><Spin sp={sp} /> Setting up…</> : 'Try SalesPlay AI with Starter'}
+            {loading ? <><Spin sp={sp} /> Setting up…</> : `Try ${appNm} with Starter`}
           </button>
 
           <div style={{ fontSize: 11, color: 'var(--text3)', marginTop: 10, lineHeight: 1.6 }}>
             By continuing, you agree to {appNm}'s{' '}
-            <a href="https://salesplay.com/docs/SalesPlayAI_Terms_and_Conditions.pdf" target="_blank" rel="noopener noreferrer"
+            <a href={brand.termsUrl || "#"} target="_blank" rel="noopener noreferrer"
               style={{ color: 'var(--blue)', textDecoration: 'none' }}>Terms and Conditions</a>
             {' '}and{' '}
-            <a href="https://salesplay.com/docs/SalesPlayAI_Privacy_Policy.pdf" target="_blank" rel="noopener noreferrer"
+            <a href={brand.privacyUrl || "#"} target="_blank" rel="noopener noreferrer"
               style={{ color: 'var(--blue)', textDecoration: 'none' }}>Privacy Policy</a>.
           </div>
         </div>
@@ -658,7 +658,7 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
       {/* ── SYNC ───────────────────────────────────────────────────────────── */}
       {phase === 'sync' && pendingComplete && (
         <EmbedSyncProgress
-          connId={context.provider_id}
+          partnerKey={partnerKey}
           appNm={appNm}
           sp={sp}
           onDone={() => onComplete(pendingComplete.token, pendingComplete.profile)}
