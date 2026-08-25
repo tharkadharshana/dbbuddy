@@ -95,10 +95,22 @@ def _require_partner(x_api_key: Optional[str]) -> dict:
     return row
 
 
-def _resolve_user_email(user_email: Optional[str]) -> str:
+def _resolve_user_email(user_email: Optional[str], partner: dict) -> str:
+    """Turn the partner-supplied address into this partner's account key.
+
+    Partners keep sending a plain email address -- their API contract is
+    unchanged. The brand comes from the authenticated X-API-Key, not from
+    the request body, which also means a partner can only ever reach their
+    own merchants: the same address under another brand is a different
+    account and simply will not resolve.
+    """
     if not user_email or not user_email.strip():
         raise HTTPException(status_code=400, detail="user_email is required.")
-    return user_email.strip().lower()
+    from auth import resolve_account_key
+    account_key = resolve_account_key(user_email.strip().lower(), partner["partner_key"])
+    if not account_key:
+        raise HTTPException(status_code=404, detail="No such user for this partner.")
+    return account_key
 
 
 def _require_pro(user_email: str):
@@ -194,8 +206,8 @@ def v1_list_integrations(
     user_email: str = Query(..., description="End-user email address"),
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
 ):
-    _require_partner(x_api_key)
-    email = _resolve_user_email(user_email)
+    partner = _require_partner(x_api_key)
+    email = _resolve_user_email(user_email, partner)
     _require_pro(email)
 
     rows = list_integrations(email)
@@ -234,8 +246,8 @@ def v1_trigger_sync(
     req: SyncRequest,
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
 ):
-    _require_partner(x_api_key)
-    email = _resolve_user_email(req.user_email)
+    partner = _require_partner(x_api_key)
+    email = _resolve_user_email(req.user_email, partner)
     _require_pro(email)
 
     if not get_integration(email, provider):
@@ -286,8 +298,8 @@ def v1_get_records(
     from_date: Optional[str] = Query(None, alias="from", description="ISO date lower bound on external_created_at"),
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
 ):
-    _require_partner(x_api_key)
-    email = _resolve_user_email(user_email)
+    partner = _require_partner(x_api_key)
+    email = _resolve_user_email(user_email, partner)
     _require_pro(email)
 
     integration = get_integration(email, provider)
@@ -374,8 +386,8 @@ def v1_run_analytics(
     provider: str = Query(..., description="Provider id: `loyverse` or `salesplay`"),
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
 ):
-    _require_partner(x_api_key)
-    email = _resolve_user_email(user_email)
+    partner = _require_partner(x_api_key)
+    email = _resolve_user_email(user_email, partner)
     _require_pro(email)
 
     ok, reason = check_ai_limit(email)
@@ -455,8 +467,8 @@ def v1_get_usage(
     user_email: str = Query(..., description="End-user email address"),
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
 ):
-    _require_partner(x_api_key)
-    email = _resolve_user_email(user_email)
+    partner = _require_partner(x_api_key)
+    email = _resolve_user_email(user_email, partner)
     _require_pro(email)
 
     sub = get_user_subscription(email)
