@@ -1,0 +1,21 @@
+{
+  "partner_name":    "Sellmo",
+  "provider_id":     "salesplay",
+  "key_prefix":      "sl_live_",
+  "allowed_origins": "http://localhost:5173,http://127.0.0.1:5173,https://partnerpredev1.nvision.lk,https://predev1backoffice.nvision.lk",
+  "branding": {
+    "product_name":  "Sellmo AI",
+    "company_name":  "Sellmo POS",
+    "brand_slug":    "sellmo",
+    "app_url":       "http://localhost:5173",
+    "app_domains":   [],
+    "primary_color": "#0058BE",
+    "show_beta_badge": false,
+    "subscription_free": true
+  },
+  "api_config": {
+    "sync_base":         "https://predev1api.nvision.lk/v1.0",
+    "proxy_base":        "https://predev1backoffice.nvision.lk/rest/v2.0/public/app",
+    "subscription_base": "https://predev1backoffice.nvision.lk/rest/v2.0/public/app"
+  }
+}

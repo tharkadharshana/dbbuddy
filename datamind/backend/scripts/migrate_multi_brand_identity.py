@@ -94,6 +94,50 @@ def _primary_key_cols(cur, table):
     return [r[0] for r in cur.fetchall()]
 
 
+def _surrogate_pk(cur, table):
+    """Name of the table's AUTO_INCREMENT primary key column, or None.
+
+    A live users table may carry an `id INT AUTO_INCREMENT PRIMARY KEY` with
+    email merely UNIQUE, even though init_users_table() declares email as the
+    key -- CREATE TABLE IF NOT EXISTS never rewrote an older table. MySQL and
+    MariaDB both refuse to drop a primary key off an auto_increment column
+    (errno 1075), so on that shape the composite constraint has to be a UNIQUE
+    key instead. Same guarantee, different index.
+    """
+    pk = _primary_key_cols(cur, table)
+    if len(pk) != 1:
+        return None
+    cur.execute(
+        "SELECT EXTRA FROM INFORMATION_SCHEMA.COLUMNS "
+        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = %s",
+        (table, pk[0]),
+    )
+    row = cur.fetchone()
+    return pk[0] if row and "auto_increment" in (row[0] or "").lower() else None
+
+
+def _unique_indexes_on(cur, table, column):
+    """Single-column UNIQUE index names covering `column` (never PRIMARY)."""
+    cur.execute(
+        "SELECT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS s "
+        "WHERE s.TABLE_SCHEMA = DATABASE() AND s.TABLE_NAME = %s "
+        "AND s.NON_UNIQUE = 0 AND s.INDEX_NAME <> 'PRIMARY' "
+        "GROUP BY s.INDEX_NAME "
+        "HAVING COUNT(*) = 1 AND MAX(s.COLUMN_NAME) = %s",
+        (table, column),
+    )
+    return [r[0] for r in cur.fetchall()]
+
+
+def _index_exists(cur, table, name):
+    cur.execute(
+        "SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS "
+        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND INDEX_NAME = %s",
+        (table, name),
+    )
+    return cur.fetchone()[0] > 0
+
+
 def resolve_brands(cur, orphan_partner_key):
     """Map every existing user email to the partner_key it belongs to.
 
@@ -218,8 +262,22 @@ def apply(conn, dry_run, orphan_partner_key):
             "WHERE c.user_email NOT LIKE '%:%'".format(t),
             label="repoint {}.user_email -> account_key".format(t))
 
-    # 5. Swap the primary key last.
-    if _primary_key_cols(cur, "users") != ["email", "partner_key"]:
+    # 5. The composite constraint last, in whichever form this table allows.
+    #    What has to be true either way: (email, partner_key) is unique and
+    #    email alone is NOT. Leaving a single-column unique on email in place
+    #    would block the second brand from ever using the same address, which
+    #    is the whole point of the migration.
+    surrogate = _surrogate_pk(cur, "users")
+    if surrogate:
+        print("users has a surrogate primary key ({}) -- adding the composite "
+              "constraint as a UNIQUE key and keeping it.".format(surrogate))
+        if not _index_exists(cur, "users", "uq_email_partner"):
+            run("ALTER TABLE users ADD UNIQUE KEY uq_email_partner (email, partner_key)",
+                label="add uq_email_partner (email, partner_key)")
+        for name in _unique_indexes_on(cur, "users", "email"):
+            run("ALTER TABLE users DROP INDEX {}".format(name),
+                label="drop single-column unique {} on users.email".format(name))
+    elif _primary_key_cols(cur, "users") != ["email", "partner_key"]:
         run("ALTER TABLE users DROP PRIMARY KEY, ADD PRIMARY KEY (email, partner_key)",
             label="swap users PRIMARY KEY -> (email, partner_key)")
 
@@ -244,7 +302,25 @@ def rollback(conn, dry_run=False):
     if not _column_exists(cur, "users", "account_key"):
         raise SystemExit("Nothing to roll back: users.account_key does not exist.")
 
-    if _primary_key_cols(cur, "users") != ["email"]:
+    # Undo whichever shape apply() produced.
+    if _index_exists(cur, "users", "uq_email_partner"):
+        # Once two brands share an address, email alone is no longer unique and
+        # this rollback cannot complete. Say so plainly instead of dying inside
+        # an ALTER at 3am.
+        cur.execute("SELECT COUNT(*) FROM (SELECT email FROM users "
+                    "GROUP BY email HAVING COUNT(*) > 1) d")
+        dupes = cur.fetchone()[0]
+        if dupes:
+            raise SystemExit(
+                "REFUSING: {} email address(es) now belong to more than one "
+                "brand. Rolling back would have to delete one of each pair. "
+                "Restore from the pre-migration dump instead.".format(dupes))
+        if not _unique_indexes_on(cur, "users", "email"):
+            run("ALTER TABLE users ADD UNIQUE KEY uq_email (email)",
+                label="restore single-column unique on users.email")
+        run("ALTER TABLE users DROP INDEX uq_email_partner",
+            label="drop uq_email_partner")
+    elif _primary_key_cols(cur, "users") != ["email"]:
         run("ALTER TABLE users DROP PRIMARY KEY, ADD PRIMARY KEY (email)",
             label="restore users PRIMARY KEY -> (email)")
     for t in CHILD_TABLES:
