@@ -208,7 +208,9 @@ def main():
         print("  {:<12}: {}".format(name, spec["api_config"].get(name) or "(env default)"))
     print("\n  Iframe tag for {}:".format(spec["partner_name"]))
     print('    <iframe')
-    print('      src="{}/embed.html?pk={}"'.format(app_url.rstrip("/"), key))
+    # Vite emits the embed entry at dist/src/embed/embed.html -- that is the
+    # live path, not /embed.html.
+    print('      src="{}/src/embed/embed.html?pk={}"'.format(app_url.rstrip("/"), key))
     print('      width="420" height="680" frameborder="0"')
     print('      allow="clipboard-write"')
     print('      style="border-radius:12px;"')

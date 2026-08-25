@@ -743,7 +743,12 @@ async def log_requests(request: Request, call_next):
 async def embed_security_headers(request: Request, call_next):
     response = await call_next(request)
     if request.url.path.startswith("/embed"):
-        origins = os.getenv("EMBED_ALLOWED_ORIGINS", "*")
+        # getenv's default never fired: EMBED_ALLOWED_ORIGINS is present but
+        # empty in every .env, so this emitted "frame-ancestors " with no source
+        # -- an invalid directive. Note this only guards API responses; the
+        # document that actually gets framed (src/embed/embed.html) is served by
+        # nginx, so that is where a real frame-ancestors policy belongs.
+        origins = (os.getenv("EMBED_ALLOWED_ORIGINS") or "").strip() or "*"
         response.headers["Content-Security-Policy"] = f"frame-ancestors {origins}"
         response.headers["X-Content-Type-Options"] = "nosniff"
     return response
