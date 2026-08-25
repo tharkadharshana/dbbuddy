@@ -9,6 +9,7 @@
  * also has the full DataMind app open in another tab.
  */
 import axios from 'axios'
+import * as storage from './embedStorage'
 
 // Same origin, always. Each brand is served from its own domain, so an
 // absolute base would point every brand at whichever one was built.
@@ -17,7 +18,7 @@ const BASE_URL = import.meta.env.VITE_API_URL || ''
 const api = axios.create({ baseURL: BASE_URL + '/api' })
 
 api.interceptors.request.use(cfg => {
-  const token = localStorage.getItem('dm_embed_token')
+  const token = storage.getItem('dm_embed_token')
   if (token) cfg.headers.Authorization = `Bearer ${token}`
   return cfg
 })
@@ -27,7 +28,7 @@ api.interceptors.response.use(
   r => r,
   err => {
     if (err.response?.status === 401) {
-      localStorage.removeItem('dm_embed_token')
+      storage.removeItem('dm_embed_token')
     }
     return Promise.reject(err)
   }
@@ -82,7 +83,7 @@ let _streamSupported = true
 
 export async function embedStreamQuery(question, llm, thinkMode, conversationId, handlers = {}) {
   if (!_streamSupported) return null
-  const token = localStorage.getItem('dm_embed_token')
+  const token = storage.getItem('dm_embed_token')
   const resp = await fetch(`${BASE_URL}/api/query/stream`, {
     method: 'POST',
     headers: {
@@ -93,7 +94,7 @@ export async function embedStreamQuery(question, llm, thinkMode, conversationId,
   })
   if (resp.status === 404) { _streamSupported = false; return null }  // flag off — don't retry per message
   if (resp.status === 401) {
-    localStorage.removeItem('dm_embed_token')
+    storage.removeItem('dm_embed_token')
     const e = new Error('Session expired'); e.status = 401; throw e
   }
   if (!resp.ok || !resp.body) return null

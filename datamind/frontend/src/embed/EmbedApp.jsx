@@ -7,7 +7,7 @@
  *   onboarding → new user (no dm_embed_token in localStorage)
  *   chat      → returning user (valid token found)
  */
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { createRoot } from 'react-dom/client'
 import './embed.css'
 import { embedValidateContext, salesplayGetProfile, salesplayCheckUser, salesplayOnboard, salesplaySubscriptionInfo, salesplayStartTrial, embedGetSubscription, embedSubmitFeedback, embedGetFeedbackStatus } from './embedApi'
@@ -22,6 +22,7 @@ import EmbedSearchBar from './EmbedSearchBar'
 import EmbedFeedbackModal from './EmbedFeedbackModal'
 import { appName, resolveBrand, applyBrandChrome } from './embedBranding'
 import BrandLogo from './BrandLogo'
+import * as storage from './embedStorage'
 
 // Combines Salesplay's raw subscription state (card/plans — it's the payment
 // gateway) with DataMind's own billing (trial days, tokens — the actual
@@ -68,7 +69,7 @@ const FEEDBACK_COOLDOWN_MAX_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
 
 function snoozeFeedback() {
   const delay = FEEDBACK_COOLDOWN_MIN_MS + Math.random() * (FEEDBACK_COOLDOWN_MAX_MS - FEEDBACK_COOLDOWN_MIN_MS)
-  localStorage.setItem(FEEDBACK_NEXT_PROMPT_KEY, String(Date.now() + delay))
+  storage.setItem(FEEDBACK_NEXT_PROMPT_KEY, String(Date.now() + delay))
 }
 
 // ── Collapsed "search bar" layout (?layout=bar) ─────────────────────────────
@@ -134,6 +135,14 @@ function EmbedApp() {
   // Backend SUBSCRIPTION_FREE, served on /embed/context. While on, the plans
   // screen is never routed to — see routeNoAccess below.
   const subscriptionFree = !!context?.subscription_free
+
+  // routeNoAccess is called from inside the mount effect, whose closure was
+  // built on the render where context is still null -- so reading
+  // subscriptionFree there always saw false, and a free brand was sent to the
+  // plans screen it must never reach. A ref is read at call time, so every
+  // caller sees the brand that actually loaded.
+  const contextRef = useRef(null)
+  contextRef.current = context
   const [plansStartExpanded, setPlansStartExpanded] = useState(false) // consent screen's "Explore plans" was clicked — land on salesplay_plans already expanded
   const [plansAutoPick, setPlansAutoPick] = useState(null) // { tierIndex, cycle } — a tier was clicked on the consent screen; open its receipt directly
 
@@ -155,7 +164,7 @@ function EmbedApp() {
 
   // Apply saved theme on first load so onboarding is themed consistently
   useEffect(() => {
-    const saved = localStorage.getItem('dm_embed_theme') || 'light'
+    const saved = storage.getItem('dm_embed_theme') || 'light'
     document.documentElement.setAttribute('data-theme', saved)
   }, [])
 
@@ -176,7 +185,7 @@ function EmbedApp() {
       return
     }
 
-    const existingToken = localStorage.getItem('dm_embed_token')
+    const existingToken = storage.getItem('dm_embed_token')
 
     embedValidateContext(partnerKey)
       .then(async ctx => {
@@ -209,9 +218,9 @@ function EmbedApp() {
               // salesplayOnboard is safe here: for existing users it skips all setup steps
               // and just issues a new token (sync = "skipped").
               const result = await salesplayOnboard(partnerKey, aat)
-              localStorage.setItem('dm_embed_token', result.token)
-              localStorage.setItem('dm_sp_email', profile.email)
-              if (result.user) localStorage.setItem('dm_embed_user', JSON.stringify(result.user))
+              storage.setItem('dm_embed_token', result.token)
+              storage.setItem('dm_sp_email', profile.email)
+              if (result.user) storage.setItem('dm_embed_user', JSON.stringify(result.user))
 
               // Any user — paid, trial, or unpaid — gets re-checked at the start
               // of every session against Salesplay's own subscription state.
@@ -277,7 +286,7 @@ function EmbedApp() {
   // can't be (already used it, quota gone, or we couldn't check) gets an
   // explanation instead of a card form.
   async function routeNoAccess(access) {
-    if (subscriptionFree) {
+    if (!!contextRef.current?.subscription_free) {
       if (access?.trialAvailable) {
         try {
           await handleTrialSelected()
@@ -296,8 +305,8 @@ function EmbedApp() {
   }
 
   async function handleOnboardingComplete(token, userData) {
-    localStorage.setItem('dm_embed_token', token)
-    if (userData) localStorage.setItem('dm_embed_user', JSON.stringify(userData))
+    storage.setItem('dm_embed_token', token)
+    if (userData) storage.setItem('dm_embed_user', JSON.stringify(userData))
     const intent = userData?.embed_intent // 'trial' | 'explore' — which consent-screen button was clicked
     setPlansStartExpanded(intent === 'explore')
     setPlansAutoPick(userData?.embed_plan || null)
@@ -399,17 +408,17 @@ function EmbedApp() {
   }
 
   function handleExpired() {
-    localStorage.removeItem('dm_embed_token')
-    localStorage.removeItem('dm_sp_email')
-    localStorage.removeItem('dm_embed_user')
+    storage.removeItem('dm_embed_token')
+    storage.removeItem('dm_sp_email')
+    storage.removeItem('dm_embed_user')
     setState('onboarding')
     notifyParent('dm:onboarding_start')
   }
 
   function handleLogout() {
-    localStorage.removeItem('dm_embed_token')
-    localStorage.removeItem('dm_sp_email')
-    localStorage.removeItem('dm_embed_user')
+    storage.removeItem('dm_embed_token')
+    storage.removeItem('dm_sp_email')
+    storage.removeItem('dm_embed_user')
     setState('onboarding')
     notifyParent('dm:logout')
   }
@@ -462,7 +471,7 @@ function EmbedApp() {
   // feedback (ever, checked server-side), and isn't currently snoozed via
   // "remind me later".
   function requestClose(after) {
-    const nextPrompt = Number(localStorage.getItem(FEEDBACK_NEXT_PROMPT_KEY) || 0)
+    const nextPrompt = Number(storage.getItem(FEEDBACK_NEXT_PROMPT_KEY) || 0)
     if (hasChattedRef.current && hasFeedbackRef.current === false && Date.now() >= nextPrompt) {
       setFeedbackAfter(() => after)
     } else {

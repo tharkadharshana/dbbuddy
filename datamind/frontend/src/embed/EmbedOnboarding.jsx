@@ -15,6 +15,7 @@ import { notifyParent } from './EmbedApp'
 import { appName, productTitle, resolveBrand } from './embedBranding'
 import BrandLogo from './BrandLogo'
 import { fmtTok as _fmtTok } from '../formatTokens'
+import * as storage from './embedStorage'
 
 // ── Shared styles ─────────────────────────────────────────────────────────────
 const inp = {
@@ -139,12 +140,12 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete, onClo
           password,
         })
         token = result.token
-        localStorage.setItem('dm_embed_token', token)
+        storage.setItem('dm_embed_token', token)
       } else {
         setSyncMsg('Logging in…')
         const loginResult = await embedLogin(email.trim().toLowerCase(), password)
         token = loginResult.token
-        localStorage.setItem('dm_embed_token', token)
+        storage.setItem('dm_embed_token', token)
         setSyncMsg(`Connecting ${providerName}…`)
         await embedConnectProvider(partnerKey, { api_token: apiToken.trim() }, token)
       }

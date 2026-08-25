@@ -26,6 +26,7 @@ import BetaBadge from '../components/BetaBadge'
 import EmbedSyncProgress from './EmbedSyncProgress'
 import { TIER_FEATURES, groupPlansByTier, planPrice, yearlySavingsPct, displayPlanName } from './embedSalesplayPlanFormat'
 import { fmtTok } from '../formatTokens'
+import * as storage from './embedStorage'
 
 // ── SalesPlay visual language (mirrors EmbedChat's isPartnerFlow branch) ───────
 const SP = {
@@ -252,8 +253,8 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
       return
     }
 
-    localStorage.setItem('dm_embed_token', result.token)
-    if (result.user?.email) localStorage.setItem('dm_sp_email', result.user.email)
+    storage.setItem('dm_embed_token', result.token)
+    if (result.user?.email) storage.setItem('dm_sp_email', result.user.email)
 
     // Carried through to onComplete so EmbedApp can force-show the plans
     // screen once for brand-new users regardless of computed access (their

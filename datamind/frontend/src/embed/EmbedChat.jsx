@@ -18,6 +18,7 @@ import BrandLogo from './BrandLogo'
 import BetaBadge from '../components/BetaBadge'
 import Markdown from '../components/Markdown'
 import ResultChart from '../components/ResultChart'
+import * as storage from './embedStorage'
 
 const SUGGESTIONS = [
   { icon:'💰', text:'What was my total revenue last month?' },
@@ -287,11 +288,11 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, on
   }, [])
 
   // ── Theme ───────────────────────────────────────────────────────────────────
-  const [theme, setTheme] = useState(() => localStorage.getItem('dm_embed_theme') || 'light')
+  const [theme, setTheme] = useState(() => storage.getItem('dm_embed_theme') || 'light')
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
-    localStorage.setItem('dm_embed_theme', theme)
+    storage.setItem('dm_embed_theme', theme)
   }, [theme])
 
   const toggleTheme = () => setTheme(t => t === 'dark' ? 'light' : 'dark')
