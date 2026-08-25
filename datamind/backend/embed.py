@@ -408,8 +408,9 @@ def embed_init(request: Request, req: EmbedInitRequest):
             except HTTPException:
                 raise HTTPException(
                     status_code=400,
-                    detail="An account with this email already exists. "
-                           "Please use a different email or log in at datamind.ai."
+                    detail=("An account with this email already exists. "
+                            "Please use a different email, or sign in at " +
+                            (_brand(partner)["app_url"] or "your account page") + ".")
                 )
         else:
             raise
@@ -816,7 +817,7 @@ def salesplay_proxy_create_token(request: Request, req: SalesplayCreateTokenRequ
                 "Authorization":  f"Bearer {req.aat.strip()}",
                 "Content-Type":   "application/json",
             },
-            json={"name": "DataMind", "expire_enabled": False, "expires_at": ""},
+            json={"name": _brand(partner)["product_name"], "expire_enabled": False, "expires_at": ""},
             timeout=_PROXY_TIMEOUT,
         )
         if resp.status_code == 401:
@@ -939,7 +940,7 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
                     "Authorization": f"Bearer {aat}",
                     "Content-Type":  "application/json",
                 },
-                json={"name": "DataMind", "expire_enabled": False, "expires_at": ""},
+                json={"name": _brand(partner)["product_name"], "expire_enabled": False, "expires_at": ""},
                 timeout=_PROXY_TIMEOUT,
             )
             if resp.status_code == 401:

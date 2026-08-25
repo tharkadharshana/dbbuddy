@@ -23,7 +23,9 @@ const SP = {
   heading: '#191C1E',
   text:    '#545F73',
   text3:   '#8B93A7',
-  blue:    '#0058BE',
+  // See the note in EmbedSalesplayPlans: the brand's primary_color arrives
+  // as a CSS variable, so a hardcoded hex here ignores every other brand.
+  blue:    'var(--blue, #0058BE)',
   shadow:  '0px 4px 20px 0px rgba(84,95,115,0.12)',
 }
 

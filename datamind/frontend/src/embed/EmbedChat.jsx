@@ -20,12 +20,10 @@ import Markdown from '../components/Markdown'
 import ResultChart from '../components/ResultChart'
 import * as storage from './embedStorage'
 
-const SUGGESTIONS = [
-  { icon:'💰', text:'What was my total revenue last month?' },
-  { icon:'📦', text:'Which products are selling the fastest?' },
-  { icon:'👥', text:'Who are my top 10 customers?' },
-  { icon:'📍', text:'Compare sales across all my locations' },
-]
+// Icons stay here; the questions come from the brand row, so a partner can
+// tailor them without a deploy. Positional and cycling if a brand supplies
+// more than four -- the icon is decoration, not meaning.
+const SUGGESTION_ICONS = ['💰', '📦', '👥', '📍']
 
 // ── Token usage indicator ──────────────────────────────────────────────────────
 function TokenUsage({ sub, isPartnerFlow }) {
@@ -617,7 +615,8 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, on
               Popular questions
             </div>
             <div style={{ display:'flex', flexDirection:'column', gap: isPartnerFlow ? 8 : 8, width:'100%' }}>
-              {SUGGESTIONS.map((s, i) => {
+              {brand.suggestions.map((text, i) => {
+                const s = { icon: SUGGESTION_ICONS[i % SUGGESTION_ICONS.length], text }
                 const featured = i === 0
                 const hovered = hoveredSuggestion === i
 

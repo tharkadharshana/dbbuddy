@@ -488,7 +488,10 @@ def _brand_app_name(user: dict) -> str:
     if brand:
         from embed import _brand
         return _brand(brand)["product_name"]
-    return _APP_NAME
+    # Never _APP_NAME here: it defaults to one brand's name, and this path is
+    # reached when a brand row is missing or deactivated -- exactly when telling
+    # the merchant another brand's name would be worst.
+    return "your AI assistant"
 
 
 def _brand_company_name(user: dict) -> str:
@@ -497,7 +500,7 @@ def _brand_company_name(user: dict) -> str:
     if brand:
         from embed import _brand
         return _brand(brand)["company_name"]
-    return _APP_NAME
+    return "your provider"
 
 
 def _user_subscription_free(user: dict) -> bool:

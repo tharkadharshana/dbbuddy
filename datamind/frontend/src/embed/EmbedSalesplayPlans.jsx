@@ -36,7 +36,12 @@ const SP = {
   heading:   '#191C1E',
   text:      '#545F73',
   text3:     '#8B93A7',
-  blue:      '#0058BE',
+  // Reads the CSS variable applyBrandChrome() sets from the brand's
+  // primary_color, with the literal only as a fallback. A hardcoded hex here
+  // silently ignored every brand but the one it was picked for -- invisible
+  // today because both brands share this blue, and wrong the moment one does
+  // not.
+  blue:      'var(--blue, #0058BE)',
   blueLight: '#D8E2FF',
   blueDark:  '#001A42',
   outline:   '#C2C6D6',
