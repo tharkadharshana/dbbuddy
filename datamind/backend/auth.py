@@ -198,11 +198,20 @@ def redeem_sso_handoff_token(token: str) -> str:
 
 # ── User CRUD ─────────────────────────────────────────────────────────────────
 
+_USER_COLS = "account_key, email, partner_key, name, password_hash, settings, created_at"
+
+
 def _row_to_user(row) -> dict:
-    email, name, password_hash, settings_json, created_at = row
+    account_key, email, partner_key, name, password_hash, settings_json, created_at = row
     settings = json.loads(settings_json) if isinstance(settings_json, str) else settings_json
     return {
-        "email": email,
+        # "email" here is the ACCOUNT KEY, not the address. Everything
+        # downstream -- billing, credits, conversations, integrations -- keys on
+        # this, and the same address can belong to different merchants under
+        # different brands. The real address is contact_email.
+        "email": account_key,
+        "contact_email": email,
+        "partner_key": partner_key,
         "name": name,
         "password_hash": password_hash,
         "settings": _deep_merge(_DEFAULT_SETTINGS, settings),
@@ -210,35 +219,70 @@ def _row_to_user(row) -> dict:
     }
 
 
-def get_user(email: str) -> Optional[dict]:
+def resolve_account_key(email: str, partner_key: str) -> Optional[str]:
+    """Look up the account key for an address within one brand.
+
+    The only place a raw address becomes an identity. Callers that hold a brand
+    (embed onboarding, Host-scoped login and register) use this; everything
+    downstream just passes the resulting scalar around.
+    """
     conn = _get_conn()
     cursor = conn.cursor()
-    cursor.execute("SELECT email, name, password_hash, settings, created_at FROM users WHERE email = %s", (email.lower(),))
+    cursor.execute(
+        "SELECT account_key FROM users WHERE email = %s AND partner_key = %s",
+        (email.lower(), partner_key),
+    )
+    row = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    return row[0] if row else None
+
+
+def get_user(account_key: str) -> Optional[dict]:
+    conn = _get_conn()
+    cursor = conn.cursor()
+    cursor.execute("SELECT " + _USER_COLS + " FROM users WHERE account_key = %s", (account_key,))
     row = cursor.fetchone()
     cursor.close()
     conn.close()
     return _row_to_user(row) if row else None
 
 
-def create_user(name: str, email: str, password: str) -> dict:
+def create_user(name: str, email: str, password: str, partner_key: str) -> dict:
+    """Create an account for one address under one brand.
+
+    partner_key is required: without it the row collides with the same address
+    under a different brand, which is the bug this schema exists to prevent.
+    """
     email = email.lower()
-    if get_user(email):
+    if not partner_key:
+        raise HTTPException(status_code=400, detail="Cannot create an account without a brand.")
+    if resolve_account_key(email, partner_key):
         raise HTTPException(status_code=400, detail="Email already registered")
     settings = dict(_DEFAULT_SETTINGS)
     conn = _get_conn()
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO users (email, name, password_hash, settings, created_at) VALUES (%s, %s, %s, %s, %s)",
-        (email, name, hash_password(password), json.dumps(settings), datetime.utcnow()),
+        "INSERT INTO users (email, partner_key, name, password_hash, settings, created_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s)",
+        (email, partner_key, name, hash_password(password), json.dumps(settings), datetime.utcnow()),
     )
     conn.commit()
     cursor.close()
     conn.close()
-    return {"email": email, "name": name, "settings": settings, "created_at": datetime.utcnow().isoformat()}
+    return {
+        "email": partner_key + ":" + email,
+        "contact_email": email,
+        "partner_key": partner_key,
+        "name": name,
+        "settings": settings,
+        "created_at": datetime.utcnow().isoformat(),
+    }
 
 
-def authenticate_user(email: str, password: str) -> dict:
-    user = get_user(email.lower())
+def authenticate_user(email: str, password: str, partner_key: str) -> dict:
+    account_key = resolve_account_key(email.lower(), partner_key)
+    user = get_user(account_key) if account_key else None
     if not user or not verify_password(password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     return user
@@ -251,7 +295,7 @@ def update_user_settings(email: str, settings_patch: dict) -> dict:
     current = _deep_merge(user.get("settings", {}), settings_patch)
     conn = _get_conn()
     cursor = conn.cursor()
-    cursor.execute("UPDATE users SET settings = %s WHERE email = %s", (json.dumps(current), email))
+    cursor.execute("UPDATE users SET settings = %s WHERE account_key = %s", (json.dumps(current), email))
     conn.commit()
     cursor.close()
     conn.close()
@@ -261,7 +305,7 @@ def update_user_settings(email: str, settings_patch: dict) -> dict:
 def delete_user(email: str):
     conn = _get_conn()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM users WHERE email = %s", (email.lower(),))
+    cursor.execute("DELETE FROM users WHERE account_key = %s", (email,))
     conn.commit()
     cursor.close()
     conn.close()

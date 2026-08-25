@@ -25,7 +25,7 @@ from fastapi import APIRouter, HTTPException, Request, Depends
 from pydantic import BaseModel, Field
 
 from logger import get_logger
-from auth import create_user, authenticate_user, create_token, update_user_settings, current_user, optional_current_user
+from auth import create_user, authenticate_user, create_token, resolve_account_key, update_user_settings, current_user, optional_current_user
 from billing import start_trial, subscribe_to_plan, cancel_subscription, SUBSCRIPTION_FREE
 from integrations import connect_provider, connect_integration
 from pool import get_internal_conn as _get_conn
@@ -275,16 +275,19 @@ def embed_init(request: Request, req: EmbedInitRequest):
         raise HTTPException(status_code=404, detail="Invalid partner key.")
 
     # 2. Create user account (or re-authenticate if already registered)
+    # Scoped to this partner: the same address under another brand is a
+    # different merchant and must not be matched here.
+    email = req.email.strip().lower()
     try:
-        create_user(req.name, req.email.strip().lower(), req.password)
-        log.info("Embed: user created", email=req.email, partner=partner["partner_name"])
+        account_key = create_user(req.name, email, req.password, partner["partner_key"])["email"]
+        log.info("Embed: user created", email=email, partner=partner["partner_name"])
     except HTTPException as e:
         if "already registered" in str(e.detail):
-            # Email exists — authenticate with provided password instead.
-            # Handles the case where the user started onboarding but stopped.
+            # Email exists for THIS brand — authenticate with provided password
+            # instead. Handles a user who started onboarding but stopped.
             try:
-                authenticate_user(req.email.strip().lower(), req.password)
-                log.info("Embed: existing user re-authenticated", email=req.email)
+                account_key = authenticate_user(email, req.password, partner["partner_key"])["email"]
+                log.info("Embed: existing user re-authenticated", email=email)
             except HTTPException:
                 raise HTTPException(
                     status_code=400,
@@ -296,15 +299,15 @@ def embed_init(request: Request, req: EmbedInitRequest):
 
     # 3. Start free trial (silently skip if already active)
     try:
-        start_trial(req.email.strip().lower())
+        start_trial(account_key)
     except Exception as _te:
-        log.warning("Embed: trial start skipped", email=req.email, error=str(_te))
+        log.warning("Embed: trial start skipped", email=email, error=str(_te))
 
     # 4. Connect the provider (validates API token, creates tables, starts sync)
     # connect_provider() raises ValueError on bad credentials, Exception on other failures
     try:
         connect_provider(
-            user_email  = req.email.strip().lower(),
+            user_email  = account_key,
             provider_id = partner["provider_id"],
             credentials = {"api_token": req.api_token.strip()},
         )
@@ -317,11 +320,12 @@ def embed_init(request: Request, req: EmbedInitRequest):
         log.error("Embed: provider connect failed", email=req.email, error=str(e))
         raise HTTPException(status_code=500, detail="Failed to connect provider. Please try again.")
 
-    # 5. Return JWT
-    token = create_token(req.email.strip().lower())
+    # 5. Return JWT. The token carries the account key; the body carries the
+    # real address, which is what the widget displays.
+    token = create_token(account_key)
     return {
         "token":       token,
-        "user":        {"name": req.name, "email": req.email.strip().lower()},
+        "user":        {"name": req.name, "email": email},
         "provider_id": partner["provider_id"],
         "sync":        "started",
     }
@@ -347,12 +351,15 @@ def salesplay_check_user(request: Request, req: SalesplayCheckUserRequest):
 
     email = req.email.strip().lower()
 
+    # Scoped to this partner. Matching on the address alone would report another
+    # brand's merchant as "existing" and send a real new user straight past
+    # onboarding into an account that is not theirs.
+    account_key = resolve_account_key(email, partner["partner_key"])
+
     conn = _get_conn()
     try:
         cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT email FROM users WHERE email = %s LIMIT 1", (email,))
-        user_row = cursor.fetchone()
-        exists = user_row is not None
+        exists = account_key is not None
 
         has_credentials = False
         credentials_healthy = False
@@ -360,7 +367,7 @@ def salesplay_check_user(request: Request, req: SalesplayCheckUserRequest):
             cursor.execute(
                 "SELECT id, status FROM user_integrations "
                 "WHERE user_email = %s AND provider_id = 'salesplay' LIMIT 1",
-                (email,)
+                (account_key,)
             )
             row = cursor.fetchone()
             if row:
@@ -407,20 +414,21 @@ def salesplay_auto_init(request: Request, req: SalesplayAutoInitRequest):
 
     is_new_user = False
     try:
-        create_user(name, email, password)
+        account_key = create_user(name, email, password, partner["partner_key"])["email"]
         is_new_user = True
         log.info("Salesplay auto-init: user created", email=email)
     except HTTPException as e:
         if "already registered" in str(e.detail):
             # Existing account — issue token directly; don't verify password because the
             # user may have a different password from a main-app registration.
+            account_key = resolve_account_key(email, partner["partner_key"])
             log.info("Salesplay auto-init: existing user", email=email)
         else:
             raise
 
     # Start free trial (silently skip if already active)
     try:
-        start_trial(email)
+        start_trial(account_key)
     except Exception as _te:
         log.warning("Salesplay auto-init: trial start skipped", email=email, error=str(_te))
 
@@ -430,7 +438,7 @@ def salesplay_auto_init(request: Request, req: SalesplayAutoInitRequest):
     if api_token:
         try:
             connect_provider(
-                user_email  = email,
+                user_email  = account_key,
                 provider_id = "salesplay",
                 credentials = {"api_token": api_token},
             )
@@ -443,7 +451,7 @@ def salesplay_auto_init(request: Request, req: SalesplayAutoInitRequest):
             log.error("Salesplay auto-init: connect failed", email=email, error=str(e))
             raise HTTPException(status_code=500, detail="Failed to connect provider. Please try again.")
 
-    token = create_token(email)
+    token = create_token(account_key)
     return {
         "token":       token,
         "user":        {"name": name, "email": email},
@@ -673,15 +681,15 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
     conn = _get_conn()
     try:
         cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT email FROM users WHERE email = %s LIMIT 1", (email,))
-        user_exists = cursor.fetchone() is not None
+        account_key = resolve_account_key(email, partner["partner_key"])
+        user_exists = account_key is not None
         has_credentials = False
         credentials_healthy = False
         if user_exists:
             cursor.execute(
                 "SELECT id, status FROM user_integrations "
                 "WHERE user_email = %s AND provider_id = 'salesplay' LIMIT 1",
-                (email,)
+                (account_key,)
             )
             row = cursor.fetchone()
             if row:
@@ -732,18 +740,19 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
     password    = email.rsplit(".", 1)[0]
     is_new_user = False
     try:
-        create_user(name, email, password)
+        account_key = create_user(name, email, password, partner["partner_key"])["email"]
         is_new_user = True
         log.info("Salesplay onboard: user created", email=email)
     except HTTPException as e:
         if "already registered" in str(e.detail):
+            account_key = resolve_account_key(email, partner["partner_key"])
             log.info("Salesplay onboard: existing user", email=email)
         else:
             raise
 
     # ── 5b. Persist locale from Salesplay profile (non-fatal) ─────────────────
     try:
-        update_user_settings(email, {"locale": locale})
+        update_user_settings(account_key, {"locale": locale})
         log.info("Salesplay onboard: locale saved", email=email, currency=locale.get("currency"))
     except Exception as _le:
         log.warning("Salesplay onboard: locale save skipped", email=email, error=str(_le))
@@ -759,7 +768,7 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
     if salesplay_api_token:
         try:
             result = connect_integration(
-                user_email       = email,
+                user_email       = account_key,
                 provider_id      = "salesplay",
                 creds            = {"api_token": salesplay_api_token},
                 skip_validation  = True,
@@ -775,9 +784,9 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
         # see data from any new Salesplay transactions since their last sync.
         try:
             from integrations import trigger_sync, get_integration
-            trigger_sync(email, "salesplay", full=False)
+            trigger_sync(account_key, "salesplay", full=False)
             sync = "delta_started"
-            integ = get_integration(email, "salesplay")
+            integ = get_integration(account_key, "salesplay")
             table_prefix = (integ or {}).get("table_prefix")
             log.info("Salesplay onboard: delta sync triggered for returning user", email=email)
         except Exception as e:
@@ -787,9 +796,9 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
 
     # Report cache: refresh profile (shops/cashiers/currency) + stash the live
     # session token for chat-time report fetches. Feature-flagged, non-fatal.
-    _sync_report_profile(table_prefix, email, aat)
+    _sync_report_profile(table_prefix, account_key, aat)
 
-    token = create_token(email)
+    token = create_token(account_key)
     log.info("Salesplay onboard: complete", email=email, is_new_user=is_new_user, sync=sync)
     return {
         "token":       token,
