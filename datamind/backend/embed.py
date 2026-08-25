@@ -16,6 +16,7 @@ bootstrap flow.
 import os
 import json
 import time
+import threading
 import collections
 from typing import Optional
 
@@ -98,30 +99,68 @@ def _check_rate(ip: str):
 
 # ── Bootstrap ─────────────────────────────────────────────────────────────────
 
-# Single source of truth for the Salesplay partner's branding copy — edit here,
-# restart the backend, it's live. No manual DB update or re-seeding needed.
-SALESPLAY_BRANDING = {
-    "accent_color": "#f59e0b",
-    "product_name": "SalesPlay AI",
+# ── Brand resolution ──────────────────────────────────────────────
+# A brand is one embed_partners row. Many brands can share one provider_id:
+# Salesplay, Sellmo and any future whitelabel all run provider_id='salesplay'.
+# Branding lives in the DB, so adding a brand is a row, not a deploy.
+#
+# Every default here is deliberately brand-neutral. Nothing falls back to a
+# brand name, because a fallback naming one brand would leak it into another
+# brand's widget. Salesplay carries its own values in its own row.
+_BRAND_DEFAULTS = {
+    "product_name":      None,   # falls back to partner_name
+    "company_name":      None,   # the host system's own name, for body copy
+    "brand_slug":        None,   # short label for domain mapping and logs
+    "logo_url":          None,
+    "logo_mark_url":     None,   # small square mark for the assistant avatar
+    "favicon_url":       None,
+    "app_url":           None,   # this brand's standalone app
+    "app_domains":       [],     # hostnames that resolve to this brand
+    "terms_url":         None,
+    "privacy_url":       None,
+    "support_email":     None,
+    "primary_color":     "#0058BE",
+    "colors":            {},
+    "show_beta_badge":   False,
+    "welcome_message":   None,
+    "suggestions":       [],
+    "subscription_free": None,   # None means inherit the process-wide default
 }
 
 
-def _sync_salesplay_branding():
-    """Keeps the Salesplay embed_partners row's branding in sync with
-    SALESPLAY_BRANDING on every startup. No-op if the partner hasn't been
-    seeded yet (first-time setup still goes through seed_embed_partners.py,
-    which also creates the partner_key)."""
-    conn = _get_conn()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE embed_partners SET branding=%s WHERE provider_id='salesplay'",
-            (json.dumps(SALESPLAY_BRANDING),)
-        )
-        conn.commit()
-        cursor.close()
-    finally:
-        conn.close()
+def _brand(partner: dict) -> dict:
+    """Resolve a partner row's branding JSON over the neutral defaults.
+
+    One place, so /embed/context, the LLM persona and the billing gate all see
+    the same values.
+    """
+    raw = partner.get("branding") or {}
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = {}
+    brand = dict(_BRAND_DEFAULTS)
+    brand.update({k: v for k, v in raw.items() if v is not None})
+    # partner_name is the only name guaranteed to exist, so it backstops both.
+    brand["product_name"] = brand["product_name"] or partner.get("partner_name")
+    brand["company_name"] = brand["company_name"] or partner.get("partner_name")
+    return brand
+
+
+def brand_subscription_free(partner) -> bool:
+    """Whether this brand is in free mode.
+
+    Per-brand, because a new whitelabel usually wants a free launch period
+    while an established brand is already charging. Falls back to the
+    process-wide env flag when a brand does not override it.
+    """
+    if partner:
+        value = _brand(partner).get("subscription_free")
+        if value is not None:
+            return bool(value)
+    return SUBSCRIPTION_FREE
+
 
 def bootstrap_embed_tables():
     """Create embed_partners table. Safe to call on every startup."""
@@ -141,14 +180,31 @@ def bootstrap_embed_tables():
     conn.commit()
     cursor.close()
     conn.close()
-    _sync_salesplay_branding()
     log.info("Embed tables bootstrapped")
 
 
-# ── Partner lookup ────────────────────────────────────────────────────────────
+# ── Partner lookup ────────────────────────────────────────────────
 
-def _get_partner(partner_key: str) -> Optional[dict]:
+# Short TTL rather than lru_cache: _get_partner is now on the chat path, but
+# setting active=0 must still take effect without a restart.
+_PARTNER_CACHE_TTL = int(os.getenv("PARTNER_CACHE_TTL", "60"))
+_partner_cache: dict = {}
+_partner_cache_lock = threading.Lock()
+
+
+def _partner_cache_clear() -> None:
+    with _partner_cache_lock:
+        _partner_cache.clear()
+
+
+def _get_partner(partner_key: str):
     """Return partner row dict or None if not found / inactive."""
+    now = time.monotonic()
+    with _partner_cache_lock:
+        hit = _partner_cache.get(partner_key)
+        if hit and hit[1] > now:
+            return hit[0]
+
     conn = _get_conn()
     try:
         cursor = conn.cursor(dictionary=True)
@@ -158,9 +214,45 @@ def _get_partner(partner_key: str) -> Optional[dict]:
         )
         row = cursor.fetchone()
         cursor.close()
-        return row
     finally:
         conn.close()
+
+    with _partner_cache_lock:
+        _partner_cache[partner_key] = (row, now + _PARTNER_CACHE_TTL)
+    return row
+
+
+def resolve_partner_by_host(host):
+    """Map a request Host header to the brand that owns it.
+
+    The embed gets its brand from ?pk= because the iframe runs on the partner's
+    own domain. The standalone app gets it from Host instead: ai.sellmo.com is
+    Sellmo, ai.salesplay.com is Salesplay. That is what lets a merchant type
+    their real email at either one and land in the right account, with no brand
+    picker and no change to the login UI.
+
+    A hostname must belong to exactly one brand; add_brand.py enforces that.
+    """
+    if not host:
+        return None
+    hostname = host.split(":", 1)[0].strip().lower()
+    if not hostname:
+        return None
+
+    conn = _get_conn()
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM embed_partners WHERE active=1")
+        rows = cursor.fetchall()
+        cursor.close()
+    finally:
+        conn.close()
+
+    for row in rows:
+        for domain in _brand(row).get("app_domains") or []:
+            if str(domain).strip().lower() == hostname:
+                return row
+    return None
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -176,12 +268,7 @@ def get_embed_context(pk: str):
     if not partner:
         raise HTTPException(status_code=404, detail="Invalid or inactive partner key.")
 
-    branding = partner.get("branding") or {}
-    if isinstance(branding, str):
-        try:
-            branding = json.loads(branding)
-        except Exception:
-            branding = {}
+    brand = _brand(partner)
 
     # Parse comma-separated origins for use in postMessage security checks
     raw_origins = partner.get("allowed_origins", "")
@@ -190,14 +277,16 @@ def get_embed_context(pk: str):
     log.info("Embed context requested", partner=partner["partner_name"])
     return {
         "partner_name":    partner["partner_name"],
-        "provider_id":     partner["provider_id"],
+        # "flow", not "provider_id": the widget only ever asked which layout to
+        # render, and provider_id is server-side vocabulary that would put the
+        # word "salesplay" in every whitelabel merchant's network tab.
+        "flow":            "partner" if partner["provider_id"] == "salesplay" else "generic",
         "partner_key":     pk,
-        "app_name":        os.getenv("APP_NAME", "SalesPlay AI"),
-        "branding":        branding,
+        "app_name":        brand["product_name"],
+        "branding":        brand,
         "allowed_origins": allowed_origins,
-        # Launch-period switch. The widget reads this on every load, so
-        # turning the paid flow back on is a backend restart, not a rebuild.
-        "subscription_free": SUBSCRIPTION_FREE,
+        # Per-brand launch-period switch, falling back to the process default.
+        "subscription_free": brand_subscription_free(partner),
     }
 
 
