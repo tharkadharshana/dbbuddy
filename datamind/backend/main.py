@@ -448,7 +448,8 @@ def _base_query_response(**kwargs) -> dict:
     # (AI_FLOW_TEST_EMAILS) legacy users must stay byte-identical to today.
     if _ANSWER_SANITISER_ENABLED or kwargs.get("agent_answer"):
         from llm import sanitise_answer, CAPABILITIES_MESSAGE
-        _fb = CAPABILITIES_MESSAGE.format(app=_APP_NAME, provider="business")
+        _fb = CAPABILITIES_MESSAGE.format(
+            app=kwargs.get("app_name") or _APP_NAME, provider="business")
         for _field in ("message", "analysis"):
             _val = base.get(_field)
             if isinstance(_val, str) and _val:
@@ -475,6 +476,28 @@ def _user_brand(user: dict):
         return None
     from embed import _get_partner
     return _get_partner(key)
+
+
+def _brand_app_name(user: dict) -> str:
+    """What the assistant calls itself for this account's brand.
+
+    A Sellmo merchant must never be told "I'm SalesPlay AI". The name reaches
+    the LLM prompts from the brand row, not from a process-wide env var.
+    """
+    brand = _user_brand(user)
+    if brand:
+        from embed import _brand
+        return _brand(brand)["product_name"]
+    return _APP_NAME
+
+
+def _brand_company_name(user: dict) -> str:
+    """The host system's own name, used in prompt copy and provider labels."""
+    brand = _user_brand(user)
+    if brand:
+        from embed import _brand
+        return _brand(brand)["company_name"]
+    return _APP_NAME
 
 
 def _user_subscription_free(user: dict) -> bool:
@@ -882,26 +905,52 @@ class LoginRequest(BaseModel):
     password: str
 
 
+def _brand_from_host(request: Request) -> dict:
+    """The brand serving this request, resolved from the Host header.
+
+    The embed knows its brand from ?pk= because the iframe runs on the
+    partner's domain. The standalone app uses Host instead: ai.sellmo.com is
+    Sellmo, ai.salesplay.com is Salesplay. That is what lets a merchant type
+    their real address at either one and reach the right account -- the same
+    address can belong to different merchants under different brands, so
+    without a brand the lookup is ambiguous.
+    """
+    from embed import resolve_partner_by_host
+    partner = resolve_partner_by_host(request.headers.get("host"))
+    if not partner:
+        raise HTTPException(
+            status_code=400,
+            detail="This address is not configured for any brand. "
+                   "Please use your provider's own link.",
+        )
+    return partner
+
+
 @v1.post("/auth/register")
 @_limiter.limit(RL_AUTH)
 def register(request: Request, req: RegisterRequest):
     log.info("Register attempt", email=req.email)
-    user = create_user(req.name, req.email, req.password)
-    token = create_token(req.email)
-    log.info("User registered", email=req.email)
+    partner = _brand_from_host(request)
+    user = create_user(req.name, req.email, req.password, partner["partner_key"])
+    # The token carries the account key; the body carries the real address.
+    token = create_token(user["email"])
+    log.info("User registered", email=req.email, partner=partner["partner_name"])
     locale = user.get("settings", {}).get("locale", {})
-    return JSONResponse(status_code=201, content={"token": token, "user": {"name": user["name"], "email": user["email"], "locale": locale}})
+    return JSONResponse(status_code=201, content={"token": token, "user": {
+        "name": user["name"], "email": user["contact_email"], "locale": locale}})
 
 
 @v1.post("/auth/login")
 @_limiter.limit(RL_AUTH_LOGIN)
 def login(request: Request, req: LoginRequest):
     log.info("Login attempt", email=req.email)
-    user = authenticate_user(req.email, req.password)
-    token = create_token(req.email)
-    log.info("User logged in", email=req.email)
+    partner = _brand_from_host(request)
+    user = authenticate_user(req.email, req.password, partner["partner_key"])
+    token = create_token(user["email"])
+    log.info("User logged in", email=req.email, partner=partner["partner_name"])
     locale = user.get("settings", {}).get("locale", {})
-    return {"token": token, "user": {"name": user["name"], "email": user["email"], "locale": locale}}
+    return {"token": token, "user": {
+        "name": user["name"], "email": user["contact_email"], "locale": locale}}
 
 
 @v1.post("/auth/sso-handoff")
@@ -1947,7 +1996,9 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
                 prefix = conn_info.get("table_prefix", "")
                 if pid == "salesplay":
                     tables_filter.extend(_SALESPLAY_SHARED_TABLES)
-                    nl_provider_label = "SalesPlay"
+                    # Goes into the LLM prompt, so it must be the merchant's
+                    # own brand, not the integration's name.
+                    nl_provider_label = _brand_company_name(user)
                     if not nl_tenant_id:
                         nl_tenant_id = prefix
                         _raw_sync = conn_info.get("last_sync_at")
@@ -2080,7 +2131,7 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
         )
         classification = classify_question(
             nl_question, table_names_str, llm, api_key, user["email"],
-            app_name=_APP_NAME, conversation_history=conv_history,
+            app_name=_brand_app_name(user), conversation_history=conv_history,
             language_hint=_classifier_context,
             smart_answers=_SMART_ANSWERS_ENABLED,
             business_knowledge=_BUSINESS_KNOWLEDGE_ENABLED,
@@ -2234,11 +2285,12 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
         if q_type == "conversational":
             if classification.get("subtype") == "capabilities":
                 from llm import CAPABILITIES_MESSAGE
-                response_text = CAPABILITIES_MESSAGE.format(app=_APP_NAME, provider=nl_provider_label)
+                response_text = CAPABILITIES_MESSAGE.format(
+                    app=_brand_app_name(user), provider=nl_provider_label)
             else:
                 response_text = classification.get(
                     "response",
-                    f"Hello! I'm {_APP_NAME}, your AI data assistant. "
+                    f"Hello! I'm {_brand_app_name(user)}, your AI data assistant. "
                     "Ask me anything about your data — for example: "
                     "'Show me sales from last month' or 'Who are my top customers?'"
                 )
