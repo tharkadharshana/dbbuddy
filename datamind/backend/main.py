@@ -464,6 +464,25 @@ def _base_query_response(**kwargs) -> dict:
 # Logic lives in mcp_server/safety.py (shared with the MCP business-data
 # tools) — this wrapper just converts ValueError -> HTTPException, keeping
 # every existing call site in this file unchanged.
+def _user_brand(user: dict):
+    """The embed_partners row this account belongs to, or None.
+
+    users.partner_key is stamped at provisioning, which is how a request that
+    carries no ?pk= -- chat, billing -- still knows which brand it is serving.
+    """
+    key = (user or {}).get("partner_key")
+    if not key:
+        return None
+    from embed import _get_partner
+    return _get_partner(key)
+
+
+def _user_subscription_free(user: dict) -> bool:
+    """Free-mode state for this account's brand, not the whole process."""
+    from embed import brand_subscription_free
+    return brand_subscription_free(_user_brand(user))
+
+
 def _guard_sql(sql: str):
     try:
         _safety.block_mutations(sql)
@@ -3968,10 +3987,11 @@ def billing_subscription(request: Request, user: dict = Depends(current_user)):
     # load, so the launch-period switch costs no extra round trip and needs no
     # rebuild to flip.
     try:
-        return {**get_user_subscription(user["email"]), "subscription_free": SUBSCRIPTION_FREE}
+        return {**get_user_subscription(user["email"]),
+                "subscription_free": _user_subscription_free(user)}
     except Exception as e:
         log.error("Get subscription failed", user=user["email"], error=str(e))
-        return {"status": "no_subscription", "subscription_free": SUBSCRIPTION_FREE}
+        return {"status": "no_subscription", "subscription_free": _user_subscription_free(user)}
 
 
 class SubscribeRequest(BaseModel):
@@ -3980,7 +4000,7 @@ class SubscribeRequest(BaseModel):
 @v1.post("/billing/subscribe")
 @_limiter.limit(RL_WRITE)
 def billing_subscribe(request: Request, req: SubscribeRequest, user: dict = Depends(current_user)):
-    if SUBSCRIPTION_FREE:
+    if _user_subscription_free(user):
         # The UI offers no way here in free mode; a call means a stale tab.
         raise HTTPException(
             status_code=403,
