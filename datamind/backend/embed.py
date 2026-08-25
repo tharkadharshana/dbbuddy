@@ -27,10 +27,11 @@ from fastapi import APIRouter, HTTPException, Request, Depends
 from pydantic import BaseModel, Field
 
 from logger import get_logger
-from auth import create_user, authenticate_user, create_token, resolve_account_key, update_user_settings, current_user, optional_current_user
+from auth import create_user, authenticate_user, create_token, resolve_account_key, update_user_settings, current_user, optional_current_user, _column_exists
 from billing import start_trial, subscribe_to_plan, cancel_subscription, SUBSCRIPTION_FREE
 from integrations import connect_provider, connect_integration
 from pool import get_internal_conn as _get_conn
+import partner_api
 
 log = get_logger(__name__)
 
@@ -174,10 +175,17 @@ def bootstrap_embed_tables():
             provider_id     VARCHAR(50)  NOT NULL,
             allowed_origins TEXT         NOT NULL,
             branding        JSON,
+            api_config      JSON,
             active          TINYINT(1)   DEFAULT 1,
             created_at      DATETIME     DEFAULT NOW()
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """)
+    # Existing installs predate api_config. Kept out of `branding` on purpose:
+    # branding is serialised to the widget, and these are the provider hosts we
+    # promised not to expose.
+    if not _column_exists(cursor, "embed_partners", "api_config"):
+        cursor.execute("ALTER TABLE embed_partners ADD COLUMN api_config JSON AFTER branding")
+        log.info("Embed: added embed_partners.api_config")
     conn.commit()
     cursor.close()
     conn.close()
@@ -631,8 +639,10 @@ def salesplay_auto_init(request: Request, req: SalesplayAutoInitRequest):
 # calls are blocked. These thin server-side proxies forward the request
 # using the user's app_access_token — no CORS applies to server-to-server calls.
 
-_SALESPLAY_BASE = os.getenv("SALESPLAY_EMBED_PROXY_BASE", "https://api.salesplaypos.com/v2.0/public/app")
-_PROXY_TIMEOUT  = int(os.getenv("SALESPLAY_EMBED_PROXY_TIMEOUT", "10"))
+# The base URLs are per-brand, not per-process: a whitelabel can run on its own
+# instance of the provider (see partner_api). Every handler below already holds
+# its partner row, so there is nothing to plumb.
+_PROXY_TIMEOUT = int(os.getenv("SALESPLAY_EMBED_PROXY_TIMEOUT", "10"))
 
 
 def _require_allowed_origin(partner: dict, request: "Request") -> None:
@@ -762,7 +772,7 @@ def salesplay_proxy_profile(request: Request, req: SalesplayProfileRequest):
 
     try:
         resp = _http.get(
-            f"{_SALESPLAY_BASE}/profile",
+            f'{partner_api.for_partner(partner)["proxy_base"]}/profile',
             headers={"Authorization": f"Bearer {req.aat.strip()}"},
             timeout=_PROXY_TIMEOUT,
         )
@@ -801,7 +811,7 @@ def salesplay_proxy_create_token(request: Request, req: SalesplayCreateTokenRequ
 
     try:
         resp = _http.post(
-            f"{_SALESPLAY_BASE}/integrations/access_tokens",
+            f'{partner_api.for_partner(partner)["proxy_base"]}/integrations/access_tokens',
             headers={
                 "Authorization":  f"Bearer {req.aat.strip()}",
                 "Content-Type":   "application/json",
@@ -863,7 +873,7 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
     # ── 1. Fetch Salesplay user profile ───────────────────────────────────────
     try:
         resp = _http.get(
-            f"{_SALESPLAY_BASE}/profile",
+            f'{partner_api.for_partner(partner)["proxy_base"]}/profile',
             headers={"Authorization": f"Bearer {aat}"},
             timeout=_PROXY_TIMEOUT,
         )
@@ -924,7 +934,7 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
     if not has_credentials or not credentials_healthy:
         try:
             resp = _http.post(
-                f"{_SALESPLAY_BASE}/integrations/access_tokens",
+                f'{partner_api.for_partner(partner)["proxy_base"]}/integrations/access_tokens',
                 headers={
                     "Authorization": f"Bearer {aat}",
                     "Content-Type":  "application/json",
@@ -1026,7 +1036,6 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
 # internal billing. These are thin server-to-server proxies (same reasoning
 # as the profile/create-token proxies above: Salesplay's API only allows
 # requests from their own origin, so the browser can't call it directly).
-_SALESPLAY_SUBSCRIPTION_BASE = os.getenv("SALESPLAY_SUBSCRIPTION_BASE_URL", _SALESPLAY_BASE)
 
 
 def _reject_if_subscription_free(partner=None):
@@ -1073,7 +1082,7 @@ def salesplay_subscription_info(request: Request, partner_key: str, aat: str, us
     sync-down below only runs when a signed-in user is actually present.
     """
     partner = _salesplay_guard(partner_key, request)
-    url = f"{_SALESPLAY_SUBSCRIPTION_BASE}/subscriptions/get_ai_pos_info"
+    url = f'{partner_api.for_partner(partner)["subscription_base"]}/subscriptions/get_ai_pos_info'
     log.debug("Salesplay subscription API request", method="GET", url=url)
     try:
         resp = _http.get(
@@ -1148,7 +1157,7 @@ def salesplay_subscription_payment(request: Request, req: SalesplaySubscriptionP
     partner = _salesplay_guard(req.partner_key, request)
     _reject_if_subscription_free(partner)
     body = req.dict(exclude={"partner_key", "aat", "internal_plan_id", "internal_period_days"}, exclude_none=True)
-    url = f"{_SALESPLAY_SUBSCRIPTION_BASE}/subscriptions/payment"
+    url = f'{partner_api.for_partner(partner)["subscription_base"]}/subscriptions/payment'
     log.debug("Salesplay subscription API request", method="POST", url=url, body=body)
     try:
         resp = _http.post(
@@ -1210,7 +1219,7 @@ def salesplay_subscription_preview(request: Request, req: SalesplaySubscriptionP
     partner = _salesplay_guard(req.partner_key, request)
     _reject_if_subscription_free(partner)
     body = req.dict(exclude={"partner_key", "aat"}, exclude_none=True)
-    url = f"{_SALESPLAY_SUBSCRIPTION_BASE}/subscriptions/order/preview"
+    url = f'{partner_api.for_partner(partner)["subscription_base"]}/subscriptions/order/preview'
     log.debug("Salesplay subscription API request", method="POST", url=url, body=body)
     try:
         resp = _http.post(

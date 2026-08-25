@@ -32,11 +32,23 @@ The JSON file holds the row plus its branding, e.g.:
         "support_email": "support@sellmo.com",
         "primary_color": "#0058BE",
         "subscription_free": true
+      },
+      "api_config": {
+        "sync_base":         "https://predev1api.nvision.lk/v1.0",
+        "proxy_base":        "https://predev1backoffice.nvision.lk/rest/v2.0/public/app",
+        "subscription_base": "https://predev1backoffice.nvision.lk/rest/v2.0/public/app"
       }
     }
 
 subscription_free is per-brand: a new whitelabel can launch free while an
 established brand is already charging. Omit it to inherit the process default.
+
+api_config is where a brand names the provider instance it talks to. A
+whitelabel does not have to share its parent's backend -- Salesplay runs on
+predev2 and Sellmo on predev1, and in production each partner has its own
+backoffice host. Omit any key to fall back to the process env, which is what a
+single-brand deployment has always used. These URLs are never sent to the
+browser, which is why they are not in `branding`.
 """
 
 import argparse
@@ -61,6 +73,10 @@ def _load(path):
     if missing:
         raise SystemExit("Missing required field(s): " + ", ".join(missing))
     spec.setdefault("branding", {})
+    spec.setdefault("api_config", {})
+    unknown = set(spec["api_config"]) - {"sync_base", "proxy_base", "subscription_base"}
+    if unknown:
+        raise SystemExit("Unknown api_config key(s): " + ", ".join(sorted(unknown)))
     spec.setdefault("key_prefix", "br_live_")
     if not spec["branding"].get("brand_slug"):
         raise SystemExit("branding.brand_slug is required -- it labels the brand in logs and domain mapping.")
@@ -160,19 +176,20 @@ def main():
             key = existing["partner_key"]
             cur.execute(
                 "UPDATE embed_partners SET provider_id=%s, allowed_origins=%s, "
-                "branding=%s WHERE partner_key=%s",
+                "branding=%s, api_config=%s WHERE partner_key=%s",
                 (spec["provider_id"], spec["allowed_origins"],
-                 json.dumps(spec["branding"]), key),
+                 json.dumps(spec["branding"]), json.dumps(spec["api_config"]), key),
             )
             action = "Updated"
         else:
             key = spec["key_prefix"] + secrets.token_urlsafe(18)
             cur.execute(
                 "INSERT INTO embed_partners "
-                "(partner_key, partner_name, provider_id, allowed_origins, branding, active) "
-                "VALUES (%s, %s, %s, %s, %s, 1)",
+                "(partner_key, partner_name, provider_id, allowed_origins, branding, "
+                "api_config, active) VALUES (%s, %s, %s, %s, %s, %s, 1)",
                 (key, spec["partner_name"], spec["provider_id"],
-                 spec["allowed_origins"], json.dumps(spec["branding"])),
+                 spec["allowed_origins"], json.dumps(spec["branding"]),
+                 json.dumps(spec["api_config"])),
             )
             action = "Created"
 
@@ -187,6 +204,8 @@ def main():
     print("  partner_key : {}".format(key))
     print("  provider    : {} (integration reused unchanged)".format(spec["provider_id"]))
     print("  free mode   : {}".format(brand.get("subscription_free", "inherits process default")))
+    for name in ("sync_base", "proxy_base", "subscription_base"):
+        print("  {:<12}: {}".format(name, spec["api_config"].get(name) or "(env default)"))
     print("\n  Iframe tag for {}:".format(spec["partner_name"]))
     print('    <iframe')
     print('      src="{}/embed.html?pk={}"'.format(app_url.rstrip("/"), key))

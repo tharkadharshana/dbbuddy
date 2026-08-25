@@ -27,6 +27,7 @@ from logger import get_logger
 from pool import get_internal_conn
 
 from .client import ReportAPIClient
+import partner_api
 
 log = get_logger(__name__)
 
@@ -108,7 +109,10 @@ def sync_tenant_profile(tenant_id: str, access_token: str) -> dict:
     """Fetch /app/profile with the live session token, persist it, and stash
     the (encrypted) token for later chat-time report fetches. Returns the
     mapped profile."""
-    raw = ReportAPIClient(access_token).fetch_profile()
+    raw = ReportAPIClient(
+        access_token,
+        base_url=partner_api.for_tenant(tenant_id)["proxy_base"],
+    ).fetch_profile()
     mapped = map_profile(raw)
     conn = get_internal_conn()
     try:

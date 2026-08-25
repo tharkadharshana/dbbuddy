@@ -30,6 +30,7 @@ from .client import ReportAPIClient
 from .ingest import is_month_cached, month_end, warm_months_async
 from .normalize import normalize_dim_rows, normalize_metrics, separators
 from .registry import REPORTS
+import partner_api
 
 log = get_logger(__name__)
 
@@ -147,7 +148,7 @@ def _answer_live(conn, tenant_id, report, start, end, shop_id, cashier, token,
     if not token:
         raise ValueError(NO_SESSION_MSG)
     dec, thou = separators(number_format)
-    client = ReportAPIClient(token)
+    client = ReportAPIClient(token, base_url=partner_api.for_tenant(tenant_id)["proxy_base"])
     if report.kind == "dimensional":
         raw = []
         page = 1

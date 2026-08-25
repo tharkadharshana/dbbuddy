@@ -31,6 +31,7 @@ from report_cache.client import ReportAPIClient
 from report_cache.registry import REPORTS
 
 from .business_tools import ToolContext, build_business_mcp
+import partner_api
 
 log = get_logger(__name__)
 
@@ -215,7 +216,10 @@ def build_report_mcp(rctx: ReportToolContext) -> FastMCP:
             raise ValueError(_NO_SESSION_MSG)
         requested, end = date.fromisoformat(start_date), date.fromisoformat(end_date)
         start, _clamped = _clamp_to_window(ctx.history_months, requested, end)
-        client = ReportAPIClient(rctx.token)
+        client = ReportAPIClient(
+            rctx.token,
+            base_url=partner_api.for_tenant(rctx.tenant_id)["proxy_base"],
+        )
         report = REPORTS[report_id]
         rows, page = [], 1
         while page <= _DETAIL_MAX_PAGES:

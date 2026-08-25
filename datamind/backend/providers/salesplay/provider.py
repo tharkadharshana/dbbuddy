@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import partner_api
 from providers.base import BaseProvider, ProviderManifest, ValidationResult, SyncResult
 from providers.salesplay.sync import (
     SalesPlayAPIClient,
@@ -34,12 +35,12 @@ class SalesPlayProvider(BaseProvider):
             data = json.load(f)
         return ProviderManifest(**data)
 
-    def validate_credentials(self, creds: dict) -> ValidationResult:
+    def validate_credentials(self, creds: dict, api_base: str = "") -> ValidationResult:
         api_token = creds.get("api_token", "").strip()
         if not api_token:
             return ValidationResult(ok=False, error="API token is required.")
         try:
-            client  = SalesPlayAPIClient(api_token)
+            client  = SalesPlayAPIClient(api_token, base_url=api_base)
             account = client.validate()   # uses /merchant endpoint
             log.info("SalesPlay credentials validated",
                      business=account.get("business_name"))
@@ -74,7 +75,10 @@ class SalesPlayProvider(BaseProvider):
         budget = RowBudget(row_budget)
 
         api_token = creds.get("api_token", "").strip()
-        client    = SalesPlayAPIClient(api_token)
+        client    = SalesPlayAPIClient(
+            api_token,
+            base_url=partner_api.for_user(user_email)["sync_base"],
+        )
         total     = 0
 
         def progress(msg: str):
