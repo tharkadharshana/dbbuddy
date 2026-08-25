@@ -27,9 +27,17 @@ import BrandLogo from './BrandLogo'
 // gateway) with DataMind's own billing (trial days, tokens — the actual
 // access gate) into one access decision. Used at every widget open (returning
 // + new merchants) and again right after a payment attempt.
-async function checkSalesplayAccess(partnerKey, aat) {
+async function checkSalesplayAccess(partnerKey, aat, subscriptionFree = false) {
+  // In free mode the provider's billing state decides nothing: access comes
+  // entirely from our own subscription, and there is no card to check or price
+  // to show. Calling it anyway would make a brand that charges nothing depend
+  // on the provider having the AI product provisioned on its instance -- and a
+  // whitelabel launching free is exactly the case where it is not. That failure
+  // locked merchants out of a product that is free, so skip the call and let
+  // evaluateSalesplayAccess work off internal state alone, which it already
+  // tolerates.
   const [info, sub] = await Promise.all([
-    salesplaySubscriptionInfo(partnerKey, aat),
+    subscriptionFree ? Promise.resolve(null) : salesplaySubscriptionInfo(partnerKey, aat),
     embedGetSubscription(),
   ])
   return evaluateSalesplayAccess(info, sub)
@@ -41,12 +49,12 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 // mid-onboarding) can throttle/delay this call enough to fail transiently.
 // Callers must NOT fail open to chat on the remaining error: that skips the
 // plans screen entirely for a merchant who never actually subscribed.
-async function checkSalesplayAccessRetrying(partnerKey, aat) {
+async function checkSalesplayAccessRetrying(partnerKey, aat, subscriptionFree = false) {
   try {
-    return await checkSalesplayAccess(partnerKey, aat)
+    return await checkSalesplayAccess(partnerKey, aat, subscriptionFree)
   } catch {
     await sleep(800)
-    return await checkSalesplayAccess(partnerKey, aat)
+    return await checkSalesplayAccess(partnerKey, aat, subscriptionFree)
   }
 }
 
@@ -208,7 +216,7 @@ function EmbedApp() {
               // Any user — paid, trial, or unpaid — gets re-checked at the start
               // of every session against Salesplay's own subscription state.
               try {
-                const access = await checkSalesplayAccessRetrying(partnerKey, aat)
+                const access = await checkSalesplayAccessRetrying(partnerKey, aat, !!ctx.subscription_free)
                 if (access.hasAccess) {
                   setState('chat')
                   notifyParent('dm:chat_open')
@@ -299,7 +307,7 @@ function EmbedApp() {
     // hasAccess: false and this naturally routes to the plans screen.
     if (context?.flow === 'partner' && aatToken) {
       try {
-        const access = await checkSalesplayAccessRetrying(partnerKey, aatToken)
+        const access = await checkSalesplayAccessRetrying(partnerKey, aatToken, subscriptionFree)
 
         // "Start Free Trial" was clicked — start it now and skip the plans
         // screen entirely, straight into chat. Falls through to the normal
@@ -344,7 +352,7 @@ function EmbedApp() {
   // unlocking chat. Throws on failure so the plans screen shows the error
   // and re-enables its "Proceed" button (see EmbedSalesplayPlans's catch).
   async function handlePlanSubscribed() {
-    const access = await checkSalesplayAccess(partnerKey, aatToken)
+    const access = await checkSalesplayAccess(partnerKey, aatToken, subscriptionFree)
     if (access.hasAccess) {
       // Paid merchants see the workspace sync here rather than before the
       // plans screen — they came to pay, so nothing is allowed to sit between
@@ -368,7 +376,7 @@ function EmbedApp() {
   // returned value instead).
   async function handleRefreshAccess() {
     try {
-      const access = await checkSalesplayAccess(partnerKey, aatToken)
+      const access = await checkSalesplayAccess(partnerKey, aatToken, subscriptionFree)
       setSubAccess(access)
       return access
     } catch {
@@ -380,7 +388,7 @@ function EmbedApp() {
   // failed. Re-run it and route on the real answer — access may now be fine
   // (trial granted, quota reset), so this can land the merchant straight in chat.
   async function handleFreeBlockedRetry() {
-    const access = await checkSalesplayAccess(partnerKey, aatToken)
+    const access = await checkSalesplayAccess(partnerKey, aatToken, subscriptionFree)
     if (access.hasAccess) {
       setSubAccess(access)
       setState('chat')
