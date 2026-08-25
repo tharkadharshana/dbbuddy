@@ -55,8 +55,13 @@ export const embedConnectProvider = (provider_id, credentials, token) =>
     { headers: { Authorization: `Bearer ${token}` } }
   ).then(r => r.data)
 
-export const embedGetProviderStatus = (connection_id) =>
-  api.get(`/providers/${connection_id}/status`).then(r => r.data)
+// Sync progress. Keyed on the partner key, not the provider id: the old
+// /providers/{connection_id}/status put the integration's name in the URL of a
+// request the widget polls on a loop, which every whitelabel merchant can read
+// in their network tab.
+export const embedGetProviderStatus = (partnerKey) =>
+  api.get(`/embed/partner/sync-status?partner_key=${encodeURIComponent(partnerKey)}`)
+     .then(r => r.data)
 
 // "default" tells the backend to use the tenant's configured AI provider —
 // the embed never names a specific vendor in API traffic.
@@ -149,34 +154,34 @@ export const embedSubscribePlan = (plan_id) =>
 // Salesplay one-shot onboarding — backend handles profile fetch, token creation,
 // account setup, and provider connect in a single server-side call.
 export const salesplayOnboard = (partnerKey, aat) =>
-  api.post('/embed/salesplay/onboard', { partner_key: partnerKey, aat }).then(r => r.data)
+  api.post('/embed/partner/onboard', { partner_key: partnerKey, aat }).then(r => r.data)
 
 // Salesplay profile-only fetch — used to verify merchant identity without side effects.
 export const salesplayGetProfile = (partnerKey, aat) =>
-  api.post('/embed/salesplay/profile', { partner_key: partnerKey, aat }).then(r => r.data)
+  api.post('/embed/partner/profile', { partner_key: partnerKey, aat }).then(r => r.data)
 
 // Check whether a DataMind account with Salesplay credentials exists for a given email.
 export const salesplayCheckUser = (partnerKey, email) =>
-  api.post('/embed/salesplay/check-user', { partner_key: partnerKey, email }).then(r => r.data)
+  api.post('/embed/partner/check-user', { partner_key: partnerKey, email }).then(r => r.data)
 
 // AI POS subscription state — trial/quota/plans, sourced from Salesplay's own
 // billing system. Called on every widget open to decide chat vs. plans screen.
 export const salesplaySubscriptionInfo = (partnerKey, aat) =>
-  api.get('/embed/salesplay/subscription/info', { params: { partner_key: partnerKey, aat } }).then(r => r.data)
+  api.get('/embed/partner/subscription/info', { params: { partner_key: partnerKey, aat } }).then(r => r.data)
 
 // Activate/renew the AI POS addon subscription for a paid plan.
 export const salesplaySubscriptionPayment = (payload) =>
-  api.post('/embed/salesplay/subscription/payment', payload).then(r => r.data)
+  api.post('/embed/partner/subscription/payment', payload).then(r => r.data)
 
 // Real, pre-formatted pricing for the receipt screen (price × qty, credits,
 // amount due) — never recompute these currency strings client-side.
 export const salesplaySubscriptionPreview = (payload) =>
-  api.post('/embed/salesplay/subscription/preview', payload).then(r => r.data)
+  api.post('/embed/partner/subscription/preview', payload).then(r => r.data)
 
 // Explicitly starts the free trial — only called from the plans screen's
 // "Start free trial" button, never implicitly at onboarding.
 export const salesplayStartTrial = () =>
-  api.post('/embed/salesplay/start-trial').then(r => r.data)
+  api.post('/embed/partner/start-trial').then(r => r.data)
 
 // Widget rating (1-5 stars) + optional free-text comment, asked when the user closes the widget.
 export const embedSubmitFeedback = (rating, comment = '') =>
