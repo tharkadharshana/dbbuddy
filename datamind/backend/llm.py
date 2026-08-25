@@ -705,7 +705,11 @@ CAPABILITIES_MESSAGE = (
 def classify_question(
     question: str, table_names: str,
     llm: str, api_key: str, user_email: str,
-    app_name: str = "DataMind",
+    # Deliberately generic, never a brand name: a brand-named default
+    # (this used to say "DataMind") reaches a merchant of a DIFFERENT
+    # brand the moment a caller forgets to pass theirs. Degrading to an
+    # unbranded phrase is survivable; naming the wrong company is not.
+    app_name: str = "your AI assistant",
     conversation_history: str = "",
     language_hint: str = "",
     smart_answers: bool = False,
