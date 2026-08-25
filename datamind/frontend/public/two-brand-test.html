@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Two-brand embed test</title>
+  <style>
+    :root { --bg:#f4f5f7; --card:#fff; --line:#e3e6ea; --muted:#5a6472; }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; background: var(--bg); margin: 0; padding: 24px; color:#1b1f24; }
+    h1 { font-size: 18px; margin: 0 0 4px; }
+    .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
+    .brand { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+    .brand h2 { font-size: 15px; margin: 0 0 2px; }
+    .pk { font-family: ui-monospace, monospace; font-size: 11px; color: var(--muted); word-break: break-all; margin-bottom: 12px; }
+    label { display:block; font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 6px; }
+    input { width: 100%; padding: 8px; border: 1px solid var(--line); border-radius: 6px;
+            font-family: ui-monospace, monospace; font-size: 11px; }
+    .row { display: flex; gap: 8px; margin-top: 8px; }
+    button { padding: 8px 14px; border: 0; border-radius: 6px; background: #2563eb; color: #fff;
+             font-size: 13px; cursor: pointer; }
+    button.ghost { background: #eceef1; color: #333; }
+    iframe { width: 100%; height: 620px; border: 1px solid var(--line); border-radius: 10px;
+             background: #fff; margin-top: 14px; }
+    .log { margin-top: 10px; font-family: ui-monospace, monospace; font-size: 11px;
+           color: var(--muted); max-height: 120px; overflow: auto; }
+    .note { background:#fff8e1; border:1px solid #f0e0a8; border-radius:8px; padding:10px 12px;
+            font-size:12.5px; margin-bottom:18px; }
+  </style>
+</head>
+<body>
+  <h1>Two-brand embed test</h1>
+  <div class="sub">
+    One app, one database, two partner keys. Simulates each partner's backoffice
+    building its own iframe URL.
+  </div>
+
+  <div class="note">
+    Each brand needs an <code>app_access_token</code> from <em>its own</em>
+    backoffice — Salesplay's from predev2, Sellmo's from predev1. They are not
+    interchangeable: a predev1 token against Salesplay's key resolves to a
+    different provider instance and will fail. Read it from DevTools →
+    Application → Cookies → <code>app_access_token</code> on that backoffice.
+  </div>
+
+  <div class="grid" id="grid"></div>
+
+<script>
+const BRANDS = [
+  { id: 'sp', name: 'Salesplay',
+    pk: 'sp_dev_test',
+    hint: 'predev2backoffice.nvision.lk — paid flow (subscription_free = false)' },
+  { id: 'sl', name: 'Sellmo',
+    pk: 'sl_live_ViLHHIDmYt5KRAxtJpy5aqXd',
+    hint: 'predev1backoffice.nvision.lk — free flow (subscription_free = true)' },
+]
+
+const grid = document.getElementById('grid')
+
+for (const b of BRANDS) {
+  const el = document.createElement('div')
+  el.className = 'brand'
+  el.innerHTML = `
+    <h2>${b.name}</h2>
+    <div class="pk">pk=${b.pk}<br>${b.hint}</div>
+    <label for="aat-${b.id}">app_access_token</label>
+    <input id="aat-${b.id}" placeholder="eyJ0eXAiOiJKV1Q..." />
+    <div class="row">
+      <button data-load="${b.id}">Load widget</button>
+      <button class="ghost" data-clear="${b.id}">Clear stored token</button>
+    </div>
+    <div id="frame-${b.id}"></div>
+    <div class="log" id="log-${b.id}"></div>`
+  grid.appendChild(el)
+
+  // Remember the pasted aat per brand so a reload does not mean re-pasting.
+  try {
+    const saved = localStorage.getItem('tbt_aat_' + b.id)
+    if (saved) document.getElementById('aat-' + b.id).value = saved
+  } catch (e) {}
+}
+
+function log(id, msg) {
+  const el = document.getElementById('log-' + id)
+  const line = document.createElement('div')
+  line.textContent = '[' + new Date().toLocaleTimeString() + '] ' + msg
+  el.prepend(line)
+}
+
+function load(id) {
+  const b = BRANDS.find(x => x.id === id)
+  const aat = document.getElementById('aat-' + id).value.trim()
+  if (!aat) { alert('Paste ' + b.name + "'s app_access_token first"); return }
+  try { localStorage.setItem('tbt_aat_' + id, aat) } catch (e) {}
+
+  // Exactly what a partner's backoffice snippet does: read the cookie, append
+  // pk + aat, insert the iframe.
+  const src = '/src/embed/embed.html'
+            + '?pk='  + encodeURIComponent(b.pk)
+            + '&aat=' + encodeURIComponent(aat)
+
+  const host = document.getElementById('frame-' + id)
+  host.innerHTML = ''
+  const f = document.createElement('iframe')
+  f.src = src
+  f.allow = 'clipboard-write'
+  host.appendChild(f)
+  log(id, 'loaded ' + b.pk)
+}
+
+document.addEventListener('click', e => {
+  const load_id = e.target.getAttribute('data-load')
+  if (load_id) return load(load_id)
+  const clear_id = e.target.getAttribute('data-clear')
+  if (clear_id) {
+    // The widget's own JWT lives in the iframe's origin, which is this origin
+    // in local dev -- so both brands share one bucket here. Clearing it forces
+    // a fresh onboard. On real per-brand domains this cannot happen.
+    try {
+      localStorage.removeItem('dm_embed_token')
+      localStorage.removeItem('dm_sp_email')
+    } catch (err) {}
+    log(clear_id, 'cleared dm_embed_token — next load re-onboards')
+  }
+})
+
+window.addEventListener('message', ev => {
+  if (!ev.data || typeof ev.data.type !== 'string') return
+  if (!ev.data.type.startsWith('dm:')) return
+  for (const b of BRANDS) log(b.id, ev.data.type)
+})
+</script>
+</body>
+</html>

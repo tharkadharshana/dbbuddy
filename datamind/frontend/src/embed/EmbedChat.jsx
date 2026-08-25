@@ -172,7 +172,7 @@ function VoteButtons({ vote, onVote }) {
 }
 
 // ── Message bubble ────────────────────────────────────────────────────────────
-function Message({ msg, theme, onVote }) {
+function Message({ msg, theme, onVote, brand }) {
   if (msg.role === 'user') return (
     <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:14 }}>
       <div style={{ maxWidth:'80%', background:'var(--blue)', color:'#fff', borderRadius:'14px 14px 4px 14px', padding:'9px 13px', fontSize:13, lineHeight:1.5 }}>
@@ -689,7 +689,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, on
           </div>
         ) : (
           <div style={{ padding: isNarrow ? '0 10px' : '0 14px' }}>
-            {messages.map(msg => <Message key={msg.id} msg={msg} theme={theme} onVote={v => handleVote(msg, v)} />)}
+            {messages.map(msg => <Message key={msg.id} msg={msg} theme={theme} brand={brand} onVote={v => handleVote(msg, v)} />)}
             <div ref={bottomRef} />
           </div>
         )}

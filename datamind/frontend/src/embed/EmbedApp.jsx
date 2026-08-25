@@ -406,6 +406,20 @@ function EmbedApp() {
     notifyParent('dm:logout')
   }
 
+  // Title, favicon and accent all come from the brand at runtime. They cannot
+  // come from the HTML file or the build: one bundle serves every brand.
+  //
+  // This MUST stay above every early return below. A hook after a conditional
+  // return runs on some renders and not others, and React tears the whole tree
+  // down when the count changes -- which showed up as a blank iframe the moment
+  // state left 'loading'. resolveBrand tolerates a null context, so it is safe
+  // this early.
+  const brand = resolveBrand(context)
+
+  useEffect(() => {
+    if (context) applyBrandChrome(brand)
+  }, [context])
+
   // Collapsed search-bar — shown regardless of internal state (loading,
   // onboarding, chat, etc. all continue resolving in the background so the
   // full experience is ready the moment the user expands it).
@@ -434,14 +448,6 @@ function EmbedApp() {
       </div>
     )
   }
-
-  // Title, favicon and accent all come from the brand at runtime. They cannot
-  // come from the HTML file or the build: one bundle serves every brand.
-  const brand = resolveBrand(context)
-
-  useEffect(() => {
-    if (context) applyBrandChrome(brand)
-  }, [context])
 
   // Ask for a rating before actually closing/minimizing the widget — only if
   // the user sent at least one message this session, hasn't already submitted
