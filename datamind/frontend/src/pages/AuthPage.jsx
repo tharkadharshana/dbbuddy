@@ -1,6 +1,5 @@
 import React, { useState } from 'react'
 import { login, register, getErrorMessage } from '../utils/api'
-import { APP_NAME } from '../appName'
 import Logo from '../components/Logo'
 
 export default function AuthPage({ onAuth }) {
@@ -45,8 +44,9 @@ export default function AuthPage({ onAuth }) {
 
         {/* Logo */}
         <div style={{ textAlign:'center', marginBottom:32 }}>
-          <Logo size={52} radius={14} shadow="0 8px 24px rgba(79,142,247,0.35)" style={{ marginBottom:14 }} />
-          <div style={{ fontSize:26, fontWeight:700, color:'#f0f1fa', marginBottom:4 }}>{APP_NAME}</div>
+          {/* The wordmark already reads "SalesPlay AI" — printing APP_NAME
+              beneath it said the same thing twice. */}
+          <Logo size={44} style={{ marginBottom:14 }} />
           <div style={{ fontSize:13, color:'#5a5f7d' }}>Transform Data into Actionable Intelligence</div>
         </div>
 

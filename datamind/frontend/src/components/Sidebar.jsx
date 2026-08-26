@@ -1,6 +1,5 @@
 import React, { useState, useRef } from 'react'
 import { deleteConversation } from '../utils/api'
-import { APP_NAME } from '../appName'
 import Logo from './Logo'
 import BetaBadge from './BetaBadge'
 
@@ -300,14 +299,9 @@ export default function Sidebar({ active, setActive, connection, cacheStatus, th
       {/* Logo */}
       <div style={{ padding:'16px 14px 12px', borderBottom:'1px solid var(--border)' }}>
         <div style={{ display:'flex', alignItems:'center', gap:9 }}>
-          <Logo size={32} />
-          <div>
-            <div style={{ fontWeight:700, fontSize:14, lineHeight:1.1, display:'flex', alignItems:'center', gap:5 }}>
-              {APP_NAME}
-              {subscriptionFree && <BetaBadge />}
-            </div>
-            <div style={{ fontSize:10, color:'var(--text3)' }}>AI Analytics</div>
-          </div>
+          {/* Wordmark carries the product name; APP_NAME beside it duplicated it. */}
+          <Logo size={26} />
+          {subscriptionFree && <BetaBadge />}
         </div>
       </div>
 

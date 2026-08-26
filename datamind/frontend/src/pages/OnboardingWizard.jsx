@@ -255,8 +255,10 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
 
       {/* Logo */}
       <div style={{ textAlign:'center', marginBottom:28, zIndex:1 }}>
-        <Logo size={48} radius={13} shadow="0 8px 24px rgba(79,142,247,0.3)" style={{ marginBottom:12 }} />
-        <div style={{ fontSize:22, fontWeight:700, color:'var(--text)' }}>Welcome to {APP_NAME}</div>
+        {/* Wordmark already names the product, so "Welcome to {APP_NAME}"
+            repeated it. The greeting stays, the name does not. */}
+        <Logo size={40} style={{ marginBottom:12 }} />
+        <div style={{ fontSize:22, fontWeight:700, color:'var(--text)' }}>Welcome</div>
         <div style={{ fontSize:13, color:'var(--text2)', marginTop:4 }}>Let's get you set up in 3 quick steps</div>
       </div>
 
