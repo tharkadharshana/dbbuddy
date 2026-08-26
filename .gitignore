@@ -51,3 +51,7 @@ reset_qa_usage.py
 # QA runner config — holds live Salesplay aats. Never commit.
 scripts/qa_*.local.json
 scripts/.qa_instance_*.log
+
+# Local DB backups/dumps (large, sensitive — never commit)
+backups/
+*.sql
