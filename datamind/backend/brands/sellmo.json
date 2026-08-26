@@ -18,8 +18,8 @@
     "subscription_free": true
   },
   "api_config": {
-    "sync_base": "<SELLMO_POS_API_BASE>",
-    "proxy_base": "<SELLMO_BACKOFFICE_API_BASE>",
-    "subscription_base": "<SELLMO_BACKOFFICE_API_BASE>"
+    "sync_base": "https://api.backofficewebportal.com/v1.0",
+    "proxy_base": "https://sellmo.backofficewebportal.com/rest/v2.0/public/app",
+    "subscription_base": "https://sellmo.backofficewebportal.com/rest/v2.0/public/app"
   }
 }
