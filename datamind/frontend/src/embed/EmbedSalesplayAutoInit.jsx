@@ -346,7 +346,7 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
                 {productTitle}
               </h2>
             )}
-            {subscriptionFree && <BetaBadge size={11} style={{ alignSelf: 'center' }} />}
+            {brand?.showBetaBadge && <BetaBadge size={11} style={{ alignSelf: 'center' }} />}
           </div>
           <p style={{ fontSize: 14, lineHeight: '22px', color: SP.text, marginBottom: 24 }}>
             Ask questions in your own language, discover past performance and emerging trends.

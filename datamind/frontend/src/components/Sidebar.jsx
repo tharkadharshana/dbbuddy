@@ -1,7 +1,6 @@
 import React, { useState, useRef } from 'react'
 import { deleteConversation } from '../utils/api'
 import Logo from './Logo'
-import BetaBadge from './BetaBadge'
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
 const IC = {
@@ -286,7 +285,7 @@ function NavItem({ id, label, icon, active, setActive, badge }) {
 
 export default function Sidebar({ active, setActive, connection, cacheStatus, theme, setTheme,
                                    conversations, activeConvId, onConvSelect, onConvCreate, onConvDelete,
-                                   subscriptionFree = false }) {
+                                   }) {
   const cacheOk      = cacheStatus?.cached
   const cacheBuilding= cacheStatus?.build?.status === 'building'
 
@@ -301,7 +300,10 @@ export default function Sidebar({ active, setActive, connection, cacheStatus, th
         <div style={{ display:'flex', alignItems:'center', gap:9 }}>
           {/* Wordmark carries the product name; APP_NAME beside it duplicated it. */}
           <Logo size={26} />
-          {subscriptionFree && <BetaBadge />}
+          {/* ponytail: the standalone app is Salesplay-only and Salesplay runs its
+              free period without a BETA mark, so the badge is off here. Free mode
+              is a billing state, not a branding one -- the widget decides per brand
+              from branding.show_beta_badge. */}
         </div>
       </div>
 

@@ -460,7 +460,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, on
               {!brand?.logoUrl && (
                 <span style={{ fontSize: isNarrow ? 15 : 18, fontWeight:800, color:'#191C1E', letterSpacing:'-0.02em', fontFamily:"'Manrope', 'Plus Jakarta Sans', sans-serif", overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{productTitle}</span>
               )}
-              {context?.subscription_free && <BetaBadge size={isNarrow ? 8 : 9} />}
+              {brand?.showBetaBadge && <BetaBadge size={isNarrow ? 8 : 9} />}
             </div>
             <div style={{ display:'flex', alignItems:'center', gap: isNarrow ? 4 : 6, flexShrink:0 }}>
               {/* Minimize back to the collapsed search bar (?layout=bar only) */}
