@@ -8,7 +8,7 @@
     "company_name":  "Salesplay",
     "brand_slug":    "salesplay",
     "logo_url":      "/brand/salesplay-ai-logo.svg",
-    "logo_mark_url": "/brand/salesplay-logo.svg",
+    "logo_mark_url": "/brand/salesplay-mark.svg",
     "favicon_url":   "/favicon.svg",
     "app_url":       "http://localhost:5173",
     "app_domains":   ["localhost"],
