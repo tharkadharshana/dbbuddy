@@ -1,0 +1,22 @@
+{
+  "partner_name":    "Salesplay",
+  "provider_id":     "salesplay",
+  "key_prefix":      "sp_live_",
+  "allowed_origins": "http://localhost:5173,http://127.0.0.1:5173",
+  "branding": {
+    "product_name":  "SalesPlay AI",
+    "company_name":  "Salesplay",
+    "brand_slug":    "salesplay",
+    "logo_url":      "/brand/salesplay-ai-logo.svg",
+    "logo_mark_url": "/brand/salesplay-mark.svg",
+    "favicon_url":   "/favicon.svg",
+    "app_url":       "http://localhost:5173",
+    "app_domains":   ["localhost"],
+    "terms_url":     "https://salesplay.com/docs/SalesPlayAI_Terms_and_Conditions.pdf",
+    "privacy_url":   "https://salesplay.com/docs/SalesPlayAI_Privacy_Policy.pdf",
+    "primary_color": "#0058BE",
+    "show_beta_badge": true,
+    "subscription_free": false
+  },
+  "api_config": {}
+}

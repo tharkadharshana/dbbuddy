@@ -9,181 +9,274 @@
 CHANGES IN THIS PATCH
 ─────────────────────
 
-A. feat: pure agent architecture for the answering flow
-   PROBLEM : The answering path branched between several architectures
-             depending on classification, so the same question could be
-             answered two different ways and produce different numbers.
-             Report tools, forecasting and anomaly detection were only
-             reachable from some of those branches.
-   FIX     : Single agent flow behind AI_FLOW. Retries within the agent
-             (AGENT_MAX_ATTEMPTS) and returns an honest transient error
-             rather than falling through to a weaker path.
-   FILES   : datamind/backend/main.py, mcp_server/agent.py,
-             mcp_server/report_tools.py, mcp_server/safety.py,
-             report_cache/answer.py, report_cache/registry.py
-   ACTION  : REQUIRES AI_FLOW=agent in the server .env — see .ENV CHANGES.
-             The code default is 'legacy'; without this line the whole
-             feature is silently inactive.
-
-B. feat(reporting): report metrics rework + new stock and sales endpoints
-   PROBLEM : Report totals were re-summed from returned rows, which
-             disagreed with the merchant's POS dashboard whenever paging
-             or rounding was involved. No stock/sales endpoints existed
-             for the agent to call.
-   FIX     : get_report_metrics is now authoritative for totals and the
-             model is instructed to trust it instead of re-summing. Added
-             the stock and sales endpoints, calendar-correct billing
-             history windows, and refinalization of trailing periods so
-             late-posted transactions are picked up.
-   FILES   : datamind/backend/billing.py, report_cache/ingest.py,
-             report_cache/registry.py, mcp_server/report_tools.py
-   ACTION  : REPORT_CACHE_REFINALIZE_MONTHS / REPORT_CACHE_DEEP_REFINALIZE_DAYS
-             are new but their code defaults (2 / 7) match the recommended
-             values — adding them to .env is documentation, not a behaviour
-             change.
-
-C. feat(markdown): heading support and correct ordered-list rendering
-   PROBLEM : Answers containing headings rendered as literal '#' text and
-             ordered lists restarted numbering at each item.
-   FIX     : Added heading parsing and fixed ordered-list numbering.
-   FILES   : datamind/frontend/src/components/Markdown.jsx
-
-D. fix(ui): "rows" renamed to "records", sidebar sync line removed
-   PROBLEM : User-facing copy said "rows", which reads as database jargon
-             to a merchant, and the sidebar showed an "N records synced"
-             line that was frequently stale.
-   FIX     : Renamed the wording throughout and removed the sidebar line.
-   FILES   : datamind/frontend/src/components/Sidebar.jsx, UI.jsx,
-             pages/*.jsx
-
-E. style(embed): flattened SalesPlay chat header icons
-   PROBLEM : The header's minimize and open-app controls were bordered
-             pills that crowded the narrow embed header.
-   FIX     : Borderless 28px icon buttons with a hover highlight.
-   FILES   : datamind/frontend/src/embed/EmbedChat.jsx, embed.css
-
-F. QA harness for billing state (development only — inert on the server)
-   PROBLEM : Testing trial/quota/plan transitions required hand-editing
-             the database.
-   FIX     : Added /qa routes and a QA dashboard page that mutate billing
-             state. Triple-gated: QA_ROUTES_ENABLED, refusal on any
-             production signal (FORCE_HTTPS, prod-looking DB host), and a
-             non-empty QA_ROUTES_EMAILS allowlist. When any check fails the
-             router is never mounted and the paths 404.
-   FILES   : datamind/backend/qa_routes.py,
-             datamind/frontend/src/pages/QAPage.jsx
-   NOTE    : qa_routes.py ships in this zip's backend/ like every other file
-             (no more per-file exclusions), but stays inert unless
-             QA_ROUTES_ENABLED + a real QA_ROUTES_EMAILS allowlist are set —
-             which they must never be in production. Vite still strips
-             QAPage from the production frontend build. Do not add
-             QA_ROUTES_* to the production .env.
-
-G. fix(billing): stop silently auto-granting trials at account creation
-   PROBLEM : start_trial() ran unconditionally at registration and at every
-             Salesplay onboarding, so a brand-new account already had an
-             active trial before the user picked anything on the package
-             screen. Refreshing or reopening the tab dropped them straight
-             into the app, and the Salesplay "already added a payment method
-             or paid?" button appeared to work on an account with no card.
-   FIX     : A subscription is only ever created by an explicit user action.
-             New endpoints POST /billing/trial and
-             POST /embed/salesplay/start-trial, wired to the actual
-             "Start trial" buttons. Until one is pressed the account reads
-             no_subscription and the access check blocks correctly.
-   FILES   : datamind/backend/main.py, datamind/backend/embed.py,
+A. feat: free launch period behind SUBSCRIPTION_FREE
+   PROBLEM : Launching to SalesPlay merchants meant showing prices and a
+             card form on day one. We wanted a two-week period where every
+             merchant simply gets the trial, with no pricing anywhere and
+             no way to be charged — and we wanted to end that period
+             without a code change, a rebuild or a redeploy.
+   FIX     : One backend .env boolean, read at import in billing.py and
+             served to both clients on endpoints they already call
+             (GET /embed/context and GET /v1/billing/subscription).
+             While on:
+               - the widget consent screen shows a single "Try <app>"
+                 button; tier cards and the explore accordion are not
+                 rendered and the pricing fetch is skipped
+               - a merchant without access is never routed to the plans
+                 screen. Never subscribed -> the trial is granted outright
+                 and they land in chat. Otherwise they get an explanation
+                 screen keyed on blockReason, with a retry button when the
+                 access check itself failed
+               - the main app billing page shows a trial button instead of
+                 plan tiers and the add-on cart
+               - the BETA badge shows in the sidebar, the widget chat
+                 header and the consent screen
+               - the embed payment proxy, the embed order-preview proxy
+                 and POST /v1/billing/subscribe all return 403
+   FILES   : datamind/backend/billing.py, embed.py, main.py,
              datamind/frontend/src/embed/EmbedApp.jsx,
-             datamind/frontend/src/embed/EmbedSalesplayPlans.jsx,
-             datamind/frontend/src/embed/embedApi.js,
-             datamind/frontend/src/embed/embedSalesplaySubscription.js,
-             datamind/frontend/src/pages/OnboardingWizard.jsx,
-             datamind/frontend/src/utils/api.js
+             EmbedSalesplayAutoInit.jsx, EmbedChat.jsx,
+             EmbedFreeBlocked.jsx (new),
+             datamind/frontend/src/components/BetaBadge.jsx (new),
+             Sidebar.jsx, App.jsx, pages/BillingPage.jsx
+   ACTION  : REQUIRES SUBSCRIPTION_FREE=true in the server .env — see
+             ENV KEYS below. The code default is false; without this line
+             the patch deploys as a no-op and the normal paid flow runs.
+   ENDING  : To end the free period, set SUBSCRIPTION_FREE=false and
+             restart the backend. No rebuild, no redeploy, no SQL. Users
+             mid-trial are unaffected — their trial expires into the
+             normal paid flow on its own.
 
-H. fix(billing): explain token exhaustion in chat instead of a bare limit message
-   PROBLEM : Users who ran out of tokens mid-cycle got a flat "You've used
-             all your tokens for this billing period." with no next step.
-   FIX     : Chat now says the period's tokens are expired and names the two
-             real options — upgrade the plan, or contact support for an
-             add-on. Every query path already routes through
-             check_ai_limit(), so one message covers all of them.
-   FILES   : datamind/backend/billing.py
-
-I. fix(embed): show Salesplay's show_price_text verbatim
-   PROBLEM : Plan prices were built from product_price plus a currency
-             symbol. Both inputs were wrong: product_price is Salesplay's
-             base amount (5/10/25) rather than what the merchant is charged,
-             and product_currency_symbol reads "$" even on LKR accounts. An
-             LKR merchant saw "LKR10/mo" for a plan Salesplay itself prices
-             at "LKR 1,654.93".
-   FIX     : Render Salesplay's own preformatted show_price_text string and
-             nothing else — no symbol logic of ours anywhere in the path.
-   FILES   : datamind/frontend/src/embed/EmbedSalesplayPlans.jsx,
-             datamind/frontend/src/embed/EmbedApp.jsx
-
-J. fix(embed): allow payment only when is_valid_card_added is true
-   PROBLEM : The card check OR-ed in billing_details_added, which flips true
-             as soon as a merchant saves a billing address with no card
-             attached. Those merchants saw "Subscribe", skipped the
-             card_add_url redirect and hit a charge that could only fail
-             (AUTHENTICATION_REQUIRED, and on some accounts a raw PHP fault
-             from Salesplay). A merchant with no card and no card_add_url
-             fell through to the payment screen entirely.
-   FIX     : is_valid_card_added alone gates the flow — it is the only field
-             that predicts whether /subscriptions/payment can succeed. No
-             usable card means the card-add redirect (or a clear message if
-             Salesplay sends no card_add_url), and the flag is re-checked
-             inside the function that actually charges the card.
-   FILES   : datamind/frontend/src/embed/embedSalesplaySubscription.js,
+B. fix(billing): paid activations were landing on a retired 200-token plan
+   PROBLEM : Every merchant who completed a payment was activated on
+             'Starter' (is_active=0, 200 tokens) instead of 'Standard'
+             (25,000 tokens) — a 125x shortfall, paid for. Two faults
+             combined. The frontend mapped tier position to a hardcoded
+             subscription_plans.id ([1,2,3]) and shipped it as
+             internal_plan_id; on the current database those ids are the
+             retired tiers, not Standard. And subscribe_to_plan looked the
+             id up with no is_active filter, so a retired plan activated
+             silently after a real charge. This affected new paying
+             customers as much as existing ones — only the TRIAL path was
+             correct, because it resolves by name.
+   FIX     : subscribe_to_plan's plan_id is now optional; omitted, the live
+             plan is resolved BY NAME exactly as start_trial does. Both
+             lookup branches now require is_active = 1, so a retired plan
+             raises loudly instead of activating silently. The frontend
+             constant is deleted and internal_plan_id is no longer sent —
+             it remains accepted-and-ignored on the request model so an
+             iframe cached from before this patch still completes its
+             charge instead of failing validation after the card was hit.
+             internal_period_days is unchanged; the billing cycle really is
+             the merchant's choice.
+   FILES   : datamind/backend/billing.py, embed.py,
              datamind/frontend/src/embed/EmbedSalesplayPlans.jsx
+   ACTION  : None required. No schema migration and no data change.
+   NOTE    : This fix MUST be deployed before SUBSCRIPTION_FREE is set back
+             to false, or the first paying customer after the free period
+             lands on Starter again.
 
-K. fix(embed): show Salesplay's own error text, not our generic line
-   PROBLEM : Every Salesplay proxy swallowed the upstream response body on a
-             non-2xx and raised a flat "Could not reach Salesplay API.
-             Please try again." A merchant hit by a real Salesplay fault had
-             nothing to report and we had nothing to debug.
-   FIX     : New _salesplay_error() pulls message / error.message /
-             error.code from the response and falls back only when the body
-             carries nothing usable. Wired through the profile,
-             create-token, onboard, subscription-info and payment proxies.
-             HTML fault pages stay suppressed so a stack trace can't render
-             inside the widget, and 401 keeps its actionable "session
-             expired, refresh the page" wording. Salesplay embed only.
-   FILES   : datamind/backend/embed.py,
-             datamind/backend/tests/test_salesplay_error.py,
-             datamind/frontend/src/embed/EmbedSalesplayPlans.jsx
+C. fix(embed): the pre-onboarding plan preview always returned 401
+   PROBLEM : GET /embed/salesplay/subscription/info depended on
+             current_user, so the consent screen's "Explore plans" toggle
+             401'd every time. That call is made with only partner_key +
+             aat, BEFORE any DataMind account or dm_embed_token exists —
+             a merchant looking at prices has not signed up yet.
+   FIX     : New optional_current_user in auth.py returns None when no
+             Authorization header is present, and still raises on a
+             present-but-invalid token. Safe because the bearer scheme is
+             HTTPBearer(auto_error=False). The endpoint's Salesplay-expired
+             sync-down (cancel_subscription) is now guarded by `if user`,
+             so an anonymous caller gets pricing and no account state is
+             touched.
+   FILES   : datamind/backend/auth.py, embed.py
+   ACTION  : None required.
 
-L. fix(embed): stop "Check again" flashing after a successful payment
-   PROBLEM : On success the receipt screen set paidPending before awaiting
-             the confirm, and that button's label keyed off a flag only the
-             manual re-check sets. For a frame between the charge landing
-             and the switch to chat, the merchant saw an idle "Check again",
-             which reads as if the payment needed retrying.
-   FIX     : Key the label off the shared busy flag so the button reads
-             "Checking…" for that window and only offers "Check again" once
-             everything has settled.
-   FILES   : datamind/frontend/src/embed/EmbedSalesplayPlans.jsx
+D. fix(sync): the scheduler advisory lock was not actually held
+   PROBLEM : Only one process may own the integration sync scheduler —
+             GET_LOCK('datamind_scheduler') is what guarantees that. It
+             guaranteed nothing. _try_acquire_scheduler_lock borrowed a
+             POOLED connection and deliberately never closed it, but kept
+             no reference to it, so Python garbage-collected the connection
+             straight back into the pool, the session reset, and the lock
+             silently dropped. Observed with two backends live on one
+             database: BOTH logged "acquired DB advisory lock", and
+             IS_USED_LOCK('datamind_scheduler') returned NULL.
+             Consequence: every backend sharing a database runs its own
+             scheduler and syncs every integration once per instance —
+             duplicate provider API calls, multiplied rate-limit
+             consumption, and concurrent writers racing on
+             integration_records upserts.
+   FIX     : The lock connection is parked at module scope so it is never
+             collected. Two follow-on hazards fixed in the same function:
+             re-acquire is re-entrant (the watchdog's relaunch would
+             otherwise lose GET_LOCK to our OWN parked session, exit, and
+             stop syncing for the life of the process while no other
+             instance could take over), and the tick loop pings the session
+             every 60s so MySQL's wait_timeout cannot close it and free the
+             lock unnoticed. The ping uses reconnect=False deliberately: a
+             reconnect opens a new session that does NOT hold the lock.
+   FILES   : datamind/backend/integrations.py
+   ACTION  : None required. Matters most if you ever run more than one
+             backend against one database.
+   COST    : The parked connection never returns to the pool, so the
+             scheduler-owning worker runs at DB_POOL_SIZE - 1.
 
-DB CHANGES  : None
+E. refactor(ui): one source of truth for the token display multiplier
+   PROBLEM : TDM = 10_000 and fmtTok were copy-pasted, byte for byte, into
+             five files. Changing the display scale in one place would have
+             left four screens disagreeing about how many Tokens a plan
+             grants.
+   FIX     : Extracted to datamind/frontend/src/formatTokens.js and
+             imported by all five. Behaviour is unchanged — TDM is still
+             10_000 and every rendered number is identical.
+   FILES   : datamind/frontend/src/formatTokens.js (new),
+             components/UI.jsx, pages/UsagePage.jsx, pages/BillingPage.jsx,
+             embed/EmbedSalesplayAutoInit.jsx, embed/EmbedOnboarding.jsx
+   ACTION  : None required.
 
-.ENV CHANGES: YES — backend .env
+F. chore(dev): dev-server proxy target is configurable
+   PROBLEM : vite.config.js hardcoded http://localhost:8000 in all seven
+             proxy rules, so a second dev server could not be pointed at a
+             second backend.
+   FIX     : The rules read VITE_BACKEND, defaulting to localhost:8000.
+   FILES   : datamind/frontend/vite.config.js
+   ACTION  : None. This CANNOT affect this patch's bundle: `vite build`
+             ignores the `server` block entirely, and production resolves
+             its backend through VITE_API_URL in the per-target env file.
+             Verified — building with and without VITE_BACKEND set produces
+             identical content-hashed asset filenames.
 
-  ADD (required — feature is inactive without it):
-    AI_FLOW=agent
+G. feat(branding): multi-brand — one deployment serves many partners
+   PROBLEM : Brand identity was compiled into the frontend bundle and the
+             backend env, so a second partner meant a second build and a
+             second deployment. Account identity was the email alone, so
+             the same address could not belong to two merchants under two
+             different partners.
+   FIX     : A brand is now one embed_partners row. Identity moved from
+             `email` to `(email, partner_key)` with a MySQL-generated
+             `account_key` that every child table references. The widget
+             renders entirely from the brand row (name, logos, colours,
+             links, free/paid), and per-brand `api_config` lets one
+             deployment talk to different provider instances.
+             `table_prefix` / tenant_id is NEVER rewritten, so no merchant
+             data moves and nothing resyncs.
+   FILES   : datamind/backend/embed.py, auth.py, main.py, partner_api.py,
+             integrations.py, v1.py, brands/*.json,
+             scripts/add_brand.py, scripts/census_user_brands.py,
+             scripts/migrate_multi_brand_identity.py,
+             datamind/frontend/src/embed/* (BrandLogo.jsx, embedBranding.js,
+             embedApi.js, embedStorage.js and every screen)
+   ACTION  : REQUIRES THE DATABASE MIGRATION. See DATABASE_CHANGES.md in
+             this patch — it is not optional and it needs a maintenance
+             window. Deploying this code against an unmigrated database
+             breaks login: auth.py selects users.account_key, which does
+             not exist until the migration runs.
 
-  ADD (optional — these match their code defaults, add for documentation):
-    AI_FLOW_TEST_EMAILS=
-    AGENT_MAX_ATTEMPTS=2
-    REPORT_CACHE_REFINALIZE_MONTHS=2
-    REPORT_CACHE_DEEP_REFINALIZE_DAYS=7
+H. fix(embed): logos render at their own aspect ratio
+   PROBLEM : BrandLogo forced width AND height to the same value, so every
+             logo was squeezed into a square. A wide wordmark came out as a
+             sliver (a 4:1 mark in the 24px slot rendered about 24x6).
+             Separately, screens printed the product name as text beside a
+             logo that already contains it, so the name appeared twice.
+   FIX     : `size` is now a height and the width follows the artwork;
+             `square` is opt-in for the fixed tiles that need it. Titles
+             adjacent to a logo are hidden when the brand supplies one, and
+             still shown for brands that do not (Sellmo, Loyverse), which
+             are otherwise unaffected. The fallback initial tile floors its
+             own corner radius so a wordmark's radius=0 cannot flatten it.
+             The MAIN APP was a separate bug with the same symptom:
+             components/Logo.jsx had the old mark hardcoded inline as SVG
+             path data, so replacing the .svg file changed the widget and
+             nothing else. It now renders the same file the widget does, so
+             a future logo change is one file replacement. favicon.svg was a
+             third copy of that artwork and now matches the square mark (a
+             wordmark is unreadable at 16px).
+   FILES   : datamind/frontend/src/embed/BrandLogo.jsx, EmbedApp.jsx,
+             EmbedChat.jsx, EmbedOnboarding.jsx, EmbedSalesplayAutoInit.jsx,
+             EmbedSalesplayPlans.jsx,
+             datamind/frontend/src/components/Logo.jsx, Sidebar.jsx,
+             pages/AuthPage.jsx, ChatPage.jsx, OnboardingWizard.jsx,
+             datamind/frontend/public/favicon.svg,
+             datamind/frontend/public/brand/salesplay-ai-logo.svg (new
+             wordmark), salesplay-mark.svg (new — the previous square,
+             preserved for the chat avatar and the favicon)
+   ACTION  : ONE SQL UPDATE per environment — logo_mark_url must move to
+             the new file. See DATABASE_CHANGES.md section 3. Salesplay
+             only; do not touch other brands' rows.
 
-  KEEP (the Salesplay AI POS paid-plans layer is live — do NOT remove these):
-    SALESPLAY_SUBSCRIPTION_BASE_URL            (backend .env)
-    VITE_SALESPLAY_ACTIVATION_POLL_ATTEMPTS    (frontend .env)
-    VITE_SALESPLAY_ACTIVATION_POLL_INTERVAL_MS (frontend .env)
-    VITE_SALESPLAY_CARD_POLL_INTERVAL_MS       (frontend .env)
-  An earlier draft of these notes listed the four keys above under REMOVE.
-  That came from the beta line, where the paid-plans layer was reverted. It
-  is NOT reverted on main/dev — removing them breaks the embed payment flow.
+DEPLOYING MORE THAN ONE INSTANCE ON ONE DATABASE
+────────────────────────────────────────────────
 
-  DO NOT ADD:
-    QA_ROUTES_ENABLED / QA_ROUTES_EMAILS — development only, see F.
+Running a paid instance (SUBSCRIPTION_FREE=false) beside a beta instance
+(true) against a shared database was validated end to end by
+scripts/qa_salesplay.py — 33 checks, including the flip. Two things to know:
+
+  1. Item D above is a prerequisite. Without it both instances run the sync
+     scheduler and every integration syncs twice.
+
+  2. bootstrap_integration_tables clears 'syncing' with NO tenant filter, so
+     restarting either instance marks the OTHER instance's in-flight syncs
+     as errored. It self-heals on the next scheduler tick (errored rows are
+     retried with a backoff multiplier), but restart windows should be
+     coordinated across instances rather than treated as independent.
+
+Full runbook: docs/qa-salesplay-embed-suite.md
+
+OPTIONAL SQL — neither is required for this deploy
+──────────────────────────────────────────────────
+
+1. Plan id tidy. On this database subscription_plans.id is varchar(50)
+   with no auto-increment (the bootstrap declares INT AUTO_INCREMENT, but
+   CREATE TABLE IF NOT EXISTS never corrects an existing table), so
+   'Standard' was inserted with an empty-string id. New rows therefore
+   store plan_id = 0 and the join only matches because MySQL coerces ''
+   to 0. Functional but fragile; the code fix above does not depend on it.
+
+     START TRANSACTION;
+     UPDATE subscription_plans SET id = '4' WHERE name = 'Standard' AND id = '';
+     UPDATE user_subscriptions SET plan_id = 4 WHERE id = 106;
+     COMMIT;
+
+   Both statements or neither — changing the plan id alone orphans that
+   user, because 0 stops matching.
+
+2. Two more weeks for already-expired trials. Gate on the DATE, not the
+   status label: lapsed rows are only relabelled 'expired' when something
+   reads them. The subquery restricts the update to each user's latest row
+   so older rows are not resurrected.
+
+     CREATE TABLE user_subscriptions_bak_20260820 AS SELECT * FROM user_subscriptions;
+
+     UPDATE user_subscriptions us
+     JOIN (SELECT user_email, MAX(id) AS id FROM user_subscriptions GROUP BY user_email) l
+       ON l.id = us.id
+     SET us.status       = 'trial',
+         us.period_start = CURDATE(),
+         us.period_end   = CURDATE() + INTERVAL 14 DAY
+     WHERE us.period_end < CURDATE()
+       AND us.status <> 'cancelled';
+
+   Two deliberate side effects: moving period_start to today resets token
+   counters (subscription_usage is keyed on user_email + period_start), and
+   users who actively cancelled are excluded. Drop the last clause if they
+   should be included.
+
+VERIFY AFTER DEPLOY
+───────────────────
+
+  curl -s "https://<host>/embed/context?pk=<partner_key>" | grep subscription_free
+
+Expect "subscription_free": true. Then open the widget as a BRAND-NEW
+merchant — an existing account will not exercise the paths that changed.
+Expect one "Try <app>" button, a BETA badge, no tier cards, and a landing
+straight in chat.
+
+FULL WRITE-UP
+─────────────
+
+docs/2026-08-20-subscription-free-launch-period.md (and the same content as
+a rendered page at docs/2026-08-20-subscription-free-runbook.html) covers
+the design decisions, the commit-by-commit file changes, the live database
+evidence behind fix B, the runtime test results, and the shared-database
+approach this replaced.

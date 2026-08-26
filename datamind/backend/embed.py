@@ -14,8 +14,10 @@ bootstrap flow.
 """
 
 import os
+import re
 import json
 import time
+import threading
 import collections
 from typing import Optional
 
@@ -25,10 +27,11 @@ from fastapi import APIRouter, HTTPException, Request, Depends
 from pydantic import BaseModel, Field
 
 from logger import get_logger
-from auth import create_user, authenticate_user, create_token, update_user_settings, current_user, optional_current_user
+from auth import create_user, authenticate_user, create_token, resolve_account_key, update_user_settings, current_user, optional_current_user, _column_exists
 from billing import start_trial, subscribe_to_plan, cancel_subscription, SUBSCRIPTION_FREE
 from integrations import connect_provider, connect_integration
 from pool import get_internal_conn as _get_conn
+import partner_api
 
 log = get_logger(__name__)
 
@@ -98,30 +101,68 @@ def _check_rate(ip: str):
 
 # ── Bootstrap ─────────────────────────────────────────────────────────────────
 
-# Single source of truth for the Salesplay partner's branding copy — edit here,
-# restart the backend, it's live. No manual DB update or re-seeding needed.
-SALESPLAY_BRANDING = {
-    "accent_color": "#f59e0b",
-    "product_name": "SalesPlay AI",
+# ── Brand resolution ──────────────────────────────────────────────
+# A brand is one embed_partners row. Many brands can share one provider_id:
+# Salesplay, Sellmo and any future whitelabel all run provider_id='salesplay'.
+# Branding lives in the DB, so adding a brand is a row, not a deploy.
+#
+# Every default here is deliberately brand-neutral. Nothing falls back to a
+# brand name, because a fallback naming one brand would leak it into another
+# brand's widget. Salesplay carries its own values in its own row.
+_BRAND_DEFAULTS = {
+    "product_name":      None,   # falls back to partner_name
+    "company_name":      None,   # the host system's own name, for body copy
+    "brand_slug":        None,   # short label for domain mapping and logs
+    "logo_url":          None,
+    "logo_mark_url":     None,   # small square mark for the assistant avatar
+    "favicon_url":       None,
+    "app_url":           None,   # this brand's standalone app
+    "app_domains":       [],     # hostnames that resolve to this brand
+    "terms_url":         None,
+    "privacy_url":       None,
+    "support_email":     None,
+    "primary_color":     "#0058BE",
+    "colors":            {},
+    "show_beta_badge":   False,
+    "welcome_message":   None,
+    "suggestions":       [],
+    "subscription_free": None,   # None means inherit the process-wide default
 }
 
 
-def _sync_salesplay_branding():
-    """Keeps the Salesplay embed_partners row's branding in sync with
-    SALESPLAY_BRANDING on every startup. No-op if the partner hasn't been
-    seeded yet (first-time setup still goes through seed_embed_partners.py,
-    which also creates the partner_key)."""
-    conn = _get_conn()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE embed_partners SET branding=%s WHERE provider_id='salesplay'",
-            (json.dumps(SALESPLAY_BRANDING),)
-        )
-        conn.commit()
-        cursor.close()
-    finally:
-        conn.close()
+def _brand(partner: dict) -> dict:
+    """Resolve a partner row's branding JSON over the neutral defaults.
+
+    One place, so /embed/context, the LLM persona and the billing gate all see
+    the same values.
+    """
+    raw = partner.get("branding") or {}
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = {}
+    brand = dict(_BRAND_DEFAULTS)
+    brand.update({k: v for k, v in raw.items() if v is not None})
+    # partner_name is the only name guaranteed to exist, so it backstops both.
+    brand["product_name"] = brand["product_name"] or partner.get("partner_name")
+    brand["company_name"] = brand["company_name"] or partner.get("partner_name")
+    return brand
+
+
+def brand_subscription_free(partner) -> bool:
+    """Whether this brand is in free mode.
+
+    Per-brand, because a new whitelabel usually wants a free launch period
+    while an established brand is already charging. Falls back to the
+    process-wide env flag when a brand does not override it.
+    """
+    if partner:
+        value = _brand(partner).get("subscription_free")
+        if value is not None:
+            return bool(value)
+    return SUBSCRIPTION_FREE
+
 
 def bootstrap_embed_tables():
     """Create embed_partners table. Safe to call on every startup."""
@@ -134,21 +175,64 @@ def bootstrap_embed_tables():
             provider_id     VARCHAR(50)  NOT NULL,
             allowed_origins TEXT         NOT NULL,
             branding        JSON,
+            api_config      JSON,
             active          TINYINT(1)   DEFAULT 1,
             created_at      DATETIME     DEFAULT NOW()
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """)
+    # Existing installs predate api_config. Kept out of `branding` on purpose:
+    # branding is serialised to the widget, and these are the provider hosts we
+    # promised not to expose.
+    if not _column_exists(cursor, "embed_partners", "api_config"):
+        cursor.execute("ALTER TABLE embed_partners ADD COLUMN api_config JSON AFTER branding")
+        log.info("Embed: added embed_partners.api_config")
     conn.commit()
     cursor.close()
     conn.close()
-    _sync_salesplay_branding()
     log.info("Embed tables bootstrapped")
 
 
-# ── Partner lookup ────────────────────────────────────────────────────────────
+# ── Merchant-facing copy ──────────────────────────────────────────
+# These strings reach the merchant's error box AND the response body, so a
+# whitelabel merchant must never see the integration's brand in them. Every
+# handler that raises one has already resolved its partner row.
+ERR_SESSION_EXPIRED = "{company} session expired. Please refresh the page."
+ERR_UNREACHABLE     = "Could not reach {company}. Please try again."
+ERR_WRONG_PARTNER   = "This endpoint is not available for this partner."
+ERR_NO_TOKEN        = "{company} did not return an API token."
+ERR_NO_EMAIL        = "Could not retrieve email from your {company} profile."
+ERR_TOKEN_CREATE    = "Could not create a {company} API token. Please try again."
+ERR_TOKEN_INVALID   = "Invalid {company} API token."
 
-def _get_partner(partner_key: str) -> Optional[dict]:
+
+def _msg(partner, template: str) -> str:
+    """Fill merchant-facing copy with the caller's own brand name."""
+    company = _brand(partner)["company_name"] if partner else "your provider"
+    return template.format(company=company)
+
+
+# ── Partner lookup ────────────────────────────────────────────────
+
+# Short TTL rather than lru_cache: _get_partner is now on the chat path, but
+# setting active=0 must still take effect without a restart.
+_PARTNER_CACHE_TTL = int(os.getenv("PARTNER_CACHE_TTL", "60"))
+_partner_cache: dict = {}
+_partner_cache_lock = threading.Lock()
+
+
+def _partner_cache_clear() -> None:
+    with _partner_cache_lock:
+        _partner_cache.clear()
+
+
+def _get_partner(partner_key: str):
     """Return partner row dict or None if not found / inactive."""
+    now = time.monotonic()
+    with _partner_cache_lock:
+        hit = _partner_cache.get(partner_key)
+        if hit and hit[1] > now:
+            return hit[0]
+
     conn = _get_conn()
     try:
         cursor = conn.cursor(dictionary=True)
@@ -158,9 +242,45 @@ def _get_partner(partner_key: str) -> Optional[dict]:
         )
         row = cursor.fetchone()
         cursor.close()
-        return row
     finally:
         conn.close()
+
+    with _partner_cache_lock:
+        _partner_cache[partner_key] = (row, now + _PARTNER_CACHE_TTL)
+    return row
+
+
+def resolve_partner_by_host(host):
+    """Map a request Host header to the brand that owns it.
+
+    The embed gets its brand from ?pk= because the iframe runs on the partner's
+    own domain. The standalone app gets it from Host instead: ai.sellmo.com is
+    Sellmo, ai.salesplay.com is Salesplay. That is what lets a merchant type
+    their real email at either one and land in the right account, with no brand
+    picker and no change to the login UI.
+
+    A hostname must belong to exactly one brand; add_brand.py enforces that.
+    """
+    if not host:
+        return None
+    hostname = host.split(":", 1)[0].strip().lower()
+    if not hostname:
+        return None
+
+    conn = _get_conn()
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM embed_partners WHERE active=1")
+        rows = cursor.fetchall()
+        cursor.close()
+    finally:
+        conn.close()
+
+    for row in rows:
+        for domain in _brand(row).get("app_domains") or []:
+            if str(domain).strip().lower() == hostname:
+                return row
+    return None
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -176,12 +296,7 @@ def get_embed_context(pk: str):
     if not partner:
         raise HTTPException(status_code=404, detail="Invalid or inactive partner key.")
 
-    branding = partner.get("branding") or {}
-    if isinstance(branding, str):
-        try:
-            branding = json.loads(branding)
-        except Exception:
-            branding = {}
+    brand = _brand(partner)
 
     # Parse comma-separated origins for use in postMessage security checks
     raw_origins = partner.get("allowed_origins", "")
@@ -190,14 +305,16 @@ def get_embed_context(pk: str):
     log.info("Embed context requested", partner=partner["partner_name"])
     return {
         "partner_name":    partner["partner_name"],
-        "provider_id":     partner["provider_id"],
+        # "flow", not "provider_id": the widget only ever asked which layout to
+        # render, and provider_id is server-side vocabulary that would put the
+        # word "salesplay" in every whitelabel merchant's network tab.
+        "flow":            "partner" if partner["provider_id"] == "salesplay" else "generic",
         "partner_key":     pk,
-        "app_name":        os.getenv("APP_NAME", "SalesPlay AI"),
-        "branding":        branding,
+        "app_name":        brand["product_name"],
+        "branding":        brand,
         "allowed_origins": allowed_origins,
-        # Launch-period switch. The widget reads this on every load, so
-        # turning the paid flow back on is a backend restart, not a rebuild.
-        "subscription_free": SUBSCRIPTION_FREE,
+        # Per-brand launch-period switch, falling back to the process default.
+        "subscription_free": brand_subscription_free(partner),
     }
 
 
@@ -275,36 +392,40 @@ def embed_init(request: Request, req: EmbedInitRequest):
         raise HTTPException(status_code=404, detail="Invalid partner key.")
 
     # 2. Create user account (or re-authenticate if already registered)
+    # Scoped to this partner: the same address under another brand is a
+    # different merchant and must not be matched here.
+    email = req.email.strip().lower()
     try:
-        create_user(req.name, req.email.strip().lower(), req.password)
-        log.info("Embed: user created", email=req.email, partner=partner["partner_name"])
+        account_key = create_user(req.name, email, req.password, partner["partner_key"])["email"]
+        log.info("Embed: user created", email=email, partner=partner["partner_name"])
     except HTTPException as e:
         if "already registered" in str(e.detail):
-            # Email exists — authenticate with provided password instead.
-            # Handles the case where the user started onboarding but stopped.
+            # Email exists for THIS brand — authenticate with provided password
+            # instead. Handles a user who started onboarding but stopped.
             try:
-                authenticate_user(req.email.strip().lower(), req.password)
-                log.info("Embed: existing user re-authenticated", email=req.email)
+                account_key = authenticate_user(email, req.password, partner["partner_key"])["email"]
+                log.info("Embed: existing user re-authenticated", email=email)
             except HTTPException:
                 raise HTTPException(
                     status_code=400,
-                    detail="An account with this email already exists. "
-                           "Please use a different email or log in at datamind.ai."
+                    detail=("An account with this email already exists. "
+                            "Please use a different email, or sign in at " +
+                            (_brand(partner)["app_url"] or "your account page") + ".")
                 )
         else:
             raise
 
     # 3. Start free trial (silently skip if already active)
     try:
-        start_trial(req.email.strip().lower())
+        start_trial(account_key)
     except Exception as _te:
-        log.warning("Embed: trial start skipped", email=req.email, error=str(_te))
+        log.warning("Embed: trial start skipped", email=email, error=str(_te))
 
     # 4. Connect the provider (validates API token, creates tables, starts sync)
     # connect_provider() raises ValueError on bad credentials, Exception on other failures
     try:
         connect_provider(
-            user_email  = req.email.strip().lower(),
+            user_email  = account_key,
             provider_id = partner["provider_id"],
             credentials = {"api_token": req.api_token.strip()},
         )
@@ -317,11 +438,12 @@ def embed_init(request: Request, req: EmbedInitRequest):
         log.error("Embed: provider connect failed", email=req.email, error=str(e))
         raise HTTPException(status_code=500, detail="Failed to connect provider. Please try again.")
 
-    # 5. Return JWT
-    token = create_token(req.email.strip().lower())
+    # 5. Return JWT. The token carries the account key; the body carries the
+    # real address, which is what the widget displays.
+    token = create_token(account_key)
     return {
         "token":       token,
-        "user":        {"name": req.name, "email": req.email.strip().lower()},
+        "user":        {"name": req.name, "email": email},
         "provider_id": partner["provider_id"],
         "sync":        "started",
     }
@@ -329,7 +451,62 @@ def embed_init(request: Request, req: EmbedInitRequest):
 
 # ── Salesplay auto-init endpoints ─────────────────────────────────────────────
 
-@router.post("/salesplay/check-user")
+class PartnerConnectRequest(BaseModel):
+    partner_key: str
+    credentials: dict
+
+
+@router.post("/partner/connect")
+def partner_connect(request: Request, req: PartnerConnectRequest,
+                    user: dict = Depends(current_user)):
+    """Connect the brand's integration for the signed-in merchant.
+
+    The widget used to send provider_id in the body, which put the
+    integration's name in a request every whitelabel merchant can read. The
+    provider comes from the partner row instead -- the widget never needs to
+    know it.
+    """
+    partner = _get_partner(req.partner_key)
+    if not partner:
+        raise HTTPException(status_code=404, detail="Invalid or inactive partner key.")
+    _require_allowed_origin(partner, request)
+    try:
+        connect_provider(
+            user_email  = user["email"],
+            provider_id = partner["provider_id"],
+            credentials = req.credentials,
+        )
+    except ValueError:
+        raise HTTPException(status_code=422, detail=_msg(partner, ERR_TOKEN_INVALID))
+    except Exception as e:
+        log.error("Embed: partner connect failed", user=user["email"], error=str(e))
+        raise HTTPException(status_code=500, detail="Failed to connect. Please try again.")
+    return {"ok": True}
+
+
+@router.get("/partner/sync-status")
+def partner_sync_status(request: Request, partner_key: str,
+                        user: dict = Depends(current_user)):
+    """Sync progress for the signed-in merchant.
+
+    The widget used to poll /providers/{connection_id}/status, where
+    connection_id IS the provider id -- so a whitelabel merchant watched
+    "salesplay" scroll past in their network tab on a loop. The provider is
+    resolved server-side from the partner row instead.
+    """
+    partner = _get_partner(partner_key)
+    if not partner:
+        raise HTTPException(status_code=404, detail="Invalid or inactive partner key.")
+    _require_allowed_origin(partner, request)
+    from integrations import get_connection_status
+    try:
+        return get_connection_status(user["email"], partner["provider_id"])
+    except Exception as e:
+        log.error("Embed: sync status failed", user=user["email"], error=str(e))
+        raise HTTPException(status_code=500, detail="Failed to get sync status.")
+
+
+@router.post("/partner/check-user")
 def salesplay_check_user(request: Request, req: SalesplayCheckUserRequest):
     """
     Pre-flight check for the Salesplay auto-init flow.
@@ -343,16 +520,19 @@ def salesplay_check_user(request: Request, req: SalesplayCheckUserRequest):
     if not partner:
         raise HTTPException(status_code=404, detail="Invalid or inactive partner key.")
     if partner["provider_id"] != "salesplay":
-        raise HTTPException(status_code=403, detail="This endpoint is only available for Salesplay partners.")
+        raise HTTPException(status_code=403, detail=_msg(partner, ERR_WRONG_PARTNER))
 
     email = req.email.strip().lower()
+
+    # Scoped to this partner. Matching on the address alone would report another
+    # brand's merchant as "existing" and send a real new user straight past
+    # onboarding into an account that is not theirs.
+    account_key = resolve_account_key(email, partner["partner_key"])
 
     conn = _get_conn()
     try:
         cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT email FROM users WHERE email = %s LIMIT 1", (email,))
-        user_row = cursor.fetchone()
-        exists = user_row is not None
+        exists = account_key is not None
 
         has_credentials = False
         credentials_healthy = False
@@ -360,7 +540,7 @@ def salesplay_check_user(request: Request, req: SalesplayCheckUserRequest):
             cursor.execute(
                 "SELECT id, status FROM user_integrations "
                 "WHERE user_email = %s AND provider_id = 'salesplay' LIMIT 1",
-                (email,)
+                (account_key,)
             )
             row = cursor.fetchone()
             if row:
@@ -377,7 +557,7 @@ def salesplay_check_user(request: Request, req: SalesplayCheckUserRequest):
             "credentials_healthy": credentials_healthy}
 
 
-@router.post("/salesplay/auto-init")
+@router.post("/partner/auto-init")
 def salesplay_auto_init(request: Request, req: SalesplayAutoInitRequest):
     """
     One-shot auto-onboarding for Salesplay embed users.
@@ -397,7 +577,7 @@ def salesplay_auto_init(request: Request, req: SalesplayAutoInitRequest):
     if not partner:
         raise HTTPException(status_code=404, detail="Invalid or inactive partner key.")
     if partner["provider_id"] != "salesplay":
-        raise HTTPException(status_code=403, detail="This endpoint is only available for Salesplay partners.")
+        raise HTTPException(status_code=403, detail=_msg(partner, ERR_WRONG_PARTNER))
 
     email = req.email.strip().lower()
     name  = req.name.strip()
@@ -407,20 +587,21 @@ def salesplay_auto_init(request: Request, req: SalesplayAutoInitRequest):
 
     is_new_user = False
     try:
-        create_user(name, email, password)
+        account_key = create_user(name, email, password, partner["partner_key"])["email"]
         is_new_user = True
         log.info("Salesplay auto-init: user created", email=email)
     except HTTPException as e:
         if "already registered" in str(e.detail):
             # Existing account — issue token directly; don't verify password because the
             # user may have a different password from a main-app registration.
+            account_key = resolve_account_key(email, partner["partner_key"])
             log.info("Salesplay auto-init: existing user", email=email)
         else:
             raise
 
     # Start free trial (silently skip if already active)
     try:
-        start_trial(email)
+        start_trial(account_key)
     except Exception as _te:
         log.warning("Salesplay auto-init: trial start skipped", email=email, error=str(_te))
 
@@ -430,7 +611,7 @@ def salesplay_auto_init(request: Request, req: SalesplayAutoInitRequest):
     if api_token:
         try:
             connect_provider(
-                user_email  = email,
+                user_email  = account_key,
                 provider_id = "salesplay",
                 credentials = {"api_token": api_token},
             )
@@ -438,12 +619,12 @@ def salesplay_auto_init(request: Request, req: SalesplayAutoInitRequest):
             log.info("Salesplay auto-init: provider connected", email=email)
         except ValueError as e:
             log.warning("Salesplay auto-init: bad API token", email=email, error=str(e))
-            raise HTTPException(status_code=422, detail="Invalid Salesplay API token.")
+            raise HTTPException(status_code=422, detail=_msg(partner, ERR_TOKEN_INVALID))
         except Exception as e:
             log.error("Salesplay auto-init: connect failed", email=email, error=str(e))
             raise HTTPException(status_code=500, detail="Failed to connect provider. Please try again.")
 
-    token = create_token(email)
+    token = create_token(account_key)
     return {
         "token":       token,
         "user":        {"name": name, "email": email},
@@ -459,8 +640,42 @@ def salesplay_auto_init(request: Request, req: SalesplayAutoInitRequest):
 # calls are blocked. These thin server-side proxies forward the request
 # using the user's app_access_token — no CORS applies to server-to-server calls.
 
-_SALESPLAY_BASE = os.getenv("SALESPLAY_EMBED_PROXY_BASE", "https://api.salesplaypos.com/v2.0/public/app")
-_PROXY_TIMEOUT  = int(os.getenv("SALESPLAY_EMBED_PROXY_TIMEOUT", "10"))
+# The base URLs are per-brand, not per-process: a whitelabel can run on its own
+# instance of the provider (see partner_api). Every handler below already holds
+# its partner row, so there is nothing to plumb.
+_PROXY_TIMEOUT = int(os.getenv("SALESPLAY_EMBED_PROXY_TIMEOUT", "10"))
+
+
+def _require_allowed_origin(partner: dict, request: "Request") -> None:
+    """Refuse a partner key presented from a domain that is not that brand's.
+
+    The key is visible in the iframe src, so without this one brand's key works
+    from another brand's page. An empty allowed_origins means unrestricted,
+    which keeps dev and every existing row behaving exactly as before.
+    """
+    raw = (partner.get("allowed_origins") or "").strip()
+    if not raw:
+        return
+    allowed = {o.strip().rstrip("/").lower() for o in raw.split(",") if o.strip()}
+    if not allowed:
+        return
+    origin = request.headers.get("origin") or ""
+    if not origin:
+        # Some browsers omit Origin on same-site navigations; fall back to the
+        # Referer's scheme+host before refusing.
+        referer = request.headers.get("referer") or ""
+        parts = referer.split("/")
+        if len(parts) >= 3:
+            origin = parts[0] + "//" + parts[2]
+    if not origin:
+        return
+    if origin.rstrip("/").lower() not in allowed:
+        log.warning("Embed: partner key used from an unlisted origin",
+                    partner=partner["partner_name"], origin=origin)
+        raise HTTPException(
+            status_code=403,
+            detail="This page is not authorised to use this widget.",
+        )
 
 
 def _salesplay_guard(partner_key: str, request: "Request"):
@@ -469,8 +684,9 @@ def _salesplay_guard(partner_key: str, request: "Request"):
     partner = _get_partner(partner_key)
     if not partner:
         raise HTTPException(status_code=404, detail="Invalid or inactive partner key.")
+    _require_allowed_origin(partner, request)
     if partner["provider_id"] != "salesplay":
-        raise HTTPException(status_code=403, detail="This endpoint is only available for Salesplay partners.")
+        raise HTTPException(status_code=403, detail=_msg(partner, ERR_WRONG_PARTNER))
     return partner
 
 
@@ -484,7 +700,21 @@ class SalesplayCreateTokenRequest(BaseModel):
     aat:         str
 
 
-def _salesplay_error(resp, fallback: str) -> str:
+def _scrub_brand(text: str, partner) -> str:
+    """Replace the integration's name in text we did not write.
+
+    The passthrough below deliberately hands the merchant the provider's own
+    wording so they can quote it to support. But a whitelabel merchant must not
+    see the integration's brand, and a raw fault string never passes through
+    the provider's own branding layer on the way here.
+    """
+    if not text or not partner:
+        return text
+    company = _brand(partner)["company_name"]
+    return re.sub(r"sales\s*play(pos)?", company, text, flags=re.IGNORECASE)
+
+
+def _salesplay_error(resp, fallback: str, partner=None) -> str:
     """Salesplay's own error text for a failed response, verbatim.
 
     The embed shows the merchant whatever Salesplay actually said (e.g.
@@ -499,7 +729,7 @@ def _salesplay_error(resp, fallback: str) -> str:
     except Exception:
         text = (resp.text or "").strip()
         # Guard against an HTML error page landing in the widget's error box.
-        return text[:300] if text and not text.lstrip().startswith("<") else fallback
+        return _scrub_brand(text[:300], partner) if text and not text.lstrip().startswith("<") else fallback
 
     if isinstance(body, dict):
         err = body.get("error")
@@ -510,7 +740,7 @@ def _salesplay_error(resp, fallback: str) -> str:
             candidates.append(err)
         for c in candidates:
             if isinstance(c, str) and c.strip():
-                return c.strip()[:300]
+                return _scrub_brand(c.strip()[:300], partner)
     return fallback
 
 
@@ -532,25 +762,25 @@ def _extract_salesplay_locale(data: dict) -> dict:
     }
 
 
-@router.post("/salesplay/profile")
+@router.post("/partner/profile")
 def salesplay_proxy_profile(request: Request, req: SalesplayProfileRequest):
     """
     Proxy: fetch the authenticated user's Salesplay profile.
     Forwards the app_access_token server-to-server to avoid browser CORS restrictions.
     Returns { email, name }.
     """
-    _salesplay_guard(req.partner_key, request)
+    partner = _salesplay_guard(req.partner_key, request)
 
     try:
         resp = _http.get(
-            f"{_SALESPLAY_BASE}/profile",
+            f'{partner_api.for_partner(partner)["proxy_base"]}/profile',
             headers={"Authorization": f"Bearer {req.aat.strip()}"},
             timeout=_PROXY_TIMEOUT,
         )
         if resp.status_code == 401:
-            raise HTTPException(status_code=401, detail="Salesplay session expired. Please refresh the page.")
+            raise HTTPException(status_code=401, detail=_msg(partner, ERR_SESSION_EXPIRED))
         if not resp.ok:
-            raise HTTPException(status_code=502, detail=_salesplay_error(resp, "Could not reach Salesplay API. Please try again."))
+            raise HTTPException(status_code=502, detail=_salesplay_error(resp, _msg(partner, ERR_UNREACHABLE), partner))
         data = resp.json()
         # Salesplay profile response: { "status": "success", "user": { "email": ..., "full_name": ... } }
         raw  = data.get("user") or data.get("data") or data
@@ -560,7 +790,7 @@ def salesplay_proxy_profile(request: Request, req: SalesplayProfileRequest):
             raw.get("business_name") or email.split("@")[0]
         ).strip()
         if not email:
-            raise HTTPException(status_code=422, detail="Could not retrieve email from Salesplay profile.")
+            raise HTTPException(status_code=422, detail=_msg(partner, ERR_NO_EMAIL))
         locale = _extract_salesplay_locale(data)
         log.info("Salesplay proxy: profile fetched", email=email)
         return {"email": email, "name": name, "locale": locale}
@@ -568,43 +798,43 @@ def salesplay_proxy_profile(request: Request, req: SalesplayProfileRequest):
         raise
     except Exception as e:
         log.error("Salesplay proxy: profile fetch failed", error=str(e))
-        raise HTTPException(status_code=502, detail="Could not reach Salesplay API. Please try again.")
+        raise HTTPException(status_code=502, detail=_msg(partner, ERR_UNREACHABLE))
 
 
-@router.post("/salesplay/create-token")
+@router.post("/partner/create-token")
 def salesplay_proxy_create_token(request: Request, req: SalesplayCreateTokenRequest):
     """
     Proxy: create a DataMind integration access token in the user's Salesplay account.
     Forwards the app_access_token server-to-server to avoid browser CORS restrictions.
     Returns { token } — the Salesplay API token stored in user_integrations.
     """
-    _salesplay_guard(req.partner_key, request)
+    partner = _salesplay_guard(req.partner_key, request)
 
     try:
         resp = _http.post(
-            f"{_SALESPLAY_BASE}/integrations/access_tokens",
+            f'{partner_api.for_partner(partner)["proxy_base"]}/integrations/access_tokens',
             headers={
                 "Authorization":  f"Bearer {req.aat.strip()}",
                 "Content-Type":   "application/json",
             },
-            json={"name": "DataMind", "expire_enabled": False, "expires_at": ""},
+            json={"name": _brand(partner)["product_name"], "expire_enabled": False, "expires_at": ""},
             timeout=_PROXY_TIMEOUT,
         )
         if resp.status_code == 401:
-            raise HTTPException(status_code=401, detail="Salesplay session expired. Please refresh the page.")
+            raise HTTPException(status_code=401, detail=_msg(partner, ERR_SESSION_EXPIRED))
         if not resp.ok:
-            raise HTTPException(status_code=502, detail=_salesplay_error(resp, "Could not create Salesplay API token. Please try again."))
+            raise HTTPException(status_code=502, detail=_salesplay_error(resp, _msg(partner, ERR_TOKEN_CREATE), partner))
         data  = resp.json()
         token = (data.get("data") or {}).get("token")
         if not token:
-            raise HTTPException(status_code=502, detail="Salesplay did not return an API token.")
+            raise HTTPException(status_code=502, detail=_msg(partner, ERR_NO_TOKEN))
         log.info("Salesplay proxy: access token created")
         return {"token": token}
     except HTTPException:
         raise
     except Exception as e:
         log.error("Salesplay proxy: create-token failed", error=str(e))
-        raise HTTPException(status_code=502, detail="Could not create Salesplay API token. Please try again.")
+        raise HTTPException(status_code=502, detail=_msg(partner, ERR_TOKEN_CREATE))
 
 
 # ── Single onboarding endpoint (widget calls this once after consent) ─────────
@@ -614,7 +844,7 @@ class SalesplayOnboardRequest(BaseModel):
     aat:         str
 
 
-@router.post("/salesplay/onboard")
+@router.post("/partner/onboard")
 def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
     """
     All-in-one Salesplay onboarding. The widget calls this once after the user
@@ -637,21 +867,21 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
     if not partner:
         raise HTTPException(status_code=404, detail="Invalid or inactive partner key.")
     if partner["provider_id"] != "salesplay":
-        raise HTTPException(status_code=403, detail="This endpoint is only available for Salesplay partners.")
+        raise HTTPException(status_code=403, detail=_msg(partner, ERR_WRONG_PARTNER))
 
     aat = req.aat.strip()
 
     # ── 1. Fetch Salesplay user profile ───────────────────────────────────────
     try:
         resp = _http.get(
-            f"{_SALESPLAY_BASE}/profile",
+            f'{partner_api.for_partner(partner)["proxy_base"]}/profile',
             headers={"Authorization": f"Bearer {aat}"},
             timeout=_PROXY_TIMEOUT,
         )
         if resp.status_code == 401:
-            raise HTTPException(status_code=401, detail="Salesplay session expired. Please refresh the page.")
+            raise HTTPException(status_code=401, detail=_msg(partner, ERR_SESSION_EXPIRED))
         if not resp.ok:
-            raise HTTPException(status_code=502, detail=_salesplay_error(resp, "Could not reach Salesplay API. Please try again."))
+            raise HTTPException(status_code=502, detail=_salesplay_error(resp, _msg(partner, ERR_UNREACHABLE), partner))
         data  = resp.json()
         raw   = data.get("user") or data.get("data") or data
         email = (raw.get("email") or "").strip().lower()
@@ -660,28 +890,28 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
             raw.get("business_name") or email.split("@")[0]
         ).strip()
         if not email:
-            raise HTTPException(status_code=422, detail="Could not retrieve email from Salesplay profile.")
+            raise HTTPException(status_code=422, detail=_msg(partner, ERR_NO_EMAIL))
         locale = _extract_salesplay_locale(data)
         log.info("Salesplay onboard: profile fetched", email=email)
     except HTTPException:
         raise
     except Exception as e:
         log.error("Salesplay onboard: profile fetch failed", error=str(e))
-        raise HTTPException(status_code=502, detail="Could not reach Salesplay API. Please try again.")
+        raise HTTPException(status_code=502, detail=_msg(partner, ERR_UNREACHABLE))
 
     # ── 2. Check if DataMind account + credentials already exist ──────────────
     conn = _get_conn()
     try:
         cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT email FROM users WHERE email = %s LIMIT 1", (email,))
-        user_exists = cursor.fetchone() is not None
+        account_key = resolve_account_key(email, partner["partner_key"])
+        user_exists = account_key is not None
         has_credentials = False
         credentials_healthy = False
         if user_exists:
             cursor.execute(
                 "SELECT id, status FROM user_integrations "
                 "WHERE user_email = %s AND provider_id = 'salesplay' LIMIT 1",
-                (email,)
+                (account_key,)
             )
             row = cursor.fetchone()
             if row:
@@ -705,45 +935,46 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
     if not has_credentials or not credentials_healthy:
         try:
             resp = _http.post(
-                f"{_SALESPLAY_BASE}/integrations/access_tokens",
+                f'{partner_api.for_partner(partner)["proxy_base"]}/integrations/access_tokens',
                 headers={
                     "Authorization": f"Bearer {aat}",
                     "Content-Type":  "application/json",
                 },
-                json={"name": "DataMind", "expire_enabled": False, "expires_at": ""},
+                json={"name": _brand(partner)["product_name"], "expire_enabled": False, "expires_at": ""},
                 timeout=_PROXY_TIMEOUT,
             )
             if resp.status_code == 401:
-                raise HTTPException(status_code=401, detail="Salesplay session expired. Please refresh the page.")
+                raise HTTPException(status_code=401, detail=_msg(partner, ERR_SESSION_EXPIRED))
             if not resp.ok:
-                raise HTTPException(status_code=502, detail=_salesplay_error(resp, "Could not create Salesplay API token. Please try again."))
+                raise HTTPException(status_code=502, detail=_salesplay_error(resp, _msg(partner, ERR_TOKEN_CREATE), partner))
             token_data        = resp.json()
             salesplay_api_token = (token_data.get("data") or {}).get("token")
             if not salesplay_api_token:
-                raise HTTPException(status_code=502, detail="Salesplay did not return an API token.")
+                raise HTTPException(status_code=502, detail=_msg(partner, ERR_NO_TOKEN))
             log.info("Salesplay onboard: API token created", email=email)
         except HTTPException:
             raise
         except Exception as e:
             log.error("Salesplay onboard: create-token failed", error=str(e))
-            raise HTTPException(status_code=502, detail="Could not create Salesplay API token. Please try again.")
+            raise HTTPException(status_code=502, detail=_msg(partner, ERR_TOKEN_CREATE))
 
     # ── 4. Create DataMind account (or reuse existing) ────────────────────────
     password    = email.rsplit(".", 1)[0]
     is_new_user = False
     try:
-        create_user(name, email, password)
+        account_key = create_user(name, email, password, partner["partner_key"])["email"]
         is_new_user = True
         log.info("Salesplay onboard: user created", email=email)
     except HTTPException as e:
         if "already registered" in str(e.detail):
+            account_key = resolve_account_key(email, partner["partner_key"])
             log.info("Salesplay onboard: existing user", email=email)
         else:
             raise
 
     # ── 5b. Persist locale from Salesplay profile (non-fatal) ─────────────────
     try:
-        update_user_settings(email, {"locale": locale})
+        update_user_settings(account_key, {"locale": locale})
         log.info("Salesplay onboard: locale saved", email=email, currency=locale.get("currency"))
     except Exception as _le:
         log.warning("Salesplay onboard: locale save skipped", email=email, error=str(_le))
@@ -759,7 +990,7 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
     if salesplay_api_token:
         try:
             result = connect_integration(
-                user_email       = email,
+                user_email       = account_key,
                 provider_id      = "salesplay",
                 creds            = {"api_token": salesplay_api_token},
                 skip_validation  = True,
@@ -775,9 +1006,9 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
         # see data from any new Salesplay transactions since their last sync.
         try:
             from integrations import trigger_sync, get_integration
-            trigger_sync(email, "salesplay", full=False)
+            trigger_sync(account_key, "salesplay", full=False)
             sync = "delta_started"
-            integ = get_integration(email, "salesplay")
+            integ = get_integration(account_key, "salesplay")
             table_prefix = (integ or {}).get("table_prefix")
             log.info("Salesplay onboard: delta sync triggered for returning user", email=email)
         except Exception as e:
@@ -787,9 +1018,9 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
 
     # Report cache: refresh profile (shops/cashiers/currency) + stash the live
     # session token for chat-time report fetches. Feature-flagged, non-fatal.
-    _sync_report_profile(table_prefix, email, aat)
+    _sync_report_profile(table_prefix, account_key, aat)
 
-    token = create_token(email)
+    token = create_token(account_key)
     log.info("Salesplay onboard: complete", email=email, is_new_user=is_new_user, sync=sync)
     return {
         "token":       token,
@@ -806,11 +1037,14 @@ def salesplay_onboard(request: Request, req: SalesplayOnboardRequest):
 # internal billing. These are thin server-to-server proxies (same reasoning
 # as the profile/create-token proxies above: Salesplay's API only allows
 # requests from their own origin, so the browser can't call it directly).
-_SALESPLAY_SUBSCRIPTION_BASE = os.getenv("SALESPLAY_SUBSCRIPTION_BASE_URL", _SALESPLAY_BASE)
 
 
-def _reject_if_subscription_free():
-    """Refuse to take money while SUBSCRIPTION_FREE is on.
+def _reject_if_subscription_free(partner=None):
+    """Refuse to take money while this brand is in free mode.
+
+    Per-brand: a new whitelabel launching free must not be able to charge,
+    while an established brand on the same deployment keeps selling normally.
+    Falls back to the process-wide flag when a brand does not override it.
 
     The widget already hides every route to these endpoints in free mode, so
     reaching them means a stale iframe that was loaded before the flag went
@@ -818,7 +1052,7 @@ def _reject_if_subscription_free():
     during a period we advertised as free -- a wrong charge is far more
     expensive to undo than a failed request.
     """
-    if SUBSCRIPTION_FREE:
+    if brand_subscription_free(partner):
         raise HTTPException(
             status_code=403,
             detail="Subscriptions are free right now -- there is nothing to pay for. "
@@ -827,7 +1061,7 @@ def _reject_if_subscription_free():
 
 
 
-@router.get("/salesplay/subscription/info")
+@router.get("/partner/subscription/info")
 def salesplay_subscription_info(request: Request, partner_key: str, aat: str, user: Optional[dict] = Depends(optional_current_user)):
     """
     Proxy: GET {base}/subscriptions/get_ai_pos_info
@@ -848,8 +1082,8 @@ def salesplay_subscription_info(request: Request, partner_key: str, aat: str, us
     requiring current_user here made that call 401 unconditionally. The
     sync-down below only runs when a signed-in user is actually present.
     """
-    _salesplay_guard(partner_key, request)
-    url = f"{_SALESPLAY_SUBSCRIPTION_BASE}/subscriptions/get_ai_pos_info"
+    partner = _salesplay_guard(partner_key, request)
+    url = f'{partner_api.for_partner(partner)["subscription_base"]}/subscriptions/get_ai_pos_info'
     log.debug("Salesplay subscription API request", method="GET", url=url)
     try:
         resp = _http.get(
@@ -859,9 +1093,9 @@ def salesplay_subscription_info(request: Request, partner_key: str, aat: str, us
         )
         log.debug("Salesplay subscription API response", url=url, status=resp.status_code, raw_body=resp.text)
         if resp.status_code == 401:
-            raise HTTPException(status_code=401, detail="Salesplay session expired. Please refresh the page.")
+            raise HTTPException(status_code=401, detail=_msg(partner, ERR_SESSION_EXPIRED))
         if not resp.ok:
-            raise HTTPException(status_code=502, detail=_salesplay_error(resp, "Could not reach Salesplay API. Please try again."))
+            raise HTTPException(status_code=502, detail=_salesplay_error(resp, _msg(partner, ERR_UNREACHABLE), partner))
         data = resp.json()
         sub = (data.get("data") or {}).get("subscription") or []
         if user and sub and (sub[0].get("is_expired") == 1 or sub[0].get("subscribe_status") == 0):
@@ -874,7 +1108,7 @@ def salesplay_subscription_info(request: Request, partner_key: str, aat: str, us
         raise
     except Exception as e:
         log.error("Salesplay proxy: subscription info fetch failed", error=str(e))
-        raise HTTPException(status_code=502, detail="Could not reach Salesplay API. Please try again.")
+        raise HTTPException(status_code=502, detail=_msg(partner, ERR_UNREACHABLE))
 
 
 class SalesplaySubscriptionPaymentRequest(BaseModel):
@@ -911,7 +1145,7 @@ class SalesplaySubscriptionPaymentRequest(BaseModel):
     internal_plan_id: Optional[int] = None
 
 
-@router.post("/salesplay/subscription/payment")
+@router.post("/partner/subscription/payment")
 def salesplay_subscription_payment(request: Request, req: SalesplaySubscriptionPaymentRequest, user: dict = Depends(current_user)):
     """
     Proxy: POST {base}/subscriptions/payment
@@ -921,10 +1155,10 @@ def salesplay_subscription_payment(request: Request, req: SalesplaySubscriptionP
     is the payment gateway, not the access gate. On error, Salesplay's
     response carries a redirect link the frontend must send the user to.
     """
-    _salesplay_guard(req.partner_key, request)
-    _reject_if_subscription_free()
+    partner = _salesplay_guard(req.partner_key, request)
+    _reject_if_subscription_free(partner)
     body = req.dict(exclude={"partner_key", "aat", "internal_plan_id", "internal_period_days"}, exclude_none=True)
-    url = f"{_SALESPLAY_SUBSCRIPTION_BASE}/subscriptions/payment"
+    url = f'{partner_api.for_partner(partner)["subscription_base"]}/subscriptions/payment'
     log.debug("Salesplay subscription API request", method="POST", url=url, body=body)
     try:
         resp = _http.post(
@@ -938,13 +1172,13 @@ def salesplay_subscription_payment(request: Request, req: SalesplaySubscriptionP
         )
         log.debug("Salesplay subscription API response", url=url, status=resp.status_code, raw_body=resp.text)
         if resp.status_code == 401:
-            raise HTTPException(status_code=401, detail="Salesplay session expired. Please refresh the page.")
+            raise HTTPException(status_code=401, detail=_msg(partner, ERR_SESSION_EXPIRED))
         try:
             result = resp.json()
         except ValueError:
             # Non-JSON body — a raw PHP fatal or HTML error page from Salesplay.
             # Surface what they actually said; it's the only diagnostic anyone has.
-            raise HTTPException(status_code=502, detail=_salesplay_error(resp, "Payment could not be completed. Please try again."))
+            raise HTTPException(status_code=502, detail=_salesplay_error(resp, "Payment could not be completed. Please try again.", partner))
         if result.get("status") == "success":
             try:
                 subscribe_to_plan(user["email"], period_days=req.internal_period_days)
@@ -960,7 +1194,7 @@ def salesplay_subscription_payment(request: Request, req: SalesplaySubscriptionP
         raise
     except Exception as e:
         log.error("Salesplay proxy: subscription payment failed", error=str(e))
-        raise HTTPException(status_code=502, detail="Could not reach Salesplay API. Please try again.")
+        raise HTTPException(status_code=502, detail=_msg(partner, ERR_UNREACHABLE))
 
 
 class SalesplaySubscriptionPreviewRequest(BaseModel):
@@ -974,7 +1208,7 @@ class SalesplaySubscriptionPreviewRequest(BaseModel):
     coupon_code: str = ""
 
 
-@router.post("/salesplay/subscription/preview")
+@router.post("/partner/subscription/preview")
 def salesplay_subscription_preview(request: Request, req: SalesplaySubscriptionPreviewRequest, user: dict = Depends(current_user)):
     """
     Proxy: POST {base}/subscriptions/order/preview
@@ -983,10 +1217,10 @@ def salesplay_subscription_preview(request: Request, req: SalesplaySubscriptionP
     The frontend must never recompute or reformat these currency strings
     itself; this endpoint is the only source for what gets shown/charged.
     """
-    _salesplay_guard(req.partner_key, request)
-    _reject_if_subscription_free()
+    partner = _salesplay_guard(req.partner_key, request)
+    _reject_if_subscription_free(partner)
     body = req.dict(exclude={"partner_key", "aat"}, exclude_none=True)
-    url = f"{_SALESPLAY_SUBSCRIPTION_BASE}/subscriptions/order/preview"
+    url = f'{partner_api.for_partner(partner)["subscription_base"]}/subscriptions/order/preview'
     log.debug("Salesplay subscription API request", method="POST", url=url, body=body)
     try:
         resp = _http.post(
@@ -1000,19 +1234,19 @@ def salesplay_subscription_preview(request: Request, req: SalesplaySubscriptionP
         )
         log.debug("Salesplay subscription API response", url=url, status=resp.status_code, raw_body=resp.text)
         if resp.status_code == 401:
-            raise HTTPException(status_code=401, detail="Salesplay session expired. Please refresh the page.")
+            raise HTTPException(status_code=401, detail=_msg(partner, ERR_SESSION_EXPIRED))
         try:
             return resp.json()
         except ValueError:
-            raise HTTPException(status_code=502, detail=_salesplay_error(resp, "Could not load order preview. Please try again."))
+            raise HTTPException(status_code=502, detail=_salesplay_error(resp, "Could not load order preview. Please try again.", partner))
     except HTTPException:
         raise
     except Exception as e:
         log.error("Salesplay proxy: subscription preview fetch failed", error=str(e))
-        raise HTTPException(status_code=502, detail="Could not reach Salesplay API. Please try again.")
+        raise HTTPException(status_code=502, detail=_msg(partner, ERR_UNREACHABLE))
 
 
-@router.post("/salesplay/start-trial")
+@router.post("/partner/start-trial")
 def salesplay_start_trial(user: dict = Depends(current_user)):
     """Explicitly start the free trial — only called from the plans screen's
     "Start free trial" button. Never implicit at onboarding, so reopening the

@@ -7,7 +7,7 @@
  *   onboarding → new user (no dm_embed_token in localStorage)
  *   chat      → returning user (valid token found)
  */
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { createRoot } from 'react-dom/client'
 import './embed.css'
 import { embedValidateContext, salesplayGetProfile, salesplayCheckUser, salesplayOnboard, salesplaySubscriptionInfo, salesplayStartTrial, embedGetSubscription, embedSubmitFeedback, embedGetFeedbackStatus } from './embedApi'
@@ -20,16 +20,25 @@ import EmbedFreeBlocked from './EmbedFreeBlocked'
 import EmbedSyncProgress from './EmbedSyncProgress'
 import EmbedSearchBar from './EmbedSearchBar'
 import EmbedFeedbackModal from './EmbedFeedbackModal'
-import { appName } from './embedBranding'
-import BrandLogo from '../components/Logo'
+import { appName, resolveBrand, applyBrandChrome } from './embedBranding'
+import BrandLogo from './BrandLogo'
+import * as storage from './embedStorage'
 
 // Combines Salesplay's raw subscription state (card/plans — it's the payment
 // gateway) with DataMind's own billing (trial days, tokens — the actual
 // access gate) into one access decision. Used at every widget open (returning
 // + new merchants) and again right after a payment attempt.
-async function checkSalesplayAccess(partnerKey, aat) {
+async function checkSalesplayAccess(partnerKey, aat, subscriptionFree = false) {
+  // In free mode the provider's billing state decides nothing: access comes
+  // entirely from our own subscription, and there is no card to check or price
+  // to show. Calling it anyway would make a brand that charges nothing depend
+  // on the provider having the AI product provisioned on its instance -- and a
+  // whitelabel launching free is exactly the case where it is not. That failure
+  // locked merchants out of a product that is free, so skip the call and let
+  // evaluateSalesplayAccess work off internal state alone, which it already
+  // tolerates.
   const [info, sub] = await Promise.all([
-    salesplaySubscriptionInfo(partnerKey, aat),
+    subscriptionFree ? Promise.resolve(null) : salesplaySubscriptionInfo(partnerKey, aat),
     embedGetSubscription(),
   ])
   return evaluateSalesplayAccess(info, sub)
@@ -41,12 +50,12 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 // mid-onboarding) can throttle/delay this call enough to fail transiently.
 // Callers must NOT fail open to chat on the remaining error: that skips the
 // plans screen entirely for a merchant who never actually subscribed.
-async function checkSalesplayAccessRetrying(partnerKey, aat) {
+async function checkSalesplayAccessRetrying(partnerKey, aat, subscriptionFree = false) {
   try {
-    return await checkSalesplayAccess(partnerKey, aat)
+    return await checkSalesplayAccess(partnerKey, aat, subscriptionFree)
   } catch {
     await sleep(800)
-    return await checkSalesplayAccess(partnerKey, aat)
+    return await checkSalesplayAccess(partnerKey, aat, subscriptionFree)
   }
 }
 
@@ -60,7 +69,7 @@ const FEEDBACK_COOLDOWN_MAX_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
 
 function snoozeFeedback() {
   const delay = FEEDBACK_COOLDOWN_MIN_MS + Math.random() * (FEEDBACK_COOLDOWN_MAX_MS - FEEDBACK_COOLDOWN_MIN_MS)
-  localStorage.setItem(FEEDBACK_NEXT_PROMPT_KEY, String(Date.now() + delay))
+  storage.setItem(FEEDBACK_NEXT_PROMPT_KEY, String(Date.now() + delay))
 }
 
 // ── Collapsed "search bar" layout (?layout=bar) ─────────────────────────────
@@ -126,6 +135,14 @@ function EmbedApp() {
   // Backend SUBSCRIPTION_FREE, served on /embed/context. While on, the plans
   // screen is never routed to — see routeNoAccess below.
   const subscriptionFree = !!context?.subscription_free
+
+  // routeNoAccess is called from inside the mount effect, whose closure was
+  // built on the render where context is still null -- so reading
+  // subscriptionFree there always saw false, and a free brand was sent to the
+  // plans screen it must never reach. A ref is read at call time, so every
+  // caller sees the brand that actually loaded.
+  const contextRef = useRef(null)
+  contextRef.current = context
   const [plansStartExpanded, setPlansStartExpanded] = useState(false) // consent screen's "Explore plans" was clicked — land on salesplay_plans already expanded
   const [plansAutoPick, setPlansAutoPick] = useState(null) // { tierIndex, cycle } — a tier was clicked on the consent screen; open its receipt directly
 
@@ -147,7 +164,7 @@ function EmbedApp() {
 
   // Apply saved theme on first load so onboarding is themed consistently
   useEffect(() => {
-    const saved = localStorage.getItem('dm_embed_theme') || 'light'
+    const saved = storage.getItem('dm_embed_theme') || 'light'
     document.documentElement.setAttribute('data-theme', saved)
   }, [])
 
@@ -168,7 +185,7 @@ function EmbedApp() {
       return
     }
 
-    const existingToken = localStorage.getItem('dm_embed_token')
+    const existingToken = storage.getItem('dm_embed_token')
 
     embedValidateContext(partnerKey)
       .then(async ctx => {
@@ -180,11 +197,11 @@ function EmbedApp() {
         const aat = params.get('aat') || ''
         setAatToken(aat)
 
-        if (ctx.provider_id === 'salesplay') {
+        if (ctx.flow === 'partner') {
           // Salesplay flow: use the AAT to determine the merchant identity,
           // then decide whether to show the consent/onboard screen or go straight to chat.
           if (!aat) {
-            setError(`Session token not found. Please access ${appName(ctx)} through the Salesplay backoffice.`)
+            setError(`Session token not found. Please open ${appName(ctx)} from the ${resolveBrand(ctx).companyName} backoffice.`)
             setState('error')
             return
           }
@@ -201,14 +218,14 @@ function EmbedApp() {
               // salesplayOnboard is safe here: for existing users it skips all setup steps
               // and just issues a new token (sync = "skipped").
               const result = await salesplayOnboard(partnerKey, aat)
-              localStorage.setItem('dm_embed_token', result.token)
-              localStorage.setItem('dm_sp_email', profile.email)
-              if (result.user) localStorage.setItem('dm_embed_user', JSON.stringify(result.user))
+              storage.setItem('dm_embed_token', result.token)
+              storage.setItem('dm_sp_email', profile.email)
+              if (result.user) storage.setItem('dm_embed_user', JSON.stringify(result.user))
 
               // Any user — paid, trial, or unpaid — gets re-checked at the start
               // of every session against Salesplay's own subscription state.
               try {
-                const access = await checkSalesplayAccessRetrying(partnerKey, aat)
+                const access = await checkSalesplayAccessRetrying(partnerKey, aat, !!ctx.subscription_free)
                 if (access.hasAccess) {
                   setState('chat')
                   notifyParent('dm:chat_open')
@@ -224,16 +241,16 @@ function EmbedApp() {
               }
             } else {
               // New merchant — show consent screen before doing anything.
-              setState('salesplay_init')
+              setState('partner_init')
               notifyParent('dm:onboarding_start')
             }
           } catch (err) {
             if (err.response?.status === 401) {
-              setError('Salesplay session expired. Please refresh the page.')
+              setError(`${resolveBrand(context).companyName} session expired. Please refresh the page.`)
               setState('error')
             } else {
               // API unreachable — fall back to consent screen so the user can retry.
-              setState('salesplay_init')
+              setState('partner_init')
               notifyParent('dm:onboarding_start')
             }
           }
@@ -269,7 +286,7 @@ function EmbedApp() {
   // can't be (already used it, quota gone, or we couldn't check) gets an
   // explanation instead of a card form.
   async function routeNoAccess(access) {
-    if (subscriptionFree) {
+    if (!!contextRef.current?.subscription_free) {
       if (access?.trialAvailable) {
         try {
           await handleTrialSelected()
@@ -283,13 +300,13 @@ function EmbedApp() {
     }
 
     setSubAccess(access)
-    setState('salesplay_plans')
+    setState('partner_plans')
     notifyParent('dm:onboarding_start')
   }
 
   async function handleOnboardingComplete(token, userData) {
-    localStorage.setItem('dm_embed_token', token)
-    if (userData) localStorage.setItem('dm_embed_user', JSON.stringify(userData))
+    storage.setItem('dm_embed_token', token)
+    if (userData) storage.setItem('dm_embed_user', JSON.stringify(userData))
     const intent = userData?.embed_intent // 'trial' | 'explore' — which consent-screen button was clicked
     setPlansStartExpanded(intent === 'explore')
     setPlansAutoPick(userData?.embed_plan || null)
@@ -297,9 +314,9 @@ function EmbedApp() {
     // Salesplay: onboarding no longer starts a trial by itself, so a brand-new
     // merchant has no subscription yet — checkSalesplayAccess reports
     // hasAccess: false and this naturally routes to the plans screen.
-    if (context?.provider_id === 'salesplay' && aatToken) {
+    if (context?.flow === 'partner' && aatToken) {
       try {
-        const access = await checkSalesplayAccessRetrying(partnerKey, aatToken)
+        const access = await checkSalesplayAccessRetrying(partnerKey, aatToken, subscriptionFree)
 
         // "Start Free Trial" was clicked — start it now and skip the plans
         // screen entirely, straight into chat. Falls through to the normal
@@ -344,7 +361,7 @@ function EmbedApp() {
   // unlocking chat. Throws on failure so the plans screen shows the error
   // and re-enables its "Proceed" button (see EmbedSalesplayPlans's catch).
   async function handlePlanSubscribed() {
-    const access = await checkSalesplayAccess(partnerKey, aatToken)
+    const access = await checkSalesplayAccess(partnerKey, aatToken, subscriptionFree)
     if (access.hasAccess) {
       // Paid merchants see the workspace sync here rather than before the
       // plans screen — they came to pay, so nothing is allowed to sit between
@@ -368,7 +385,7 @@ function EmbedApp() {
   // returned value instead).
   async function handleRefreshAccess() {
     try {
-      const access = await checkSalesplayAccess(partnerKey, aatToken)
+      const access = await checkSalesplayAccess(partnerKey, aatToken, subscriptionFree)
       setSubAccess(access)
       return access
     } catch {
@@ -380,7 +397,7 @@ function EmbedApp() {
   // failed. Re-run it and route on the real answer — access may now be fine
   // (trial granted, quota reset), so this can land the merchant straight in chat.
   async function handleFreeBlockedRetry() {
-    const access = await checkSalesplayAccess(partnerKey, aatToken)
+    const access = await checkSalesplayAccess(partnerKey, aatToken, subscriptionFree)
     if (access.hasAccess) {
       setSubAccess(access)
       setState('chat')
@@ -391,20 +408,34 @@ function EmbedApp() {
   }
 
   function handleExpired() {
-    localStorage.removeItem('dm_embed_token')
-    localStorage.removeItem('dm_sp_email')
-    localStorage.removeItem('dm_embed_user')
+    storage.removeItem('dm_embed_token')
+    storage.removeItem('dm_sp_email')
+    storage.removeItem('dm_embed_user')
     setState('onboarding')
     notifyParent('dm:onboarding_start')
   }
 
   function handleLogout() {
-    localStorage.removeItem('dm_embed_token')
-    localStorage.removeItem('dm_sp_email')
-    localStorage.removeItem('dm_embed_user')
+    storage.removeItem('dm_embed_token')
+    storage.removeItem('dm_sp_email')
+    storage.removeItem('dm_embed_user')
     setState('onboarding')
     notifyParent('dm:logout')
   }
+
+  // Title, favicon and accent all come from the brand at runtime. They cannot
+  // come from the HTML file or the build: one bundle serves every brand.
+  //
+  // This MUST stay above every early return below. A hook after a conditional
+  // return runs on some renders and not others, and React tears the whole tree
+  // down when the count changes -- which showed up as a blank iframe the moment
+  // state left 'loading'. resolveBrand tolerates a null context, so it is safe
+  // this early.
+  const brand = resolveBrand(context)
+
+  useEffect(() => {
+    if (context) applyBrandChrome(brand)
+  }, [context])
 
   // Collapsed search-bar — shown regardless of internal state (loading,
   // onboarding, chat, etc. all continue resolving in the background so the
@@ -435,18 +466,12 @@ function EmbedApp() {
     )
   }
 
-  // Apply accent colour from partner branding if provided
-  const accentColor = context?.branding?.accent_color
-  if (accentColor) {
-    document.documentElement.style.setProperty('--blue', accentColor)
-  }
-
   // Ask for a rating before actually closing/minimizing the widget — only if
   // the user sent at least one message this session, hasn't already submitted
   // feedback (ever, checked server-side), and isn't currently snoozed via
   // "remind me later".
   function requestClose(after) {
-    const nextPrompt = Number(localStorage.getItem(FEEDBACK_NEXT_PROMPT_KEY) || 0)
+    const nextPrompt = Number(storage.getItem(FEEDBACK_NEXT_PROMPT_KEY) || 0)
     if (hasChattedRef.current && hasFeedbackRef.current === false && Date.now() >= nextPrompt) {
       setFeedbackAfter(() => after)
     } else {
@@ -479,7 +504,7 @@ function EmbedApp() {
   }
 
   let content
-  if (state === 'salesplay_init') {
+  if (state === 'partner_init') {
     content = (
       <EmbedSalesplayAutoInit
         context={context}
@@ -499,13 +524,15 @@ function EmbedApp() {
         height: '100%', padding: '24px 20px', textAlign: 'center',
         background: 'linear-gradient(180deg, #F0F4F8 0%, #F7F9FB 100%)',
       }}>
-        <BrandLogo size={40} radius={11} shadow="0 4px 16px rgba(0,88,190,0.3)" style={{ marginBottom: 10 }} />
-        <div style={{ fontSize: 15, fontWeight: 700, color: '#191C1E', marginBottom: 4 }}>
-          {appName(context)}
-        </div>
+        <BrandLogo brand={brand} size={32} radius={0} style={{ marginBottom: 10 }} />
+        {!brand?.logoUrl && (
+          <div style={{ fontSize: 15, fontWeight: 700, color: '#191C1E', marginBottom: 4 }}>
+            {appName(context)}
+          </div>
+        )}
         <div style={{ width: '100%', maxWidth: 360 }}>
           <EmbedSyncProgress
-            connId={context?.provider_id}
+            partnerKey={partnerKey}
             appNm={appName(context)}
             onDone={handleSyncDone}
           />
@@ -522,7 +549,7 @@ function EmbedApp() {
         onClose={handleClose}
       />
     )
-  } else if (state === 'salesplay_plans') {
+  } else if (state === 'partner_plans') {
     content = (
       <EmbedSalesplayPlans
         context={context}
@@ -574,7 +601,7 @@ function EmbedApp() {
     <>
       {content}
       {feedbackAfter && (
-        <EmbedFeedbackModal onSubmit={handleFeedbackSubmit} onRemindLater={handleRemindLater} />
+        <EmbedFeedbackModal onSubmit={handleFeedbackSubmit} onRemindLater={handleRemindLater} appNm={appName(context)} />
       )}
     </>
   )

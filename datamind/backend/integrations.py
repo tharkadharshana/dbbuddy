@@ -27,6 +27,7 @@ from logger import get_logger
 from providers import get_provider, list_providers
 from providers.base import SyncResult
 from pool import get_internal_conn as _get_internal_conn
+import partner_api
 
 log = get_logger(__name__)
 
@@ -822,7 +823,8 @@ def connect_integration(
 
     result = None
     if not skip_validation:
-        result = provider.validate_credentials(creds)
+        result = provider.validate_credentials(
+            creds, api_base=partner_api.for_user(user_email)["sync_base"])
         if not result.ok:
             raise ValueError(f"Credential validation failed: {result.error}")
 

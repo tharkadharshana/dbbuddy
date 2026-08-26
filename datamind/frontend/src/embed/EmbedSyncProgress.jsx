@@ -23,7 +23,9 @@ const SP = {
   heading: '#191C1E',
   text:    '#545F73',
   text3:   '#8B93A7',
-  blue:    '#0058BE',
+  // See the note in EmbedSalesplayPlans: the brand's primary_color arrives
+  // as a CSS variable, so a hardcoded hex here ignores every other brand.
+  blue:    'var(--blue, #0058BE)',
   shadow:  '0px 4px 20px 0px rgba(84,95,115,0.12)',
 }
 
@@ -53,7 +55,7 @@ function friendlySyncMsg(raw, providerName) {
   return 'Setting up your workspace…'
 }
 
-export default function EmbedSyncProgress({ connId, appNm, sp = true, onDone }) {
+export default function EmbedSyncProgress({ partnerKey, appNm, sp = true, onDone }) {
   const [msg, setMsg]   = useState('Setting up your workspace…')
   const [pct, setPct]   = useState(0)
   const [rows, setRows] = useState(0)
@@ -73,7 +75,7 @@ export default function EmbedSyncProgress({ connId, appNm, sp = true, onDone }) 
     const interval = setInterval(async () => {
       attempts++
       try {
-        const r = await embedGetProviderStatus(connId)
+        const r = await embedGetProviderStatus(partnerKey)
         const prog = r.progress
         if (prog) {
           setMsg(friendlySyncMsg(prog.message, appNm))
@@ -92,7 +94,7 @@ export default function EmbedSyncProgress({ connId, appNm, sp = true, onDone }) 
       }
     }, 2000)
     return () => clearInterval(interval)
-  }, [connId]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [partnerKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div style={{ width: '100%', marginTop: 14 }}>

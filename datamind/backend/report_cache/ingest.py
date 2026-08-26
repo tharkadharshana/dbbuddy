@@ -28,6 +28,7 @@ from .client import ReportAPIClient
 from .normalize import (normalize_daily_rows, normalize_dim_rows,
                         normalize_metrics, separators)
 from .registry import CORE_REPORTS, REPORTS
+import partner_api
 
 log = get_logger(__name__)
 
@@ -155,7 +156,7 @@ def ingest_month(conn, tenant_id: str, report_id: str, ym: str, token: str,
         return "skipped"
 
     dec, thou = separators(number_format)
-    client = ReportAPIClient(token)
+    client = ReportAPIClient(token, base_url=partner_api.for_tenant(tenant_id)["proxy_base"])
     cursor = conn.cursor()
     now = datetime.utcnow()
     first = month_start(ym)

@@ -3,7 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>%VITE_APP_NAME% — SQL Analytics Platform (Beta)</title>
+    <!-- Main app only, not the embed. VITE_APP_NAME is gone (one bundle, many
+         brands), and an unresolved %VAR% renders literally, so this matches
+         the src/appName.js fallback. The embed sets its own title at runtime
+         from the brand row. -->
+    <title>SalesPlay AI — SQL Analytics Platform (Beta)</title>
     <meta name="description" content="Connect your MySQL database and get AI-powered analytics, forecasting, anomaly detection and professional reports." />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />

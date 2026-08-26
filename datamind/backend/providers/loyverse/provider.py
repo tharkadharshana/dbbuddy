@@ -34,7 +34,9 @@ class LoyverseProvider(BaseProvider):
 
     # ── Validate ──────────────────────────────────────────────────────────────
 
-    def validate_credentials(self, creds: dict) -> ValidationResult:
+    def validate_credentials(self, creds: dict, api_base: str = "") -> ValidationResult:
+        # ponytail: api_base ignored — Loyverse is cloud-only, one host for
+        # every merchant. Wire it up if Loyverse ever gets per-partner hosts.
         api_token = creds.get("api_token", "").strip()
         if not api_token:
             return ValidationResult(ok=False, error="API token is required.")

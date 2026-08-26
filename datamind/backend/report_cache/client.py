@@ -33,7 +33,12 @@ def _base_url() -> str:
 
 
 class ReportAPIClient:
-    def __init__(self, access_token: str, timeout: int = None, session=None):
+    def __init__(self, access_token: str, timeout: int = None, session=None,
+                 base_url: str = ""):
+        # base_url is per-brand (partner_api): a whitelabel can run on its own
+        # instance of the provider. Falls back to the env base so every existing
+        # single-brand caller behaves exactly as before.
+        self._base = (base_url or "").rstrip("/") or _base_url()
         self._token = (access_token or "").strip()
         # Report endpoints run up to set_time_limit(90) server-side — the 10s
         # proxy timeout used for profile calls elsewhere is not enough here.
@@ -49,7 +54,7 @@ class ReportAPIClient:
         day-range we're entitled to (docs/salesplay-encrypted-param.md).
         Regenerated fresh per call since the payload has a 60s freshness
         window and can't be reused across retries."""
-        url = f"{_base_url()}/{endpoint.lstrip('/')}"
+        url = f"{self._base}/{endpoint.lstrip('/')}"
         attempts = max(1, int(os.getenv("REPORT_API_RETRY_ATTEMPTS", "3")))
         is_date_ranged = bool((params or {}).get("start_date") or (params or {}).get("end_date"))
         resp = None

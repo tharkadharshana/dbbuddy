@@ -47,7 +47,17 @@ EXCLUDE_NAMES = {
 }
 
 # Files copied from the frontend build output that shouldn't ship to prod.
-FRONTEND_EXCLUDE_FILES = {"iframe_test.html"}
+# two-brand-test.html embeds live partner keys in its page source -- it is a
+# local harness, never a deployable page.
+FRONTEND_EXCLUDE_FILES = {"iframe_test.html", "two-brand-test.html"}
+
+# No brand name may appear in the embed bundle: one build serves every brand, so
+# anything baked in is wrong for all but one of them. The usual cause is a stale
+# gitignored frontend env file (.env / .env.front.*) still setting VITE_APP_NAME
+# or VITE_APP_URL -- which the env-key diff below cannot catch, because those
+# files are not in git. Only embed-* is scanned; the main app legitimately
+# carries its own name.
+BRAND_WORDS_RE = re.compile(r"sales\s*play|sellmo|nvision|datamind", re.I)
 
 # Env files whose *keys* are diffed between the baseline tag and HEAD.
 ENV_DIFF_FILES = [
@@ -96,12 +106,15 @@ def ignore_excluded(_dir, names):
 # --------------------------------------------------------------------------- build
 
 
-def build_frontend():
-    print("==> Building frontend (npm run build)...")
+def build_frontend(mode=None):
+    """mode selects the vite env file: --mode front.dev -> .env.front.dev.
+    Defaults to vite's own default (production mode -> .env.production)."""
+    print(f"==> Building frontend (npm run build{f' --mode {mode}' if mode else ''})...")
     dist_dir = FRONTEND_DIR / "dist"
     if dist_dir.exists():
         shutil.rmtree(dist_dir)
-    subprocess.run(["npm", "run", "build"], cwd=FRONTEND_DIR, check=True, shell=True)
+    cmd = ["npm", "run", "build"] + (["--", "--mode", mode] if mode else [])
+    subprocess.run(cmd, cwd=FRONTEND_DIR, check=True, shell=True)
     return dist_dir
 
 
@@ -117,6 +130,27 @@ def copy_frontend(dist_dir, dest):
         f = dest / name
         if f.exists():
             f.unlink()
+
+
+def verify_no_brand_baked_in(dest):
+    """Refuse to package an embed bundle with a brand name compiled into it."""
+    print("==> Checking the embed bundle for baked-in brand names...")
+    offenders = []
+    for path in sorted((dest / "assets").glob("embed-*")):
+        if path.suffix not in (".js", ".css"):
+            continue
+        found = set(BRAND_WORDS_RE.findall(path.read_text(encoding="utf-8", errors="ignore")))
+        if found:
+            offenders.append((path.name, sorted(found)))
+    if offenders:
+        detail = "\n".join(f"    {name}: {', '.join(words)}" for name, words in offenders)
+        sys.exit(
+            "ERROR: brand names are compiled into the embed bundle:\n" + detail +
+            "\n  A brand value was baked in at build time. Check the frontend env file"
+            "\n  this build used (.env, and .env.front.* when --frontend-env is passed)"
+            "\n  and remove VITE_APP_NAME / VITE_APP_URL; brand values now arrive at"
+            "\n  runtime from GET /embed/context."
+        )
 
 
 def copy_backend(dest):
@@ -352,6 +386,7 @@ def main():
     ap.add_argument("--version", help="release version (default: contents of ./VERSION)")
     ap.add_argument("--no-build", action="store_true",
                     help="reuse the existing frontend dist/ instead of running npm run build")
+    ap.add_argument("--frontend-env", help="vite --mode for the frontend build, e.g. front.dev -> .env.front.dev")
     ap.add_argument("--no-tag", action="store_true",
                     help="don't create a git tag, and skip the clean-tree/branch guards (CI)")
     args = ap.parse_args()
@@ -369,8 +404,9 @@ def main():
     baseline = last_release_tag()
     print(f"==> Version {version}, baseline {baseline or '(none)'}")
 
-    dist_dir = FRONTEND_DIR / "dist" if args.no_build else build_frontend()
+    dist_dir = FRONTEND_DIR / "dist" if args.no_build else build_frontend(args.frontend_env)
     copy_frontend(dist_dir, patch_dir / "frontend")
+    verify_no_brand_baked_in(patch_dir / "frontend")
     copy_backend(patch_dir / "backend")
     write_patch_notes(patch_dir, version, baseline)
     write_build_info(patch_dir, version, baseline)

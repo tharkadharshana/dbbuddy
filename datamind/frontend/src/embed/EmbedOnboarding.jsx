@@ -12,9 +12,10 @@ import {
   embedGetProviderStatus, embedGetPlans, embedSubscribePlan,
 } from './embedApi'
 import { notifyParent } from './EmbedApp'
-import { appName, productTitle } from './embedBranding'
-import Logo from '../components/Logo'
+import { appName, productTitle, resolveBrand } from './embedBranding'
+import BrandLogo from './BrandLogo'
 import { fmtTok as _fmtTok } from '../formatTokens'
+import * as storage from './embedStorage'
 
 // ── Shared styles ─────────────────────────────────────────────────────────────
 const inp = {
@@ -97,7 +98,8 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete, onClo
   const [syncRows, setSyncRows]       = useState(0)
   const [error, setError]             = useState('')
 
-  const providerName = context?.partner_name || 'Salesplay'
+  const brand        = resolveBrand(context)
+  const providerName = brand.companyName
   const appNm        = appName(context)
   const title        = productTitle(context)
 
@@ -138,14 +140,14 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete, onClo
           password,
         })
         token = result.token
-        localStorage.setItem('dm_embed_token', token)
+        storage.setItem('dm_embed_token', token)
       } else {
         setSyncMsg('Logging in…')
         const loginResult = await embedLogin(email.trim().toLowerCase(), password)
         token = loginResult.token
-        localStorage.setItem('dm_embed_token', token)
+        storage.setItem('dm_embed_token', token)
         setSyncMsg(`Connecting ${providerName}…`)
-        await embedConnectProvider(context.provider_id, { api_token: apiToken.trim() }, token)
+        await embedConnectProvider(partnerKey, { api_token: apiToken.trim() }, token)
       }
 
       // Subscribe to selected plan if the user chose one
@@ -156,19 +158,19 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete, onClo
 
       setSyncMsg('Syncing your data…')
       notifyParent('dm:onboarding_sync_started')
-      pollSync(context.provider_id, token)
+      pollSync(partnerKey, token)
     } catch (e) {
       setError(e.response?.data?.error || e.response?.data?.detail || e.message || 'Connection failed. Please try again.')
       setConnecting(false)
     }
   }
 
-  function pollSync(connId, token) {
+  function pollSync(partnerKey, token) {
     let attempts = 0
     const interval = setInterval(async () => {
       attempts++
       try {
-        const r = await embedGetProviderStatus(connId)
+        const r = await embedGetProviderStatus(partnerKey)
         const prog = r.progress
         if (prog) {
           setSyncMsg(prog.message || 'Syncing…')
@@ -209,8 +211,10 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete, onClo
 
       {/* Header */}
       <div style={{ textAlign:'center', marginBottom:20 }}>
-        <Logo size={40} radius={11} shadow="0 4px 16px rgba(79,142,247,0.3)" style={{ marginBottom:10 }} />
-        <div style={{ fontSize:15, fontWeight:700, color:'var(--text)' }}>{title}</div>
+        <BrandLogo brand={brand} size={32} radius={0} style={{ marginBottom:10 }} />
+        {!brand?.logoUrl && (
+          <div style={{ fontSize:15, fontWeight:700, color:'var(--text)' }}>{title}</div>
+        )}
         <div style={{ fontSize:12, color:'var(--text3)', marginTop:2 }}>Ask your {providerName} data anything</div>
       </div>
 

@@ -6,9 +6,11 @@ import React, { useState } from 'react'
 
 const STAR_LABELS = ['Poor', 'Fair', 'Good', 'Great', 'Excellent']
 
-const APP_NAME = import.meta.env.VITE_APP_NAME || 'DataMind AI'
 
-export default function EmbedFeedbackModal({ onSubmit, onRemindLater }) {
+
+// appNm is passed in rather than resolved here: the modal has no context,
+// and a build-time default would bake one brand into every brand's bundle.
+export default function EmbedFeedbackModal({ onSubmit, onRemindLater, appNm }) {
   const [rating, setRating] = useState(0)
   const [hovered, setHovered] = useState(0)
   const [comment, setComment] = useState('')
@@ -35,7 +37,7 @@ export default function EmbedFeedbackModal({ onSubmit, onRemindLater }) {
       }}>
         <div>
           <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text)' }}>
-            How would you rate your experience with {APP_NAME}?
+            How would you rate your experience with {appNm}?
           </div>
           <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 4 }}>
             Your feedback helps us improve.

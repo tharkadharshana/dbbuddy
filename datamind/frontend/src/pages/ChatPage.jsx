@@ -134,7 +134,7 @@ function Message({ msg, llm, onVote }) {
 
   return (
     <div style={{ display:'flex', gap:12, marginBottom:24, alignItems:'flex-start' }}>
-      <Logo size={30} radius={15} style={{ flexShrink:0, marginTop:2 }} />
+      <Logo size={30} mark style={{ flexShrink:0, marginTop:2 }} />
       <div style={{ flex:1, minWidth:0 }}>
         {msg.loading ? (
           <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
@@ -404,7 +404,7 @@ export default function ChatPage({
         {!hasMessages ? (
           /* Empty state — ChatGPT style welcome */
           <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%', padding:'0 24px', textAlign:'center' }}>
-            <Logo size={56} radius={16} shadow="0 8px 24px rgba(79,142,247,0.25)" style={{ marginBottom:20 }} />
+            <Logo size={40} style={{ marginBottom:20 }} />
             <h2 style={{ fontSize:22, fontWeight:700, color:'var(--text)', marginBottom:8 }}>
               {connection ? `Ask your ${connection.display_name || connection.name} data` : 'Ask your data anything'}
             </h2>

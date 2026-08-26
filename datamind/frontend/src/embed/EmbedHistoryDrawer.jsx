@@ -18,7 +18,7 @@ function fmtDate(iso) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-export default function EmbedHistoryDrawer({ open, onClose, onSelect, onNewChat, activeConvId, isSalesplay }) {
+export default function EmbedHistoryDrawer({ open, onClose, onSelect, onNewChat, activeConvId, isPartnerFlow }) {
   const [conversations, setConversations] = useState([])
   const [loading, setLoading] = useState(false)
   const [loadingId, setLoadingId] = useState(null)
@@ -68,7 +68,7 @@ export default function EmbedHistoryDrawer({ open, onClose, onSelect, onNewChat,
     }
   }
 
-  const c = isSalesplay
+  const c = isPartnerFlow
     ? {
         panelBg: '#FFFFFF', heading: '#0F172A', text: '#64748B', text3: '#94A3B8',
         hover: '#F1F5F9', activeBg: 'rgba(59,130,246,0.1)', activeBorder: '#3B82F6',
