@@ -102,7 +102,8 @@ class BaseProvider(ABC):
         """Return the provider manifest (metadata + credential field definitions)."""
 
     @abstractmethod
-    def validate_credentials(self, creds: Dict[str, str]) -> ValidationResult:
+    def validate_credentials(self, creds: Dict[str, str],
+                             api_base: str = "") -> ValidationResult:
         """
         Test whether the given credentials actually work.
         Make a lightweight API call (e.g. fetch current user / account info).

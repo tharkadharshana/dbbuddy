@@ -61,7 +61,7 @@ from billing import (
     check_ai_limit, check_db_limit, purchase_addon, get_llm_usage_history,
     get_addon_pricing, charge_ai_usage, get_ai_credit_rate, set_ai_credit_rate,
     calculate_tokens, charge_tokens, get_token_usage_history,
-    check_plan_feature, get_plan_history_limit,
+    check_plan_feature, get_plan_history_limit, SUBSCRIPTION_FREE,
 )
 from embed import router as embed_router, bootstrap_embed_tables
 from feedback import router as feedback_router, bootstrap_feedback_tables
@@ -448,7 +448,8 @@ def _base_query_response(**kwargs) -> dict:
     # (AI_FLOW_TEST_EMAILS) legacy users must stay byte-identical to today.
     if _ANSWER_SANITISER_ENABLED or kwargs.get("agent_answer"):
         from llm import sanitise_answer, CAPABILITIES_MESSAGE
-        _fb = CAPABILITIES_MESSAGE.format(app=_APP_NAME, provider="business")
+        _fb = CAPABILITIES_MESSAGE.format(
+            app=kwargs.get("app_name") or _APP_NAME, provider="business")
         for _field in ("message", "analysis"):
             _val = base.get(_field)
             if isinstance(_val, str) and _val:
@@ -464,6 +465,50 @@ def _base_query_response(**kwargs) -> dict:
 # Logic lives in mcp_server/safety.py (shared with the MCP business-data
 # tools) — this wrapper just converts ValueError -> HTTPException, keeping
 # every existing call site in this file unchanged.
+def _user_brand(user: dict):
+    """The embed_partners row this account belongs to, or None.
+
+    users.partner_key is stamped at provisioning, which is how a request that
+    carries no ?pk= -- chat, billing -- still knows which brand it is serving.
+    """
+    key = (user or {}).get("partner_key")
+    if not key:
+        return None
+    from embed import _get_partner
+    return _get_partner(key)
+
+
+def _brand_app_name(user: dict) -> str:
+    """What the assistant calls itself for this account's brand.
+
+    A Sellmo merchant must never be told "I'm SalesPlay AI". The name reaches
+    the LLM prompts from the brand row, not from a process-wide env var.
+    """
+    brand = _user_brand(user)
+    if brand:
+        from embed import _brand
+        return _brand(brand)["product_name"]
+    # Never _APP_NAME here: it defaults to one brand's name, and this path is
+    # reached when a brand row is missing or deactivated -- exactly when telling
+    # the merchant another brand's name would be worst.
+    return "your AI assistant"
+
+
+def _brand_company_name(user: dict) -> str:
+    """The host system's own name, used in prompt copy and provider labels."""
+    brand = _user_brand(user)
+    if brand:
+        from embed import _brand
+        return _brand(brand)["company_name"]
+    return "your provider"
+
+
+def _user_subscription_free(user: dict) -> bool:
+    """Free-mode state for this account's brand, not the whole process."""
+    from embed import brand_subscription_free
+    return brand_subscription_free(_user_brand(user))
+
+
 def _guard_sql(sql: str):
     try:
         _safety.block_mutations(sql)
@@ -701,7 +746,12 @@ async def log_requests(request: Request, call_next):
 async def embed_security_headers(request: Request, call_next):
     response = await call_next(request)
     if request.url.path.startswith("/embed"):
-        origins = os.getenv("EMBED_ALLOWED_ORIGINS", "*")
+        # getenv's default never fired: EMBED_ALLOWED_ORIGINS is present but
+        # empty in every .env, so this emitted "frame-ancestors " with no source
+        # -- an invalid directive. Note this only guards API responses; the
+        # document that actually gets framed (src/embed/embed.html) is served by
+        # nginx, so that is where a real frame-ancestors policy belongs.
+        origins = (os.getenv("EMBED_ALLOWED_ORIGINS") or "").strip() or "*"
         response.headers["Content-Security-Policy"] = f"frame-ancestors {origins}"
         response.headers["X-Content-Type-Options"] = "nosniff"
     return response
@@ -863,30 +913,52 @@ class LoginRequest(BaseModel):
     password: str
 
 
+def _brand_from_host(request: Request) -> dict:
+    """The brand serving this request, resolved from the Host header.
+
+    The embed knows its brand from ?pk= because the iframe runs on the
+    partner's domain. The standalone app uses Host instead: ai.sellmo.com is
+    Sellmo, ai.salesplay.com is Salesplay. That is what lets a merchant type
+    their real address at either one and reach the right account -- the same
+    address can belong to different merchants under different brands, so
+    without a brand the lookup is ambiguous.
+    """
+    from embed import resolve_partner_by_host
+    partner = resolve_partner_by_host(request.headers.get("host"))
+    if not partner:
+        raise HTTPException(
+            status_code=400,
+            detail="This address is not configured for any brand. "
+                   "Please use your provider's own link.",
+        )
+    return partner
+
+
 @v1.post("/auth/register")
 @_limiter.limit(RL_AUTH)
 def register(request: Request, req: RegisterRequest):
     log.info("Register attempt", email=req.email)
-    user = create_user(req.name, req.email, req.password)
-    token = create_token(req.email)
-    try:
-        start_trial(req.email)
-    except Exception as _te:
-        log.warning("Trial start skipped", email=req.email, error=str(_te))
-    log.info("User registered", email=req.email)
+    partner = _brand_from_host(request)
+    user = create_user(req.name, req.email, req.password, partner["partner_key"])
+    # The token carries the account key; the body carries the real address.
+    token = create_token(user["email"])
+    log.info("User registered", email=req.email, partner=partner["partner_name"])
     locale = user.get("settings", {}).get("locale", {})
-    return JSONResponse(status_code=201, content={"token": token, "user": {"name": user["name"], "email": user["email"], "locale": locale}})
+    return JSONResponse(status_code=201, content={"token": token, "user": {
+        "name": user["name"], "email": user["contact_email"], "locale": locale}})
 
 
 @v1.post("/auth/login")
 @_limiter.limit(RL_AUTH_LOGIN)
 def login(request: Request, req: LoginRequest):
     log.info("Login attempt", email=req.email)
-    user = authenticate_user(req.email, req.password)
-    token = create_token(req.email)
-    log.info("User logged in", email=req.email)
+    partner = _brand_from_host(request)
+    user = authenticate_user(req.email, req.password, partner["partner_key"])
+    token = create_token(user["email"])
+    log.info("User logged in", email=req.email, partner=partner["partner_name"])
     locale = user.get("settings", {}).get("locale", {})
-    return {"token": token, "user": {"name": user["name"], "email": user["email"], "locale": locale}}
+    return {"token": token, "user": {
+        "name": user["name"], "email": user["contact_email"], "locale": locale}}
 
 
 @v1.post("/auth/sso-handoff")
@@ -1932,7 +2004,9 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
                 prefix = conn_info.get("table_prefix", "")
                 if pid == "salesplay":
                     tables_filter.extend(_SALESPLAY_SHARED_TABLES)
-                    nl_provider_label = "SalesPlay"
+                    # Goes into the LLM prompt, so it must be the merchant's
+                    # own brand, not the integration's name.
+                    nl_provider_label = _brand_company_name(user)
                     if not nl_tenant_id:
                         nl_tenant_id = prefix
                         _raw_sync = conn_info.get("last_sync_at")
@@ -2065,7 +2139,7 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
         )
         classification = classify_question(
             nl_question, table_names_str, llm, api_key, user["email"],
-            app_name=_APP_NAME, conversation_history=conv_history,
+            app_name=_brand_app_name(user), conversation_history=conv_history,
             language_hint=_classifier_context,
             smart_answers=_SMART_ANSWERS_ENABLED,
             business_knowledge=_BUSINESS_KNOWLEDGE_ENABLED,
@@ -2219,11 +2293,12 @@ def _natural_language_query_impl(request: Request, req: NLQueryRequest, user: di
         if q_type == "conversational":
             if classification.get("subtype") == "capabilities":
                 from llm import CAPABILITIES_MESSAGE
-                response_text = CAPABILITIES_MESSAGE.format(app=_APP_NAME, provider=nl_provider_label)
+                response_text = CAPABILITIES_MESSAGE.format(
+                    app=_brand_app_name(user), provider=nl_provider_label)
             else:
                 response_text = classification.get(
                     "response",
-                    f"Hello! I'm {_APP_NAME}, your AI data assistant. "
+                    f"Hello! I'm {_brand_app_name(user)}, your AI data assistant. "
                     "Ask me anything about your data — for example: "
                     "'Show me sales from last month' or 'Who are my top customers?'"
                 )
@@ -3968,11 +4043,15 @@ def billing_plans(request: Request):
 @v1.get("/billing/subscription")
 @_limiter.limit(RL_READ)
 def billing_subscription(request: Request, user: dict = Depends(current_user)):
+    # subscription_free rides along on a payload the app already fetches on
+    # load, so the launch-period switch costs no extra round trip and needs no
+    # rebuild to flip.
     try:
-        return get_user_subscription(user["email"])
+        return {**get_user_subscription(user["email"]),
+                "subscription_free": _user_subscription_free(user)}
     except Exception as e:
         log.error("Get subscription failed", user=user["email"], error=str(e))
-        return {"status": "no_subscription"}
+        return {"status": "no_subscription", "subscription_free": _user_subscription_free(user)}
 
 
 class SubscribeRequest(BaseModel):
@@ -3981,10 +4060,26 @@ class SubscribeRequest(BaseModel):
 @v1.post("/billing/subscribe")
 @_limiter.limit(RL_WRITE)
 def billing_subscribe(request: Request, req: SubscribeRequest, user: dict = Depends(current_user)):
+    if _user_subscription_free(user):
+        # The UI offers no way here in free mode; a call means a stale tab.
+        raise HTTPException(
+            status_code=403,
+            detail="Subscriptions are free right now -- there is nothing to pay for. "
+                   "Please reload the page.",
+        )
     plan = get_plan_by_id(req.plan_id)
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
     subscribe_to_plan(user["email"], req.plan_id)
+    return {"ok": True}
+
+
+@v1.post("/billing/trial")
+@_limiter.limit(RL_WRITE)
+def billing_start_trial(request: Request, user: dict = Depends(current_user)):
+    """Explicitly start the free trial. Never called implicitly at registration —
+    a subscription only exists once the user picks it on the plan screen."""
+    start_trial(user["email"])
     return {"ok": True}
 
 

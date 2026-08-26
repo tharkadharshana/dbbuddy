@@ -13,26 +13,26 @@ import { getErrorMessage } from '../utils/api'
 import { formatCurrency, isMoneyColumn, summarySuffix } from '../utils/locale'
 import { notifyParent } from './EmbedApp'
 import EmbedHistoryDrawer from './EmbedHistoryDrawer'
-import { appName, productTitle as resolveProductTitle } from './embedBranding'
-import Logo from '../components/Logo'
+import { appName, productTitle as resolveProductTitle, resolveBrand } from './embedBranding'
+import BrandLogo from './BrandLogo'
+import BetaBadge from '../components/BetaBadge'
 import Markdown from '../components/Markdown'
 import ResultChart from '../components/ResultChart'
+import * as storage from './embedStorage'
 
-const SUGGESTIONS = [
-  { icon:'💰', text:'What was my total revenue last month?' },
-  { icon:'📦', text:'Which products are selling the fastest?' },
-  { icon:'👥', text:'Who are my top 10 customers?' },
-  { icon:'📍', text:'Compare sales across all my locations' },
-]
+// Icons stay here; the questions come from the brand row, so a partner can
+// tailor them without a deploy. Positional and cycling if a brand supplies
+// more than four -- the icon is decoration, not meaning.
+const SUGGESTION_ICONS = ['💰', '📦', '👥', '📍']
 
 // ── Token usage indicator ──────────────────────────────────────────────────────
-function TokenUsage({ sub, isSalesplay }) {
+function TokenUsage({ sub, isPartnerFlow }) {
   if (!sub || sub.status === 'no_subscription') return null
   const used  = sub.tokens_used || 0
   const total = sub.tokens_total_available || sub.tokens_limit || 1
   const pct   = Math.min(100, Math.round((used / total) * 100))
 
-  if (isSalesplay) {
+  if (isPartnerFlow) {
     if (pct < 90) return null
     const color = pct >= 100 ? '#EF4444' : '#F59E0B'
     return (
@@ -171,7 +171,7 @@ function VoteButtons({ vote, onVote }) {
 }
 
 // ── Message bubble ────────────────────────────────────────────────────────────
-function Message({ msg, theme, onVote }) {
+function Message({ msg, theme, onVote, brand }) {
   if (msg.role === 'user') return (
     <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:14 }}>
       <div style={{ maxWidth:'80%', background:'var(--blue)', color:'#fff', borderRadius:'14px 14px 4px 14px', padding:'9px 13px', fontSize:13, lineHeight:1.5 }}>
@@ -182,7 +182,7 @@ function Message({ msg, theme, onVote }) {
 
   return (
     <div style={{ display:'flex', gap:8, marginBottom:18, alignItems:'flex-start' }}>
-      <Logo size={24} radius={12} style={{ flexShrink:0, marginTop:2 }} />
+      <BrandLogo brand={brand} size={24} radius={12} mark square style={{ flexShrink:0, marginTop:2 }} />
       <div style={{ flex:1, minWidth:0 }}>
         {msg.loading ? (
           <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
@@ -242,9 +242,10 @@ function Message({ msg, theme, onVote }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 export default function EmbedChat({ context, onExpired, onLogout, onCollapse, onMessageSent, initialInput = '' }) {
+  const brand = resolveBrand(context)
   const productTitle = resolveProductTitle(context)
   const APP_NAME = appName(context)
-  const isSalesplay = context?.provider_id === 'salesplay'
+  const isPartnerFlow = context?.flow === 'partner'
   // Same accent used by the collapsed search bar (EmbedSearchBar) — keeps the
   // "closed" pill and the "open" input bar visually identical.
   const accent = context?.branding?.accent_color || '#3B82F6'
@@ -285,11 +286,11 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, on
   }, [])
 
   // ── Theme ───────────────────────────────────────────────────────────────────
-  const [theme, setTheme] = useState(() => localStorage.getItem('dm_embed_theme') || 'light')
+  const [theme, setTheme] = useState(() => storage.getItem('dm_embed_theme') || 'light')
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
-    localStorage.setItem('dm_embed_theme', theme)
+    storage.setItem('dm_embed_theme', theme)
   }, [theme])
 
   const toggleTheme = () => setTheme(t => t === 'dark' ? 'light' : 'dark')
@@ -301,7 +302,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, on
   // redeems it for a normal session token on load. Falls back to a plain
   // (logged-out) link if the handoff call fails for any reason.
   async function openMainApp() {
-    const base = import.meta.env.VITE_APP_URL || 'https://app.datamind.ai'
+    const base = brand.appUrl || window.location.origin
     // Open the tab synchronously (within the click gesture) so Safari/iOS
     // popup blockers don't kill it — we redirect it once the token resolves.
     // (Can't pass noopener here or we'd lose the handle needed to redirect it;
@@ -445,16 +446,21 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, on
       position: onCollapse ? 'absolute' : 'relative',
       ...(onCollapse ? { left:0, right:0, bottom:0 } : {}),
       display:'flex', flexDirection:'column', height:'100%', overflow:'hidden',
-      background: isSalesplay ? 'linear-gradient(180deg, #E6F2FD 0%, #FFFFFF 100%)' : undefined,
+      background: isPartnerFlow ? 'linear-gradient(180deg, #E6F2FD 0%, #FFFFFF 100%)' : undefined,
     }}>
 
       {/* Header */}
-      {isSalesplay ? (
+      {isPartnerFlow ? (
         <div style={{ padding: isNarrow ? '10px 12px 10px' : '14px 16px 12px', flexShrink:0 }}>
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap: isNarrow ? 6 : 8 }}>
             <div style={{ display:'flex', alignItems:'center', gap: isNarrow ? 6 : 8, minWidth:0 }}>
-              <Logo size={50} radius={9} style={{ flexShrink:0 }} />
-              <span style={{ fontSize: isNarrow ? 15 : 18, fontWeight:800, color:'#191C1E', letterSpacing:'-0.02em', fontFamily:"'Manrope', 'Plus Jakarta Sans', sans-serif", overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{/* {productTitle} */}Ask AI</span>
+              <BrandLogo brand={brand} size={isNarrow ? 28 : 34} radius={0} style={{ flexShrink:0 }} />
+              {/* The logo is a wordmark carrying the product name, so repeating it
+                  as text reads twice. Brands with no logo still need the name. */}
+              {!brand?.logoUrl && (
+                <span style={{ fontSize: isNarrow ? 15 : 18, fontWeight:800, color:'#191C1E', letterSpacing:'-0.02em', fontFamily:"'Manrope', 'Plus Jakarta Sans', sans-serif", overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{productTitle}</span>
+              )}
+              {brand?.showBetaBadge && <BetaBadge size={isNarrow ? 8 : 9} />}
             </div>
             <div style={{ display:'flex', alignItems:'center', gap: isNarrow ? 4 : 6, flexShrink:0 }}>
               {/* Minimize back to the collapsed search bar (?layout=bar only) */}
@@ -478,7 +484,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, on
               {/* Open in main DataMind app — leaves the partner iframe in a new tab */}
               <button
                 onClick={openMainApp}
-                title="Open SalesPlayAI"
+                title={`Open ${productTitle}`}
                 className="dm-header-icon-btn"
                 style={{
                   width:28, height:28,
@@ -512,7 +518,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, on
               </button>
             </div>
           </div>
-          <TokenUsage sub={sub} isSalesplay={isSalesplay} />
+          <TokenUsage sub={sub} isPartnerFlow={isPartnerFlow} />
         </div>
       ) : (
         <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding: isNarrow ? '10px 10px' : '10px 14px', borderBottom:'1px solid var(--border)', flexShrink:0, gap:8 }}>
@@ -532,11 +538,13 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, on
                 <path d="M12 7v5l3 3" />
               </svg>
             </button>
-            <Logo size={22} radius={6} style={{ flexShrink:0 }} />
-            <span style={{ fontSize:15, fontWeight:600, color:'var(--text)', letterSpacing:'-0.01em', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{productTitle}</span>
+            <BrandLogo brand={brand} size={22} radius={0} style={{ flexShrink:0 }} />
+            {!brand?.logoUrl && (
+              <span style={{ fontSize:15, fontWeight:600, color:'var(--text)', letterSpacing:'-0.01em', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{productTitle}</span>
+            )}
           </div>
           <div style={{ display:'flex', alignItems:'center', gap: isNarrow ? 4 : 8, flexShrink:0 }}>
-            <TokenUsage sub={sub} isSalesplay={isSalesplay} />
+            <TokenUsage sub={sub} isPartnerFlow={isPartnerFlow} />
             {/* Open in main DataMind app — leaves the partner iframe in a new tab */}
             <button
               onClick={openMainApp}
@@ -585,39 +593,40 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, on
       )}
 
       {/* Messages area */}
-      <div className={isSalesplay ? 'dm-scroll-hidden' : undefined} style={{ flex:1, overflowY:'auto', padding:'14px 0' }}>
+      <div className={isPartnerFlow ? 'dm-scroll-hidden' : undefined} style={{ flex:1, overflowY:'auto', padding:'14px 0' }}>
         {!hasMessages ? (
-          <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%', padding: isSalesplay ? (isNarrow ? '0 16px' : '0 24px') : (isNarrow ? '0 12px' : '0 18px'), textAlign:'center' }}>
+          <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%', padding: isPartnerFlow ? (isNarrow ? '0 16px' : '0 24px') : (isNarrow ? '0 12px' : '0 18px'), textAlign:'center' }}>
             <div style={{
-              fontSize: isSalesplay ? 21 : 18, fontWeight: isSalesplay ? 800 : 600,
-              color: isSalesplay ? '#0F172A' : 'var(--text)',
-              marginBottom: isSalesplay ? 6 : 6, letterSpacing:'-0.02em',
+              fontSize: isPartnerFlow ? 21 : 18, fontWeight: isPartnerFlow ? 800 : 600,
+              color: isPartnerFlow ? '#0F172A' : 'var(--text)',
+              marginBottom: isPartnerFlow ? 6 : 6, letterSpacing:'-0.02em',
             }}>
-              {isSalesplay ? 'Ask Your Sales Data' : `Ask Your ${context?.partner_name || 'Salesplay'} Data`}
+              {isPartnerFlow ? 'Ask Your Sales Data' : `Ask Your ${brand.companyName} Data`}
             </div>
             <div style={{
-              fontSize: isSalesplay ? 12.5 : 13, color: isSalesplay ? '#64748B' : 'var(--text2)',
-              marginBottom: isSalesplay ? 16 : 20, lineHeight:1.5, maxWidth: isSalesplay ? 240 : 300,
+              fontSize: isPartnerFlow ? 12.5 : 13, color: isPartnerFlow ? '#64748B' : 'var(--text2)',
+              marginBottom: isPartnerFlow ? 16 : 20, lineHeight:1.5, maxWidth: isPartnerFlow ? 240 : 300,
             }}>
-              {isSalesplay
+              {isPartnerFlow
                 ? 'Query your business metrics in natural language'
                 : 'Ask anything about your data in plain English — revenue, products, customers, and more.'}
             </div>
             <div style={{
               width:'100%', textAlign:'left',
-              fontSize: isSalesplay ? 10 : 10, fontWeight: isSalesplay ? 700 : 600,
-              color: isSalesplay ? '#94A3B8' : 'var(--text3)',
-              textTransform:'uppercase', letterSpacing: isSalesplay ? '.15em' : '.07em',
-              marginBottom: isSalesplay ? 10 : 8,
+              fontSize: isPartnerFlow ? 10 : 10, fontWeight: isPartnerFlow ? 700 : 600,
+              color: isPartnerFlow ? '#94A3B8' : 'var(--text3)',
+              textTransform:'uppercase', letterSpacing: isPartnerFlow ? '.15em' : '.07em',
+              marginBottom: isPartnerFlow ? 10 : 8,
             }}>
               Popular questions
             </div>
-            <div style={{ display:'flex', flexDirection:'column', gap: isSalesplay ? 8 : 8, width:'100%' }}>
-              {SUGGESTIONS.map((s, i) => {
+            <div style={{ display:'flex', flexDirection:'column', gap: isPartnerFlow ? 8 : 8, width:'100%' }}>
+              {brand.suggestions.map((text, i) => {
+                const s = { icon: SUGGESTION_ICONS[i % SUGGESTION_ICONS.length], text }
                 const featured = i === 0
                 const hovered = hoveredSuggestion === i
 
-                if (isSalesplay) {
+                if (isPartnerFlow) {
                   return (
                     <button
                       key={s.text}
@@ -673,20 +682,20 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, on
               })}
             </div>
             <div style={{
-              marginTop: isSalesplay ? 14 : 18, display:'flex', alignItems:'center',
-              gap: isSalesplay ? 6 : 6, fontSize: isSalesplay ? 11 : 10,
-              color: isSalesplay ? '#94A3B8' : 'var(--text3)', fontWeight: isSalesplay ? 500 : 400,
+              marginTop: isPartnerFlow ? 14 : 18, display:'flex', alignItems:'center',
+              gap: isPartnerFlow ? 6 : 6, fontSize: isPartnerFlow ? 11 : 10,
+              color: isPartnerFlow ? '#94A3B8' : 'var(--text3)', fontWeight: isPartnerFlow ? 500 : 400,
             }}>
               <span style={{
-                width: isSalesplay ? 8 : 6, height: isSalesplay ? 8 : 6, borderRadius:'50%',
-                background: isSalesplay ? '#4ADE80' : 'var(--green)', display:'inline-block', flexShrink:0,
+                width: isPartnerFlow ? 8 : 6, height: isPartnerFlow ? 8 : 6, borderRadius:'50%',
+                background: isPartnerFlow ? '#4ADE80' : 'var(--green)', display:'inline-block', flexShrink:0,
               }} />
-              Real-time data {isSalesplay ? '•' : '·'} Powered by {APP_NAME}
+              Real-time data {isPartnerFlow ? '•' : '·'} Powered by {APP_NAME}
             </div>
           </div>
         ) : (
           <div style={{ padding: isNarrow ? '0 10px' : '0 14px' }}>
-            {messages.map(msg => <Message key={msg.id} msg={msg} theme={theme} onVote={v => handleVote(msg, v)} />)}
+            {messages.map(msg => <Message key={msg.id} msg={msg} theme={theme} brand={brand} onVote={v => handleVote(msg, v)} />)}
             <div ref={bottomRef} />
           </div>
         )}
@@ -695,10 +704,10 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, on
       {/* Input */}
       <div style={{
         flexShrink:0,
-        padding: isSalesplay
+        padding: isPartnerFlow
           ? (isNarrow ? '10px 12px' : '14px 16px')
           : (isNarrow ? '8px 10px' : '10px 12px'),
-        borderTop: !isSalesplay && hasMessages ? '1px solid var(--border)' : 'none',
+        borderTop: !isPartnerFlow && hasMessages ? '1px solid var(--border)' : 'none',
       }}>
         {/* Think Mode toggle — hidden for the embed; thinkMode is always true above.
         <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:6 }}>
@@ -724,7 +733,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, on
         </div>
         */}
 
-        {isSalesplay ? (
+        {isPartnerFlow ? (
           <div style={{
             display:'flex', alignItems:'center', gap:10,
             background:'#FFFFFF', borderRadius:9999,
@@ -814,12 +823,12 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, on
         )}
         {hasMessages && (
           <div style={{ textAlign:'center', marginTop:6 }}>
-            <button onClick={() => { setMessages([]); setConvId(null) }} style={{ fontSize:10, fontWeight:700, textDecoration:'underline', color: isSalesplay ? '#94A3B8' : 'var(--text3)', background:'none', border:'none', cursor:'pointer' }}>
+            <button onClick={() => { setMessages([]); setConvId(null) }} style={{ fontSize:10, fontWeight:700, textDecoration:'underline', color: isPartnerFlow ? '#94A3B8' : 'var(--text3)', background:'none', border:'none', cursor:'pointer' }}>
               Clear conversation
             </button>
           </div>
         )}
-        <div style={{ textAlign:'center', marginTop:6, fontSize:9, color: isSalesplay ? '#94A3B8' : 'var(--text3)' }}>
+        <div style={{ textAlign:'center', marginTop:6, fontSize:9, color: isPartnerFlow ? '#94A3B8' : 'var(--text3)' }}>
           AI can make mistakes.
         </div>
       </div>
@@ -828,7 +837,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, on
         open={historyOpen}
         onClose={() => setHistoryOpen(false)}
         activeConvId={convId}
-        isSalesplay={isSalesplay}
+        isPartnerFlow={isPartnerFlow}
         onNewChat={() => { setConvId(null); setMessages([]); setHistoryOpen(false) }}
         onSelect={(id, loadedMessages) => {
           setConvId(id)

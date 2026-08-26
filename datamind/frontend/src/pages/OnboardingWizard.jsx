@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { onboardingValidateKey, onboardingTestDB, onboardingConnectDB, patchSettings, fetchProviders, validateProviderCreds, connectProvider, fetchProviderStatus, fetchConnectedProviders, fetchBillingPlans, subscribeToPlan, getErrorMessage } from '../utils/api'
+import { onboardingValidateKey, onboardingTestDB, onboardingConnectDB, patchSettings, fetchProviders, validateProviderCreds, connectProvider, fetchProviderStatus, fetchConnectedProviders, fetchBillingPlans, subscribeToPlan, startTrial, getErrorMessage } from '../utils/api'
 import { Spinner } from '../components/UI'
 import { APP_NAME } from '../appName'
 import Logo from '../components/Logo'
@@ -86,6 +86,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
   const [selectedPlanId, setSelectedPlanId] = useState(null)
   const [planSubscribing, setPlanSubscribing] = useState(null)
   const [planSubscribed, setPlanSubscribed]   = useState(false)
+  const [trialStarting, setTrialStarting]     = useState(false)
 
   useEffect(() => {
     fetchBillingPlans().then(d => setPlans(d.plans || [])).catch(() => {})
@@ -111,6 +112,15 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
     setPlanSubscribing(plan.id)
     try { await subscribeToPlan(plan.id) } catch { /* ok */ }
     setPlanSubscribing(null)
+    onComplete()
+  }
+
+  // Step 4's "Continue with free trial" — the only place the trial actually
+  // starts. No subscription exists until the user picks one here.
+  async function handleStartTrial() {
+    setTrialStarting(true)
+    try { await startTrial() } catch { /* ok */ }
+    setTrialStarting(false)
     onComplete()
   }
 
@@ -245,8 +255,10 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
 
       {/* Logo */}
       <div style={{ textAlign:'center', marginBottom:28, zIndex:1 }}>
-        <Logo size={48} radius={13} shadow="0 8px 24px rgba(79,142,247,0.3)" style={{ marginBottom:12 }} />
-        <div style={{ fontSize:22, fontWeight:700, color:'var(--text)' }}>Welcome to {APP_NAME}</div>
+        {/* Wordmark already names the product, so "Welcome to {APP_NAME}"
+            repeated it. The greeting stays, the name does not. */}
+        <Logo size={40} style={{ marginBottom:12 }} />
+        <div style={{ fontSize:22, fontWeight:700, color:'var(--text)' }}>Welcome</div>
         <div style={{ fontSize:13, color:'var(--text2)', marginTop:4 }}>Let's get you set up in 3 quick steps</div>
       </div>
 
@@ -590,7 +602,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
 
                 {/* Stats */}
                 <div style={{ display:'flex', justifyContent:'center', gap:16, fontSize:12, color:'var(--text2)', marginBottom:20 }}>
-                  {rows > 0 && <span>{rows.toLocaleString()} records synced</span>}
+                  {rows > 0 && <span>Syncing data</span>}
                   {etaStr  && <span>{etaStr}</span>}
                   {pct > 0 && <span>{pct}%</span>}
                 </div>
@@ -665,11 +677,11 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
         {step === 4 && (
           <Card>
             <div style={{ textAlign:'center', marginBottom:20 }}>
-              <div style={{ fontSize:13, fontWeight:600, color:'var(--green)', background:'rgba(52,209,122,0.1)', border:'1px solid rgba(52,209,122,0.2)', borderRadius:8, padding:'6px 14px', display:'inline-block', marginBottom:14 }}>
-                ✓ Your 14-day free trial has started
+              <div style={{ fontSize:13, fontWeight:600, color:'var(--blue)', background:'rgba(79,142,247,0.1)', border:'1px solid rgba(79,142,247,0.2)', borderRadius:8, padding:'6px 14px', display:'inline-block', marginBottom:14 }}>
+                14-day free trial available
               </div>
               <div style={{ fontSize:20, fontWeight:700, color:'var(--text)', marginBottom:6 }}>Choose a plan</div>
-              <div style={{ fontSize:13, color:'var(--text2)' }}>Lock in your plan now or continue exploring with your trial.</div>
+              <div style={{ fontSize:13, color:'var(--text2)' }}>Subscribe now or start your free trial to keep exploring.</div>
             </div>
 
             <div style={{ display:'flex', flexDirection:'column', gap:10, marginBottom:20 }}>
@@ -704,15 +716,15 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
             </div>
 
             <button
-              onClick={onComplete}
-              disabled={!!planSubscribing}
+              onClick={handleStartTrial}
+              disabled={!!planSubscribing || trialStarting}
               style={{
                 width:'100%', padding:'11px', borderRadius:10, fontSize:14,
                 background:'transparent', color:'var(--text3)', border:'1px solid var(--border)',
-                cursor:'pointer',
+                cursor: trialStarting ? 'wait' : 'pointer',
               }}
             >
-              Continue with free trial →
+              {trialStarting ? <Spinner /> : 'Continue with free trial →'}
             </button>
           </Card>
         )}

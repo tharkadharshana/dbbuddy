@@ -15,6 +15,10 @@ env/
 .env
 .env.local
 .env.production
+.env.front.dev
+.env.front.prod
+.env.front.beta
+
 # Frontend prod build config holds no secrets (app name + public URLs) and must be
 # tracked so CI can build the production bundle without any repo secrets.
 !datamind/frontend/.env.production
@@ -43,3 +47,11 @@ check_messages.py
 check_shop.py
 healthcheck.py
 reset_qa_usage.py
+
+# QA runner config — holds live Salesplay aats. Never commit.
+scripts/qa_*.local.json
+scripts/.qa_instance_*.log
+
+# Local DB backups/dumps (large, sensitive — never commit)
+backups/
+*.sql

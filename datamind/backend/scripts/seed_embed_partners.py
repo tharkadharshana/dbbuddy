@@ -9,7 +9,8 @@ Usage:
     cd datamind/backend
     python scripts/seed_embed_partners.py
 
-Generates a fresh partner key for each provider if none exists yet.
+Generates a fresh partner key for each named brand if none exists yet.
+For any brand beyond these bootstrap rows, use scripts/add_brand.py.
 Prints the iframe tag to give to each partner when done.
 """
 
@@ -34,8 +35,12 @@ PARTNERS = [
             "https://app.salesplay.io,https://backoffice.salesplay.io",
         ),
         "branding": {
-            "accent_color": "#f59e0b",
-            "product_name": "Ask Your Salesplay Data",
+            "product_name":  "SalesPlay AI",
+            "company_name":  "Salesplay",
+            "brand_slug":    "salesplay",
+            "primary_color": "#f59e0b",
+            "app_domains":   [d.strip() for d in os.getenv(
+                "SALESPLAY_APP_DOMAINS", "ai.salesplay.com").split(",") if d.strip()],
         },
         "key_prefix": "sp_live_",
     },
@@ -47,8 +52,12 @@ PARTNERS = [
             "https://r.loyverse.com,https://loyverse.com",
         ),
         "branding": {
-            "accent_color": "#6366f1",
-            "product_name": "Ask Your Loyverse Data",
+            "product_name":  "Ask Your Loyverse Data",
+            "company_name":  "Loyverse",
+            "brand_slug":    "loyverse",
+            "primary_color": "#6366f1",
+            "app_domains":   [d.strip() for d in os.getenv(
+                "LOYVERSE_APP_DOMAINS", "").split(",") if d.strip()],
         },
         "key_prefix": "ly_live_",
     },
@@ -80,10 +89,12 @@ def seed():
     print("=" * 50)
 
     for p in PARTNERS:
-        # Check if a row already exists for this provider
+        # Keyed on partner_name, not provider_id: several brands can share one
+        # provider (Salesplay, Sellmo, any future whitelabel), so provider_id
+        # no longer identifies a single row.
         cursor.execute(
-            "SELECT partner_key, active FROM embed_partners WHERE provider_id = %s LIMIT 1",
-            (p["provider_id"],)
+            "SELECT partner_key, active FROM embed_partners WHERE partner_name = %s LIMIT 1",
+            (p["partner_name"],)
         )
         existing = cursor.fetchone()
 

@@ -1,6 +1,7 @@
 import React from 'react'
 import { ResponsiveContainer, BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts'
 import { formatCurrency, isCurrencyColumn, formatNumber } from '../utils/locale'
+import { fmtTok as _fmtTok } from '../formatTokens'
 
 export const TT_STYLE = { background:'#1c1e2e', border:'1px solid rgba(255,255,255,0.1)', borderRadius:8, fontSize:12, color:'#f0f1fa', boxShadow:'0 8px 24px rgba(0,0,0,0.4)' }
 export const COLORS = ['#4f8ef7','#34d17a','#a78bfa','#f5a623','#f05050','#2dd4bf','#f472b6','#facc15','#60a5fa','#fb923c']
@@ -41,13 +42,6 @@ export function Spinner({ size=18, color='var(--blue)' }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" style={{animation:'spin .8s linear infinite'}}><circle cx="12" cy="12" r="9" stroke={color} strokeWidth="2.5" strokeDasharray="40 20" strokeLinecap="round"/></svg>
 }
 
-const _TDM = 10_000
-const _fmtTok = (raw) => {
-  const n = (raw || 0) * _TDM
-  if (n >= 1_000_000) return `${parseFloat((n / 1_000_000).toFixed(2))}M`
-  if (n >= 1_000)     return `${parseFloat((n / 1_000).toFixed(1))}K`
-  return Math.round(n).toLocaleString()
-}
 
 export function UsageMeter({ sub }) {
   if (!sub || sub.status === 'no_subscription') return null

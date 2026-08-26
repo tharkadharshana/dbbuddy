@@ -42,6 +42,7 @@ from logger import get_logger
 from llm import (
     _build_key_pool, _park_key, _unpark_key, LLMTransientError,
     _TRANSIENT_STATUS, _KEY_RL_COOLDOWN, _KEY_AUTH_COOLDOWN,
+    OPENAI_MODEL, GEMINI_MODELS, _is_gpt5,
 )
 
 log = get_logger(__name__)
@@ -225,19 +226,29 @@ def call_openai_with_tools(messages: List[dict], tools, api_key: str = "",
     def _do(key):
         url = "https://api.openai.com/v1/chat/completions"
         body = {
-            "model": "gpt-4o-mini",
+            "model": OPENAI_MODEL,
             "messages": _messages_to_openai(messages),
             "tools": _tools_to_openai_schema(tools),
             "tool_choice": "auto",
-            "temperature": 0.2,
-            "max_tokens": max_tokens,
+            "max_completion_tokens": max_tokens,
         }
+        # gpt-5.x refuses tools without this; gpt-4o* refuses the param itself.
+        if _is_gpt5(OPENAI_MODEL):
+            body["reasoning_effort"] = "none"
+        else:
+            body["temperature"] = 0.2
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
         try:
             resp = requests.post(url, json=body, headers=headers, timeout=90)
         except requests.exceptions.Timeout:
             raise LLMTransientError("OpenAI timed out during MCP tool-calling.")
         if not resp.ok:
+            # Log the body — raise_for_status() discards the one thing that says
+            # WHY (bad model id, unsupported param, malformed tool schema),
+            # leaving only "400 Client Error" in the log.
+            log.warning("OpenAI tool-call error response",
+                        status=resp.status_code, model=body.get("model"),
+                        params=sorted(body.keys()), body=resp.text[:600])
             if resp.status_code in (401, 403):
                 raise ValueError(f"OpenAI API key invalid (status {resp.status_code}).")
             if resp.status_code in _TRANSIENT_STATUS:
@@ -283,12 +294,7 @@ def call_deepseek_with_tools(messages: List[dict], tools, api_key: str = "",
     return _run_with_key_pool("deepseek", api_key, user_email, operation, _do)
 
 
-_GEMINI_TOOL_MODELS = [
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
-    "gemini-1.5-flash-latest",
-    "gemini-1.5-pro-latest",
-]
+_GEMINI_TOOL_MODELS = GEMINI_MODELS
 
 
 def call_gemini_with_tools(messages: List[dict], tools, api_key: str = "",

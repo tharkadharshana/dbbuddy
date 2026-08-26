@@ -232,3 +232,37 @@ def enforce_date_filter(sql: str, history_months: int) -> str:
                 select.where(cond, copy=False)
 
     return stmt.sql(dialect=_DIALECT)
+
+
+# ── Boot-time self-check ─────────────────────────────────────────────────────
+# The tenant rewrites below walk sqlglot's AST through argument names that have
+# changed across major versions. When they change, the walk silently matches
+# nothing and enforce_tenant_isolation returns the SQL untouched -- no
+# exception, no log line, just an isolation control that has quietly stopped
+# working. The caller's "is the tenant id in the SQL?" check does not catch
+# that either: a model-written filter on the main table satisfies it while a
+# joined table or a subquery stays unscoped.
+#
+# So prove the rewrite actually works, once, at import. A mismatched sqlglot
+# then refuses to boot instead of serving cross-tenant rows.
+
+def _self_check() -> None:
+    probes = (
+        "SELECT total FROM sp_receipts",
+        "SELECT r.total FROM sp_receipts r JOIN sp_products p ON p.id = r.pid",
+        "SELECT * FROM sp_receipts WHERE id IN (SELECT id FROM sp_products)",
+    )
+    tenant = "dm_selfcheck_probe"
+    for sql in probes:
+        out = enforce_tenant_isolation(sql, tenant)
+        if out.count(tenant) < sql.count("sp_"):
+            raise RuntimeError(
+                "Tenant isolation is not working with sqlglot "
+                + getattr(sqlglot, "__version__", "?")
+                + ". Refusing to start: queries would return other accounts' "
+                + "data. Install the pinned version from requirements.txt. "
+                + "Probe: " + sql + " -> " + out
+            )
+
+
+_self_check()

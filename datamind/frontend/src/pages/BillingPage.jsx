@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react'
-import { fetchBillingPlans, fetchSubscription, fetchBillingUsage, subscribeToPlan, purchaseAddon } from '../utils/api'
+import { fetchBillingPlans, fetchSubscription, fetchBillingUsage, subscribeToPlan, purchaseAddon, startTrial } from '../utils/api'
+import { APP_NAME } from '../appName'
 import { Spinner } from '../components/UI'
+import { fmtTok } from '../formatTokens'
 
 // While in beta there is no live payment gateway — plans/add-ons are shown
 // for preview only. Set to false once payments go live.
@@ -8,13 +10,6 @@ const BETA_MODE = true
 const SUPPORT_EMAIL = 'support@datamind.ai'
 const BETA_DISABLED_STYLE = { opacity: 0.5, pointerEvents: 'none', filter: 'grayscale(0.4)' }
 
-const TDM = 10_000 // Token Display Multiplier — backend stores small values, display as large
-const fmtTok = (raw) => {
-  const n = (raw || 0) * TDM
-  if (n >= 1_000_000) return `${parseFloat((n / 1_000_000).toFixed(2))}M`
-  if (n >= 1_000)     return `${parseFloat((n / 1_000).toFixed(1))}K`
-  return Math.round(n).toLocaleString()
-}
 
 // ── Plan definitions ──────────────────────────────────────────────────────────
 const PLAN_FEATURES = {
@@ -119,6 +114,12 @@ export default function BillingPage({ onSubChange }) {
   const [addonQty, setAddonQty]   = useState({ tokens: 0 })
   const [addonLoading, setAddonLoading] = useState(false)
   const [toast, setToast]         = useState(null)
+  const [trialLoading, setTrialLoading] = useState(false)
+
+  // Launch period, from GET /billing/subscription. While on there are no
+  // tiers, no prices and no add-on cart on this page -- just the trial button.
+  const subscriptionFree = !!sub?.subscription_free
+  const hasLiveSub       = ['trial', 'active'].includes(sub?.status)
 
   useEffect(() => { loadAll() }, [])
 
@@ -130,6 +131,19 @@ export default function BillingPage({ onSubChange }) {
       setSub(subData)
     } catch { /* silent */ }
     setLoading(false)
+  }
+
+  async function handleStartTrial() {
+    setTrialLoading(true)
+    try {
+      await startTrial()
+      await loadAll()
+      onSubChange?.()
+      setToast({ type: 'success', msg: `You're in. Enjoy ${APP_NAME}.` })
+    } catch (e) {
+      setToast({ type: 'error', msg: e?.response?.data?.detail || 'Could not start your trial. Please try again.' })
+    }
+    setTrialLoading(false)
   }
 
   async function loadUsage() {
@@ -220,7 +234,7 @@ export default function BillingPage({ onSubChange }) {
       </div>
 
       {/* Beta notice */}
-      {BETA_MODE && (
+      {BETA_MODE && !subscriptionFree && (
         <div style={{ background: 'rgba(79,142,247,0.1)', border: '1px solid rgba(79,142,247,0.3)', borderRadius: 10, padding: '12px 16px', marginBottom: 24, fontSize: 13, color: 'var(--text2)', lineHeight: 1.6 }}>
           🚧 <strong>We're in beta.</strong> Plan upgrades and add-on purchases below are shown as a preview and aren't active yet.
           If you need more Tokens or a higher plan, email us at{' '}
@@ -260,6 +274,35 @@ export default function BillingPage({ onSubChange }) {
             </div>
           )}
 
+          {/* Free launch period: no tiers, no prices, no add-on cart —
+              just the one button that starts the trial. */}
+          {subscriptionFree ? (
+            <div style={{ padding: 24, marginBottom: 40, textAlign: 'center', background: 'var(--bg1)', border: '1px solid var(--border)', borderRadius: 12 }}>
+              {hasLiveSub ? (
+                <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.7 }}>
+                  You're all set — everything is free right now, so there's nothing to buy.
+                </div>
+              ) : (
+                <>
+                  <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.7, marginBottom: 16 }}>
+                    Everything is free right now. Start using {APP_NAME} — no card, no plan to pick.
+                  </div>
+                  <button
+                    onClick={handleStartTrial}
+                    disabled={trialLoading}
+                    style={{
+                      padding: '11px 26px', borderRadius: 8, border: 'none', background: 'var(--blue)',
+                      color: '#fff', fontWeight: 600, fontSize: 13,
+                      cursor: trialLoading ? 'default' : 'pointer', opacity: trialLoading ? 0.6 : 1,
+                    }}
+                  >
+                    {trialLoading ? 'Starting…' : `Try ${APP_NAME}`}
+                  </button>
+                </>
+              )}
+            </div>
+          ) : (
+            <>
           {/* Plan cards */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16, marginBottom: 40, ...(BETA_MODE ? BETA_DISABLED_STYLE : {}) }}>
             {plans.map(plan => {
@@ -335,6 +378,8 @@ export default function BillingPage({ onSubChange }) {
               </button>
             </div>
           </div>
+            </>
+          )}
         </>
       )}
 
@@ -365,7 +410,9 @@ export default function BillingPage({ onSubChange }) {
 
           {(!sub || sub.status === 'no_subscription') && (
             <div style={{ padding: 20, marginBottom: 20, textAlign: 'center', color: 'var(--text3)', background: 'var(--bg1)', border: '1px solid var(--border)', borderRadius: 10 }}>
-              No active subscription. Switch to Plans to get started.
+              {subscriptionFree
+                ? `No subscription yet. Switch to Plans and start using ${APP_NAME} — it's free right now.`
+                : 'No active subscription. Switch to Plans to get started.'}
             </div>
           )}
 

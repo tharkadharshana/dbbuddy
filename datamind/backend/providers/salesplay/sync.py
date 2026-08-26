@@ -197,7 +197,11 @@ class SalesPlayAPIClient:
     All filters sent as JSON body on GET requests.
     """
 
-    def __init__(self, api_token: str):
+    def __init__(self, api_token: str, base_url: str = ""):
+        # Per-brand: a whitelabel of this provider can run on its own instance
+        # (see partner_api). Falls back to the env base, which is what every
+        # single-brand deployment used before this existed.
+        self.base_url = (base_url or "").rstrip("/") or BASE_URL
         self.session = requests.Session()
         self.session.headers.update({
             "Token":        f"Bearer {api_token}",
@@ -206,7 +210,7 @@ class SalesPlayAPIClient:
         self.session.verify = _VERIFY_SSL
 
     def _get(self, endpoint: str, body: dict = None) -> dict:
-        url = f"{BASE_URL}/{endpoint.lstrip('/')}"
+        url = f"{self.base_url}/{endpoint.lstrip('/')}"
         request_body = body or {}
 
         log.debug("SalesPlay API Request", url=url, method="GET",

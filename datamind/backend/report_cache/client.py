@@ -20,6 +20,7 @@ import time
 import requests
 
 from logger import get_logger
+from .filter_key import build_filter_key
 
 log = get_logger(__name__)
 
@@ -32,7 +33,12 @@ def _base_url() -> str:
 
 
 class ReportAPIClient:
-    def __init__(self, access_token: str, timeout: int = None, session=None):
+    def __init__(self, access_token: str, timeout: int = None, session=None,
+                 base_url: str = ""):
+        # base_url is per-brand (partner_api): a whitelabel can run on its own
+        # instance of the provider. Falls back to the env base so every existing
+        # single-brand caller behaves exactly as before.
+        self._base = (base_url or "").rstrip("/") or _base_url()
         self._token = (access_token or "").strip()
         # Report endpoints run up to set_time_limit(90) server-side — the 10s
         # proxy timeout used for profile calls elsewhere is not enough here.
@@ -41,15 +47,25 @@ class ReportAPIClient:
 
     def get(self, endpoint: str, params: dict = None) -> dict:
         """GET {base}/{endpoint}, retrying 429/5xx with backoff. Raises
-        requests.HTTPError on a final non-2xx response."""
-        url = f"{_base_url()}/{endpoint.lstrip('/')}"
+        requests.HTTPError on a final non-2xx response.
+
+        Date-ranged calls (start_date/end_date present) get an X-Filter-Key
+        header — SalesPlay's internal report API requires it to prove which
+        day-range we're entitled to (docs/salesplay-encrypted-param.md).
+        Regenerated fresh per call since the payload has a 60s freshness
+        window and can't be reused across retries."""
+        url = f"{self._base}/{endpoint.lstrip('/')}"
         attempts = max(1, int(os.getenv("REPORT_API_RETRY_ATTEMPTS", "3")))
+        is_date_ranged = bool((params or {}).get("start_date") or (params or {}).get("end_date"))
         resp = None
         for attempt in range(1, attempts + 1):
+            headers = {"Authorization": f"Bearer {self._token}"}
+            if is_date_ranged:
+                headers["X-Filter-Key"] = build_filter_key()
             resp = self._http.get(
                 url,
                 params=params or {},
-                headers={"Authorization": f"Bearer {self._token}"},
+                headers=headers,
                 timeout=self._timeout,
             )
             if (resp.status_code == 429 or resp.status_code >= 500) and attempt < attempts:

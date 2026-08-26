@@ -1,6 +1,5 @@
 import React, { useState, useRef } from 'react'
 import { deleteConversation } from '../utils/api'
-import { APP_NAME } from '../appName'
 import Logo from './Logo'
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
@@ -285,7 +284,8 @@ function NavItem({ id, label, icon, active, setActive, badge }) {
 }
 
 export default function Sidebar({ active, setActive, connection, cacheStatus, theme, setTheme,
-                                   conversations, activeConvId, onConvSelect, onConvCreate, onConvDelete }) {
+                                   conversations, activeConvId, onConvSelect, onConvCreate, onConvDelete,
+                                   }) {
   const cacheOk      = cacheStatus?.cached
   const cacheBuilding= cacheStatus?.build?.status === 'building'
 
@@ -298,14 +298,12 @@ export default function Sidebar({ active, setActive, connection, cacheStatus, th
       {/* Logo */}
       <div style={{ padding:'16px 14px 12px', borderBottom:'1px solid var(--border)' }}>
         <div style={{ display:'flex', alignItems:'center', gap:9 }}>
-          <Logo size={32} />
-          <div>
-            <div style={{ fontWeight:700, fontSize:14, lineHeight:1.1, display:'flex', alignItems:'center', gap:5 }}>
-              {APP_NAME}
-              <span style={{ fontSize:9, fontWeight:700, letterSpacing:'0.06em', background:'var(--blue-dim)', color:'var(--blue)', borderRadius:4, padding:'1px 5px', verticalAlign:'middle' }}>BETA</span>
-            </div>
-            <div style={{ fontSize:10, color:'var(--text3)' }}>AI Analytics</div>
-          </div>
+          {/* Wordmark carries the product name; APP_NAME beside it duplicated it. */}
+          <Logo size={26} />
+          {/* ponytail: the standalone app is Salesplay-only and Salesplay runs its
+              free period without a BETA mark, so the badge is off here. Free mode
+              is a billing state, not a branding one -- the widget decides per brand
+              from branding.show_beta_badge. */}
         </div>
       </div>
 
@@ -355,9 +353,9 @@ export default function Sidebar({ active, setActive, connection, cacheStatus, th
         <div style={{ height:1, background:'var(--border)', margin:'8px 4px' }} />
         <div style={{ fontSize:10, color:'var(--text3)', fontWeight:600, textTransform:'uppercase', letterSpacing:'.09em', padding:'4px 12px 6px' }}>Analytics</div>
         <NavGroup label="Analytics" icon={IC.chart}  items={ANALYTICS_SUB}  active={active} setActive={setActive} defaultOpen={true} />
-        <NavGroup label="Predictions" icon={IC.trend} items={PREDICTIONS_SUB} active={active} setActive={setActive} />
+        {/* PREDICTIONS HIDDEN — <NavGroup label="Predictions" icon={IC.trend} items={PREDICTIONS_SUB} active={active} setActive={setActive} /> */}
         <div style={{ height:1, background:'var(--border)', margin:'8px 4px' }} />
-        <NavItem id="connections" label="Connections"   icon={IC.plug}     active={active} setActive={setActive} />
+        {/* CONNECTIONS HIDDEN — <NavItem id="connections" label="Connections"   icon={IC.plug}     active={active} setActive={setActive} /> */}
         {/* BILLING HIDDEN — <NavItem id="billing" label="Billing" icon={IC.billing} active={active} setActive={setActive} /> */}
         <NavItem id="settings"    label="Settings"      icon={IC.settings} active={active} setActive={setActive} />
       </nav>
