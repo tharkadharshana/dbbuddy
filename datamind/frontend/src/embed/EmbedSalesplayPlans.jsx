@@ -506,7 +506,7 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
         // Salesplay's subscription is already active this cycle — nothing to
         // buy here. Extra usage is an addon, not sold through this screen.
         <div style={{ textAlign: 'center', paddingTop: 24 }}>
-          <BrandLogo brand={brand} size={40} radius={11} style={{ marginBottom: 10 }} />
+          <BrandLogo brand={brand} size={32} radius={0} style={{ marginBottom: 10 }} />
           <h2 style={{
             fontFamily: "'Manrope', 'Plus Jakarta Sans', sans-serif",
             fontSize: 22, lineHeight: '30px', letterSpacing: '-0.02em', fontWeight: 800,
@@ -533,7 +533,7 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
         // ── Receipt / confirm screen ──────────────────────────────────────
         <div style={{ opacity: grayedOut ? 0.4 : 1, pointerEvents: grayedOut ? 'none' : 'auto' }}>
           <div style={{ textAlign: 'center', marginBottom: 18 }}>
-            <BrandLogo brand={brand} size={40} radius={11} style={{ marginBottom: 10 }} />
+            <BrandLogo brand={brand} size={32} radius={0} style={{ marginBottom: 10 }} />
             <h2 style={{
               fontFamily: "'Manrope', 'Plus Jakarta Sans', sans-serif",
               fontSize: 22, lineHeight: '30px', letterSpacing: '-0.02em', fontWeight: 800,
@@ -681,7 +681,7 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
           height: '100%', display: 'flex', flexDirection: 'column',
           justifyContent: 'center', alignItems: 'center', textAlign: 'center',
         }}>
-          <BrandLogo brand={brand} size={40} radius={11} style={{ marginBottom: 10 }} />
+          <BrandLogo brand={brand} size={32} radius={0} style={{ marginBottom: 10 }} />
           <h2 style={{
             fontFamily: "'Manrope', 'Plus Jakarta Sans', sans-serif",
             fontSize: 22, lineHeight: '30px', letterSpacing: '-0.02em', fontWeight: 800,
@@ -748,7 +748,7 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
         // ── Plan list — no trial (blocked/expired) — straight list ────────
         <div style={{ opacity: grayedOut ? 0.4 : 1, pointerEvents: grayedOut ? 'none' : 'auto' }}>
           <div style={{ textAlign: 'center', marginBottom: 18 }}>
-            <BrandLogo brand={brand} size={40} radius={11} style={{ marginBottom: 10 }} />
+            <BrandLogo brand={brand} size={32} radius={0} style={{ marginBottom: 10 }} />
             <h2 style={{
               fontFamily: "'Manrope', 'Plus Jakarta Sans', sans-serif",
               fontSize: 22, lineHeight: '30px', letterSpacing: '-0.02em', fontWeight: 800,

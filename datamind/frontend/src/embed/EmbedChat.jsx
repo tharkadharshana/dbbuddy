@@ -182,7 +182,7 @@ function Message({ msg, theme, onVote, brand }) {
 
   return (
     <div style={{ display:'flex', gap:8, marginBottom:18, alignItems:'flex-start' }}>
-      <BrandLogo brand={brand} size={24} radius={12} style={{ flexShrink:0, marginTop:2 }} />
+      <BrandLogo brand={brand} size={24} radius={12} mark square style={{ flexShrink:0, marginTop:2 }} />
       <div style={{ flex:1, minWidth:0 }}>
         {msg.loading ? (
           <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
@@ -454,8 +454,12 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, on
         <div style={{ padding: isNarrow ? '10px 12px 10px' : '14px 16px 12px', flexShrink:0 }}>
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap: isNarrow ? 6 : 8 }}>
             <div style={{ display:'flex', alignItems:'center', gap: isNarrow ? 6 : 8, minWidth:0 }}>
-              <BrandLogo brand={brand} size={50} radius={9} style={{ flexShrink:0 }} />
-              <span style={{ fontSize: isNarrow ? 15 : 18, fontWeight:800, color:'#191C1E', letterSpacing:'-0.02em', fontFamily:"'Manrope', 'Plus Jakarta Sans', sans-serif", overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{productTitle}</span>
+              <BrandLogo brand={brand} size={isNarrow ? 28 : 34} radius={0} style={{ flexShrink:0 }} />
+              {/* The logo is a wordmark carrying the product name, so repeating it
+                  as text reads twice. Brands with no logo still need the name. */}
+              {!brand?.logoUrl && (
+                <span style={{ fontSize: isNarrow ? 15 : 18, fontWeight:800, color:'#191C1E', letterSpacing:'-0.02em', fontFamily:"'Manrope', 'Plus Jakarta Sans', sans-serif", overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{productTitle}</span>
+              )}
               {context?.subscription_free && <BetaBadge size={isNarrow ? 8 : 9} />}
             </div>
             <div style={{ display:'flex', alignItems:'center', gap: isNarrow ? 4 : 6, flexShrink:0 }}>
@@ -534,8 +538,10 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, on
                 <path d="M12 7v5l3 3" />
               </svg>
             </button>
-            <BrandLogo brand={brand} size={22} radius={6} style={{ flexShrink:0 }} />
-            <span style={{ fontSize:15, fontWeight:600, color:'var(--text)', letterSpacing:'-0.01em', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{productTitle}</span>
+            <BrandLogo brand={brand} size={22} radius={0} style={{ flexShrink:0 }} />
+            {!brand?.logoUrl && (
+              <span style={{ fontSize:15, fontWeight:600, color:'var(--text)', letterSpacing:'-0.01em', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{productTitle}</span>
+            )}
           </div>
           <div style={{ display:'flex', alignItems:'center', gap: isNarrow ? 4 : 8, flexShrink:0 }}>
             <TokenUsage sub={sub} isPartnerFlow={isPartnerFlow} />

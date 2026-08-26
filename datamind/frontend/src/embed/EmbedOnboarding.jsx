@@ -211,8 +211,10 @@ export default function EmbedOnboarding({ context, partnerKey, onComplete, onClo
 
       {/* Header */}
       <div style={{ textAlign:'center', marginBottom:20 }}>
-        <BrandLogo brand={brand} size={40} radius={11} style={{ marginBottom:10 }} />
-        <div style={{ fontSize:15, fontWeight:700, color:'var(--text)' }}>{title}</div>
+        <BrandLogo brand={brand} size={32} radius={0} style={{ marginBottom:10 }} />
+        {!brand?.logoUrl && (
+          <div style={{ fontSize:15, fontWeight:700, color:'var(--text)' }}>{title}</div>
+        )}
         <div style={{ fontSize:12, color:'var(--text3)', marginTop:2 }}>Ask your {providerName} data anything</div>
       </div>
 

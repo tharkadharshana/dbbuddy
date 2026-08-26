@@ -524,10 +524,12 @@ function EmbedApp() {
         height: '100%', padding: '24px 20px', textAlign: 'center',
         background: 'linear-gradient(180deg, #F0F4F8 0%, #F7F9FB 100%)',
       }}>
-        <BrandLogo brand={brand} size={40} radius={11} style={{ marginBottom: 10 }} />
-        <div style={{ fontSize: 15, fontWeight: 700, color: '#191C1E', marginBottom: 4 }}>
-          {appName(context)}
-        </div>
+        <BrandLogo brand={brand} size={32} radius={0} style={{ marginBottom: 10 }} />
+        {!brand?.logoUrl && (
+          <div style={{ fontSize: 15, fontWeight: 700, color: '#191C1E', marginBottom: 4 }}>
+            {appName(context)}
+          </div>
+        )}
         <div style={{ width: '100%', maxWidth: 360 }}>
           <EmbedSyncProgress
             partnerKey={partnerKey}

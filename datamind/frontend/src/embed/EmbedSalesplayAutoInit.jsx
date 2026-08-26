@@ -122,7 +122,7 @@ function Spin({ sp }) {
 }
 
 function Logo({ brand }) {
-  return <BrandLogo brand={brand} size={40} radius={11} style={{ marginBottom: 10 }} />
+  return <BrandLogo brand={brand} size={32} radius={0} style={{ marginBottom: 10 }} />
 }
 
 export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, onComplete, onError, onClose }) {
@@ -333,14 +333,19 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
       {phase === 'consent' && (sp ? (
         <div style={{ width: '100%' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, margin: '14px 0 10px' }}>
-            <BrandLogo brand={brand} size={60} radius={12} style={{ flexShrink: 0 }} />
-            <h2 style={{
-              fontFamily: "'Manrope', 'Plus Jakarta Sans', sans-serif",
-              fontSize: 26, lineHeight: '34px', letterSpacing: '-0.02em', fontWeight: 800,
-              color: SP.heading, margin: 0,
-            }}>
-              {productTitle}
-            </h2>
+            <BrandLogo brand={brand} size={44} radius={0} style={{ flexShrink: 0 }} />
+            {/* The logo is a wordmark carrying the product name — printing the
+                title beside it says the same thing twice. Brands with no logo
+                still need the name. */}
+            {!brand?.logoUrl && (
+              <h2 style={{
+                fontFamily: "'Manrope', 'Plus Jakarta Sans', sans-serif",
+                fontSize: 26, lineHeight: '34px', letterSpacing: '-0.02em', fontWeight: 800,
+                color: SP.heading, margin: 0,
+              }}>
+                {productTitle}
+              </h2>
+            )}
             {subscriptionFree && <BetaBadge size={11} style={{ alignSelf: 'center' }} />}
           </div>
           <p style={{ fontSize: 14, lineHeight: '22px', color: SP.text, marginBottom: 24 }}>
