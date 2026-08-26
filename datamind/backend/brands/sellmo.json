@@ -7,6 +7,8 @@
     "product_name": "Sellmo AI",
     "company_name": "Sellmo POS",
     "brand_slug": "sellmo",
+    "logo_url": "/brand/sellmo-logo.png",
+    "logo_mark_url": "/brand/sellmo-mark.png",
     "app_domains": [],
     "primary_color": "#0058BE",
     "show_beta_badge": true,
