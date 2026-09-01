@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { onboardingValidateKey, onboardingTestDB, onboardingConnectDB, patchSettings, fetchProviders, validateProviderCreds, connectProvider, fetchProviderStatus, fetchConnectedProviders, fetchBillingPlans, subscribeToPlan, startTrial, getErrorMessage } from '../utils/api'
 import { Spinner } from '../components/UI'
-import { APP_NAME } from '../appName'
+import { useBrand } from '../brand'
 import Logo from '../components/Logo'
 
 // ── Step indicator ────────────────────────────────────────────────────────────
@@ -48,6 +48,7 @@ const PLAN_HIGHLIGHTS = {
 }
 
 export default function OnboardingWizard({ onComplete, theme, setTheme }) {
+  const APP_NAME_ = useBrand().productName
   const [step, setStep]           = useState(0)
 
   // Step 0 — LLM choice
@@ -255,7 +256,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
 
       {/* Logo */}
       <div style={{ textAlign:'center', marginBottom:28, zIndex:1 }}>
-        {/* Wordmark already names the product, so "Welcome to {APP_NAME}"
+        {/* Wordmark already names the product, so "Welcome to {APP_NAME_}"
             repeated it. The greeting stays, the name does not. */}
         <Logo size={40} style={{ marginBottom:12 }} />
         <div style={{ fontSize:22, fontWeight:700, color:'var(--text)' }}>Welcome</div>
@@ -284,7 +285,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
             })()}
             <div style={{ textAlign:'center', padding:'60px 20px', color:'var(--text3)' }}>
               <Spinner size={32} />
-              <div style={{ marginTop:16, fontSize:14 }}>Setting up {APP_NAME}...</div>
+              <div style={{ marginTop:16, fontSize:14 }}>Setting up {APP_NAME_}...</div>
             </div>
           </Card>
         )}
@@ -521,7 +522,7 @@ export default function OnboardingWizard({ onComplete, theme, setTheme }) {
             <div style={{ fontSize:11, color:'var(--text3)', textTransform:'uppercase', letterSpacing:'.1em', marginBottom:6 }}>Step 3 of 3</div>
             <div style={{ fontSize:19, fontWeight:700, color:'var(--text)', marginBottom:4 }}>Set up your analytics</div>
             <div style={{ fontSize:13, color:'var(--text2)', marginBottom:22, lineHeight:1.6 }}>
-              {APP_NAME} will now look at your database and build custom analytics for you. This only runs <strong style={{color:'rgba(255,255,255,.6)'}}>once</strong> and everything is saved for future use.
+              {APP_NAME_} will now look at your database and build custom analytics for you. This only runs <strong style={{color:'rgba(255,255,255,.6)'}}>once</strong> and everything is saved for future use.
             </div>
 
             {/* Summary */}
