@@ -570,14 +570,21 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
             {/* Expiry in the standard MM/YY slot a real card carries. Salesplay
                 only returns is_expired, not exp_month/exp_year — until they add
                 those, the value stays masked and only the expired state is real.
-                CVV is deliberately absent: it is never stored past
-                authorization (PCI-DSS), so no saved-card view can show one.
+                CVV is masked permanently, not pending an API field: it is never
+                retained past authorization (PCI-DSS), so no saved-card view can
+                ever show one. The dots are there to complete the card shape.
                 ponytail: swap ••/•• for the real pair when the API carries it. */}
             <div style={{ display: 'flex', alignItems: 'flex-end', gap: 22 }}>
               <div>
                 <div style={{ fontSize: 8, fontWeight: 700, letterSpacing: '.08em', color: 'rgba(255,255,255,0.55)', marginBottom: 2 }}>EXPIRES</div>
                 <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '.06em', color: cardExpired ? '#FFC9C4' : '#fff' }}>
                   {cardExpiry || '••/••'}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 8, fontWeight: 700, letterSpacing: '.08em', color: 'rgba(255,255,255,0.55)', marginBottom: 2 }}>CVV</div>
+                <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '.06em', color: 'rgba(255,255,255,0.55)' }}>
+                  •••
                 </div>
               </div>
             </div>
