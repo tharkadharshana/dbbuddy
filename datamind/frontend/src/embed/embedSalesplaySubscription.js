@@ -34,6 +34,11 @@ export function evaluateSalesplayAccess(salesplayInfo, internalSub) {
   const cardBrand = card?.payment_method_id ? (card.brand || '') : null
   const cardLast4 = card?.payment_method_id ? (card.last4 || '') : null
   const cardExpired = !!card?.is_expired
+  // MM/YY, only when Salesplay actually sends the pair — they send is_expired
+  // today and nothing else, so this is null until that payload grows.
+  const cardExpiry = card?.exp_month && card?.exp_year
+    ? `${String(card.exp_month).padStart(2, '0')}/${String(card.exp_year).slice(-2)}`
+    : null
 
   // Account credit balance — same subscription object as pricing_plans, sits
   // alongside it rather than inside it (one balance, applies whichever tier
@@ -90,6 +95,7 @@ export function evaluateSalesplayAccess(salesplayInfo, internalSub) {
     cardBrand,
     cardLast4,
     cardExpired,
+    cardExpiry,
     availableCreditText,
     showPriceText,
   }
