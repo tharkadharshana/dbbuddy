@@ -37,7 +37,12 @@ datamind/backend/scratch/
 datamind/backend/data/users.json
 datamind/backend/data/cache/*
 datamind/backend/logs/datamind.log
-docs/
+docs/*
+# Runbooks are procedures for the live deployment, not build output:
+# they are versioned with the code they operate on.
+!docs/deployment/
+docs/deployment/*
+!docs/deployment/runbooks/
 logs/
 archives/
 patches/
