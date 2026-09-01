@@ -1,13 +1,12 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <!-- Main app only, not the embed. VITE_APP_NAME is gone (one bundle, many
-         brands), and an unresolved %VAR% renders literally, so this matches
-         the src/appName.js fallback. The embed sets its own title at runtime
-         from the brand row. -->
-    <title>SalesPlay AI — SQL Analytics Platform (Beta)</title>
+    <!-- One bundle serves every brand, so nothing here may name one. The real
+         title and favicon are set at runtime by applyBrandChrome once GET
+         /brand resolves; this is only what shows before that lands. -->
+    <title>AI Analytics</title>
     <meta name="description" content="Connect your MySQL database and get AI-powered analytics, forecasting, anomaly detection and professional reports." />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />

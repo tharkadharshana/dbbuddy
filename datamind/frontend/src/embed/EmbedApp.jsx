@@ -565,6 +565,7 @@ function EmbedApp() {
         cardBrand={subAccess?.cardBrand}
         cardLast4={subAccess?.cardLast4}
         cardExpired={subAccess?.cardExpired}
+        cardExpiry={subAccess?.cardExpiry}
         availableCreditText={subAccess?.availableCreditText}
         showPriceText={subAccess?.showPriceText}
         initialExpanded={plansStartExpanded}

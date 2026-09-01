@@ -10,12 +10,18 @@ Build a deployable patch zip containing:
   <patch_name>/BUILD_INFO.json    - version / commit / branch / build time.
   <patch_name>/MANIFEST.sha256    - sha256 of every packaged file.
 
+Versioning: ./VERSION is the last version BUILT. Every run bumps its patch
+component (3.1.0 -> 3.1.1) and writes it back, so two builds never share a
+version. --version pins an exact one (and still writes it back); --no-bump
+rebuilds the current VERSION untouched.
+
 Usage:
-  python scripts/create_deploy_patch.py                        # version from ./VERSION
-  python scripts/create_deploy_patch.py --version 3.1.0
+  python scripts/create_deploy_patch.py                        # bump patch, build
+  python scripts/create_deploy_patch.py --version 3.2.0        # pin, e.g. a minor release
+  python scripts/create_deploy_patch.py --no-bump              # rebuild same version
   python scripts/create_deploy_patch.py --no-build --no-tag    # CI: build + tag done already
 
-Output: archives/<patch-name>.zip
+Output: archives/<patch-name>-<UTC yyyymmdd-hhmm>.zip
 """
 import argparse
 import hashlib
@@ -354,6 +360,35 @@ def read_version():
     return VERSION_FILE.read_text(encoding="utf-8").strip()
 
 
+SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+
+
+def bump_patch(version: str) -> str:
+    """3.1.0 -> 3.1.1. Refuse anything that is not a bare three-part semver rather
+    than guessing at what to increment in e.g. '3.1.0-rc1'."""
+    m = SEMVER_RE.match(version)
+    if not m:
+        sys.exit(
+            f"ERROR: VERSION is '{version}', which is not a plain X.Y.Z semver.\n"
+            "       Pass --version explicitly, or fix ./VERSION."
+        )
+    major, minor, patch = (int(g) for g in m.groups())
+    return f"{major}.{minor}.{patch + 1}"
+
+
+def write_version(version: str):
+    """Persist the version just built, so the next run bumps from it."""
+    write_text(VERSION_FILE, version + "\n")
+
+
+def resolve_version(args) -> str:
+    """--version pins, --no-bump reuses, otherwise bump VERSION's patch component."""
+    if args.version:
+        return args.version
+    current = read_version()
+    return current if args.no_bump else bump_patch(current)
+
+
 def check_clean_tree():
     """Local builds only: a dirty tree or a non-main branch means the zip won't match the tag."""
     if _git("status", "--porcelain"):
@@ -383,7 +418,9 @@ def tag_release(version: str):
 def main():
     ap = argparse.ArgumentParser(description="Build a deployable patch zip.")
     ap.add_argument("name", nargs="?", help="patch name (default: datamind-v<version>)")
-    ap.add_argument("--version", help="release version (default: contents of ./VERSION)")
+    ap.add_argument("--version", help="pin an exact release version (default: ./VERSION with its patch bumped)")
+    ap.add_argument("--no-bump", action="store_true",
+                    help="rebuild ./VERSION as-is instead of bumping its patch component")
     ap.add_argument("--no-build", action="store_true",
                     help="reuse the existing frontend dist/ instead of running npm run build")
     ap.add_argument("--frontend-env", help="vite --mode for the frontend build, e.g. front.dev -> .env.front.dev")
@@ -391,8 +428,13 @@ def main():
                     help="don't create a git tag, and skip the clean-tree/branch guards (CI)")
     args = ap.parse_args()
 
-    version = args.version or read_version()
+    version = resolve_version(args)
+    # Stamped in UTC, matching BUILD_INFO's built_at. The stamp is on the zip
+    # only, not the directory inside it -- the unpacked tree keeps a stable
+    # name so deploy steps do not have to know the build time.
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
     patch_name = args.name or f"datamind-v{version}"
+    zip_stem = f"{patch_name}-{stamp}"
     patch_dir = ARCHIVES_DIR / patch_name
 
     if not args.no_tag:
@@ -415,11 +457,17 @@ def main():
     print("==> Zipping...")
     ARCHIVES_DIR.mkdir(parents=True, exist_ok=True)
     zip_path = shutil.make_archive(
-        str(ARCHIVES_DIR / patch_name), "zip", root_dir=ARCHIVES_DIR, base_dir=patch_name
+        str(ARCHIVES_DIR / zip_stem), "zip", root_dir=ARCHIVES_DIR, base_dir=patch_name
     )
     # Keep PATCH_NOTES.txt outside the zip too - CI uses it as the release body.
     shutil.copy2(patch_dir / "PATCH_NOTES.txt", ARCHIVES_DIR / "PATCH_NOTES.txt")
     shutil.rmtree(patch_dir)
+
+    # Only after the zip exists: a build that dies half way must not burn a
+    # version number that was never shipped.
+    if not args.version and not args.no_bump:
+        write_version(version)
+        print(f"==> VERSION -> {version} (commit it; the tag below predates the bump)")
 
     if not args.no_tag:
         tag_release(version)

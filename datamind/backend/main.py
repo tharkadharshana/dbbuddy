@@ -934,6 +934,25 @@ def _brand_from_host(request: Request) -> dict:
     return partner
 
 
+@v1.get("/brand")
+@_limiter.limit(RL_READ)
+def public_brand(request: Request):
+    """This deployment's brand, resolved from Host. No auth: the login screen
+    needs its own logo and name before anyone has an account.
+
+    Returns the same shape the widget gets from /embed/context, so the app and
+    the widget resolve a brand through one code path. Serves only what is
+    already visible on screen -- never allowed_origins or api_config.
+    """
+    from embed import _brand, resolve_partner_by_host
+    partner = resolve_partner_by_host(request.headers.get("host"))
+    if not partner:
+        # Not an error: a dev host or an IP has no brand row, and the app must
+        # still render. Neutral values, never a fallback naming one brand.
+        return {"branding": None}
+    return {"branding": _brand(partner)}
+
+
 @v1.post("/auth/register")
 @_limiter.limit(RL_AUTH)
 def register(request: Request, req: RegisterRequest):

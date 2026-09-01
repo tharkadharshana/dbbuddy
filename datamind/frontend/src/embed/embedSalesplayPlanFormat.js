@@ -11,19 +11,19 @@ export const TIER_FEATURES = {
     { text: 'Ask Your Data (AI)',      ok: true  },
     { text: 'All Analytics & Reports', ok: true  },
     { text: 'Forecasting & Anomalies', ok: false },
-    { text: 'Priority Support',        ok: false },
+    { text: 'Reports and charts downloadable', ok: false },
   ],
   1: [
     { text: 'Ask Your Data (AI)',      ok: true  },
     { text: 'All Analytics & Reports', ok: true  },
     { text: 'Forecasting & Anomalies', ok: true  },
-    { text: 'Priority Support',        ok: false },
+    { text: 'Reports and charts downloadable', ok: false },
   ],
   2: [
     { text: 'Ask Your Data (AI)',      ok: true  },
     { text: 'All Analytics & Reports', ok: true  },
     { text: 'Forecasting & Anomalies', ok: true  },
-    { text: 'Priority Support',        ok: true  },
+    { text: 'Reports and charts downloadable', ok: true  },
   ],
 }
 

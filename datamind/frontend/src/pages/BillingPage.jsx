@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { fetchBillingPlans, fetchSubscription, fetchBillingUsage, subscribeToPlan, purchaseAddon, startTrial } from '../utils/api'
-import { APP_NAME } from '../appName'
+import { useBrand } from '../brand'
 import { Spinner } from '../components/UI'
 import { fmtTok } from '../formatTokens'
 
@@ -103,6 +103,7 @@ function ConfirmModal({ plan, onConfirm, onCancel, loading }) {
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function BillingPage({ onSubChange }) {
+  const APP_NAME_ = useBrand().productName
   const [tab, setTab]             = useState('plans')
   const [plans, setPlans]         = useState([])
   const [sub, setSub]             = useState(null)
@@ -139,7 +140,7 @@ export default function BillingPage({ onSubChange }) {
       await startTrial()
       await loadAll()
       onSubChange?.()
-      setToast({ type: 'success', msg: `You're in. Enjoy ${APP_NAME}.` })
+      setToast({ type: 'success', msg: `You're in. Enjoy ${APP_NAME_}.` })
     } catch (e) {
       setToast({ type: 'error', msg: e?.response?.data?.detail || 'Could not start your trial. Please try again.' })
     }
@@ -285,7 +286,7 @@ export default function BillingPage({ onSubChange }) {
               ) : (
                 <>
                   <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.7, marginBottom: 16 }}>
-                    Everything is free right now. Start using {APP_NAME} — no card, no plan to pick.
+                    Everything is free right now. Start using {APP_NAME_} — no card, no plan to pick.
                   </div>
                   <button
                     onClick={handleStartTrial}
@@ -296,7 +297,7 @@ export default function BillingPage({ onSubChange }) {
                       cursor: trialLoading ? 'default' : 'pointer', opacity: trialLoading ? 0.6 : 1,
                     }}
                   >
-                    {trialLoading ? 'Starting…' : `Try ${APP_NAME}`}
+                    {trialLoading ? 'Starting…' : `Try ${APP_NAME_}`}
                   </button>
                 </>
               )}
@@ -411,7 +412,7 @@ export default function BillingPage({ onSubChange }) {
           {(!sub || sub.status === 'no_subscription') && (
             <div style={{ padding: 20, marginBottom: 20, textAlign: 'center', color: 'var(--text3)', background: 'var(--bg1)', border: '1px solid var(--border)', borderRadius: 10 }}>
               {subscriptionFree
-                ? `No subscription yet. Switch to Plans and start using ${APP_NAME} — it's free right now.`
+                ? `No subscription yet. Switch to Plans and start using ${APP_NAME_} — it's free right now.`
                 : 'No active subscription. Switch to Plans to get started.'}
             </div>
           )}

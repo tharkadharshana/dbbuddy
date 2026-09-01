@@ -136,7 +136,7 @@ function Spin({ color = '#fff' }) {
   return <div style={{ width:13, height:13, border:`2px solid ${color === '#fff' ? 'rgba(255,255,255,0.3)' : 'rgba(0,88,190,0.25)'}`, borderTopColor:color, borderRadius:'50%', animation:'spin 0.7s linear infinite' }} />
 }
 
-export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, trialAvailable, blockReason, isPaidQuotaBlocked, trialDays = 14, billingDetailsAdded, cardAddUrl, cardBrand, cardLast4, cardExpired, availableCreditText, showPriceText, initialExpanded = false, autoPick = null, onTrialSelected, onSubscribed, onRefreshAccess, onClose }) {
+export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, trialAvailable, blockReason, isPaidQuotaBlocked, trialDays = 14, billingDetailsAdded, cardAddUrl, cardBrand, cardLast4, cardExpired, cardExpiry, availableCreditText, showPriceText, initialExpanded = false, autoPick = null, onTrialSelected, onSubscribed, onRefreshAccess, onClose }) {
   const [selectedPlan, setSelectedPlan] = useState(null) // { ...plan, _tierIndex } under review on the receipt screen
   const [checking, setChecking] = useState(false) // re-checking access after returning from card_add_url (manual "Continue")
   const [awaitingCard, setAwaitingCard] = useState(false) // polling for a card add — grays out the screen
@@ -567,9 +567,32 @@ export default function EmbedSalesplayPlans({ context, partnerKey, aat, plans, t
               <span style={{ color: 'rgba(255,255,255,0.55)' }}>••••</span>
               <span>{cardLast4 || '••••'}</span>
             </div>
-            <div style={{ fontSize: 11, color: cardExpired ? '#FFC9C4' : 'rgba(255,255,255,0.7)' }}>
-              {cardExpired ? `This card has expired — update it in ${brand.companyName}` : (cardLast4 ? `On file with ${brand.companyName}` : 'On file')}
+            {/* Expiry in the standard MM/YY slot a real card carries. Salesplay
+                only returns is_expired, not exp_month/exp_year — until they add
+                those, the value stays masked and only the expired state is real.
+                CVV is masked permanently, not pending an API field: it is never
+                retained past authorization (PCI-DSS), so no saved-card view can
+                ever show one. The dots are there to complete the card shape.
+                ponytail: swap ••/•• for the real pair when the API carries it. */}
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 22 }}>
+              <div>
+                <div style={{ fontSize: 8, fontWeight: 700, letterSpacing: '.08em', color: 'rgba(255,255,255,0.55)', marginBottom: 2 }}>EXPIRES</div>
+                <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '.06em', color: cardExpired ? '#FFC9C4' : '#fff' }}>
+                  {cardExpiry || '••/••'}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 8, fontWeight: 700, letterSpacing: '.08em', color: 'rgba(255,255,255,0.55)', marginBottom: 2 }}>CVV</div>
+                <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: '.06em', color: 'rgba(255,255,255,0.55)' }}>
+                  •••
+                </div>
+              </div>
             </div>
+            {cardExpired && (
+              <div style={{ fontSize: 11, color: '#FFC9C4', marginTop: 8 }}>
+                This card has expired — update it in {brand.companyName}
+              </div>
+            )}
           </div>
 
           <div style={{ background: SP.card, borderRadius: 14, boxShadow: SP.shadow, padding: 16, marginBottom: 16 }}>
