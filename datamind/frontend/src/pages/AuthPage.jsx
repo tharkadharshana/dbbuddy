@@ -31,36 +31,36 @@ export default function AuthPage({ onAuth }) {
     }
   }
 
-  const inp = { width:'100%', padding:'11px 14px', borderRadius:10, fontSize:14, background:'rgba(255,255,255,0.06)', border:'1px solid rgba(255,255,255,0.1)', color:'#f0f1fa', outline:'none' }
+  const inp = { width:'100%', padding:'11px 14px', borderRadius:10, fontSize:14, background:'var(--bg2)', border:'1px solid var(--border2)', color:'var(--text)', outline:'none' }
 
   return (
-    <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', background:'#09090f', position:'relative', overflow:'hidden' }}>
+    <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', background:'var(--bg)', position:'relative', overflow:'hidden' }}>
 
       {/* Animated glow blobs */}
-      <div style={{ position:'absolute', width:600, height:600, borderRadius:'50%', background:'radial-gradient(circle, rgba(79,142,247,0.12) 0%, transparent 70%)', top:'-10%', left:'-10%', pointerEvents:'none' }} />
-      <div style={{ position:'absolute', width:500, height:500, borderRadius:'50%', background:'radial-gradient(circle, rgba(167,139,250,0.10) 0%, transparent 70%)', bottom:'-5%', right:'-5%', pointerEvents:'none' }} />
+      <div style={{ position:'absolute', width:600, height:600, borderRadius:'50%', background:'radial-gradient(circle, var(--blue-dim) 0%, transparent 70%)', top:'-10%', left:'-10%', pointerEvents:'none' }} />
+      <div style={{ position:'absolute', width:500, height:500, borderRadius:'50%', background:'radial-gradient(circle, var(--purple-dim) 0%, transparent 70%)', bottom:'-5%', right:'-5%', pointerEvents:'none' }} />
 
       <div style={{ width:'100%', maxWidth:420, margin:'0 16px', animation:'fadeUp .4s ease both' }}>
 
         {/* Logo */}
         <div style={{ textAlign:'center', marginBottom:32 }}>
-          {/* The wordmark already reads "SalesPlay AI" — printing APP_NAME
+          {/* The wordmark already carries the product name — printing it
               beneath it said the same thing twice. */}
           <Logo size={44} style={{ marginBottom:14 }} />
-          <div style={{ fontSize:13, color:'#5a5f7d' }}>Transform Data into Actionable Intelligence</div>
+          <div style={{ fontSize:13, color:'var(--text3)' }}>Transform Data into Actionable Intelligence</div>
         </div>
 
         {/* Card */}
-        <div style={{ background:'#0f1018', border:'1px solid rgba(255,255,255,0.07)', borderRadius:18, padding:'28px 28px 24px', boxShadow:'0 24px 64px rgba(0,0,0,0.5)' }}>
+        <div style={{ background:'var(--bg1)', border:'1px solid var(--border)', borderRadius:18, padding:'28px 28px 24px', boxShadow:'0 24px 64px var(--border2)' }}>
 
           {/* Tab toggle */}
-          <div style={{ display:'flex', background:'rgba(255,255,255,0.04)', borderRadius:10, padding:4, marginBottom:24 }}>
+          <div style={{ display:'flex', background:'var(--bg2)', borderRadius:10, padding:4, marginBottom:24 }}>
             {['login','register'].map(m => (
               <button key={m} onClick={() => { setMode(m); setError('') }} style={{
                 flex:1, padding:'8px 0', borderRadius:7, fontSize:13, fontWeight:500,
-                background: mode===m ? 'rgba(79,142,247,0.2)' : 'transparent',
-                color: mode===m ? '#4f8ef7' : '#5a5f7d',
-                border: mode===m ? '1px solid rgba(79,142,247,0.3)' : '1px solid transparent',
+                background: mode===m ? 'var(--blue-dim)' : 'transparent',
+                color: mode===m ? 'var(--blue)' : 'var(--text3)',
+                border: mode===m ? '1px solid var(--blue-glow)' : '1px solid transparent',
                 cursor:'pointer', transition:'all .15s',
                 textTransform:'capitalize'
               }}>{m === 'login' ? 'Sign In' : 'Create Account'}</button>
@@ -70,30 +70,30 @@ export default function AuthPage({ onAuth }) {
           <form onSubmit={handleSubmit} style={{ display:'flex', flexDirection:'column', gap:14 }}>
             {mode === 'register' && (
               <div>
-                <label style={{ fontSize:12, color:'#5a5f7d', display:'block', marginBottom:6, fontWeight:500 }}>Full Name</label>
+                <label style={{ fontSize:12, color:'var(--text3)', display:'block', marginBottom:6, fontWeight:500 }}>Full Name</label>
                 <input value={form.name} onChange={e=>set('name',e.target.value)} placeholder="Jane Smith" required style={inp} />
               </div>
             )}
             <div>
-              <label style={{ fontSize:12, color:'#5a5f7d', display:'block', marginBottom:6, fontWeight:500 }}>Email Address</label>
+              <label style={{ fontSize:12, color:'var(--text3)', display:'block', marginBottom:6, fontWeight:500 }}>Email Address</label>
               <input type="email" value={form.email} onChange={e=>set('email',e.target.value)} placeholder="you@company.com" required style={inp} />
             </div>
             <div>
-              <label style={{ fontSize:12, color:'#5a5f7d', display:'block', marginBottom:6, fontWeight:500 }}>Password</label>
+              <label style={{ fontSize:12, color:'var(--text3)', display:'block', marginBottom:6, fontWeight:500 }}>Password</label>
               <input type="password" value={form.password} onChange={e=>set('password',e.target.value)} placeholder={mode==='register' ? 'Min 6 characters' : '••••••••'} required minLength={6} style={inp} />
             </div>
 
             {error && (
-              <div style={{ background:'rgba(240,80,80,0.1)', border:'1px solid rgba(240,80,80,0.2)', borderRadius:8, padding:'10px 12px', fontSize:12, color:'#f05050' }}>
+              <div style={{ background:'var(--red-dim)', border:'1px solid var(--red-dim)', borderRadius:8, padding:'10px 12px', fontSize:12, color:'var(--red)' }}>
                 ⚠ {error}
               </div>
             )}
 
             <button type="submit" disabled={loading} style={{
               width:'100%', padding:'12px', borderRadius:10, fontSize:14, fontWeight:600,
-              background: loading ? 'rgba(79,142,247,0.5)' : 'linear-gradient(135deg,#4f8ef7,#7c6af7)',
+              background: loading ? 'var(--blue-dim)' : 'var(--blue)',
               color:'#fff', border:'none', cursor: loading ? 'not-allowed' : 'pointer',
-              marginTop:4, boxShadow: loading ? 'none' : '0 4px 16px rgba(79,142,247,0.35)',
+              marginTop:4, boxShadow: loading ? 'none' : '0 4px 16px var(--blue-glow)',
               transition:'all .15s', display:'flex', alignItems:'center', justifyContent:'center', gap:8
             }}>
               {loading ? (
@@ -103,20 +103,20 @@ export default function AuthPage({ onAuth }) {
           </form>
 
           {mode === 'login' && (
-            <div style={{ textAlign:'center', marginTop:16, fontSize:12, color:'#5a5f7d' }}>
+            <div style={{ textAlign:'center', marginTop:16, fontSize:12, color:'var(--text3)' }}>
               No account?{' '}
-              <span onClick={() => { setMode('register'); setError('') }} style={{ color:'#4f8ef7', cursor:'pointer', fontWeight:500 }}>Create one for free</span>
+              <span onClick={() => { setMode('register'); setError('') }} style={{ color:'var(--blue)', cursor:'pointer', fontWeight:500 }}>Create one for free</span>
             </div>
           )}
           {mode === 'register' && (
-            <div style={{ textAlign:'center', marginTop:16, fontSize:12, color:'#5a5f7d' }}>
+            <div style={{ textAlign:'center', marginTop:16, fontSize:12, color:'var(--text3)' }}>
               Already have an account?{' '}
-              <span onClick={() => { setMode('login'); setError('') }} style={{ color:'#4f8ef7', cursor:'pointer', fontWeight:500 }}>Sign in</span>
+              <span onClick={() => { setMode('login'); setError('') }} style={{ color:'var(--blue)', cursor:'pointer', fontWeight:500 }}>Sign in</span>
             </div>
           )}
         </div>
 
-        <div style={{ textAlign:'center', marginTop:20, fontSize:11, color:'#2a2e42' }}>
+        <div style={{ textAlign:'center', marginTop:20, fontSize:11, color:'var(--text3)' }}>
           Your data stays in your own database. We never store it.
         </div>
       </div>
