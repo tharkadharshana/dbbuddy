@@ -438,6 +438,12 @@ def _base_query_response(**kwargs) -> dict:
         base["sql"] = kwargs["sql"]
     if "multi_results" in kwargs:
         base["multi_results"] = kwargs["multi_results"]
+    # Present only when the merchant asked for a file this turn (agent flow's
+    # export_data tool). Carries the rows once so the browser can build the
+    # file; nothing is stored server-side and it is not persisted with the
+    # conversation, so a reloaded thread has no download to offer.
+    if kwargs.get("export"):
+        base["export"] = kwargs["export"]
     # D3 exit guard — the single place every outgoing answer passes through, so
     # no branch can leak internal table/SQL/tool/report names to a merchant.
     # (SSE streams tokens before this payload exists; those are covered in S5
@@ -1933,7 +1939,7 @@ def _run_agent_flow(*, req, user, conn, schemas, fkeys, steps, conv_id, llm,
     return _base_query_response(
         success=True, type="data", steps=steps, analysis=answer_text,
         conversation_id=conv_id, data_as_of=last_sync_at, show_data=False,
-        message_id=msg_id, agent_answer=True,
+        message_id=msg_id, agent_answer=True, export=result.export,
     )
 
 
