@@ -14,7 +14,7 @@ const LABELS = { excel: 'Download Excel', csv: 'Download CSV', chart: 'Download 
 // format-mismatch warning if an XML workbook arrives named .xlsx.
 const EXT = { excel: 'xls', csv: 'csv', chart: 'png' }
 
-export default function DownloadButton({ payload, chartRef, question, theme }) {
+export default function DownloadButton({ payload, chartRef, question, theme, brandName }) {
   const [busy, setBusy] = useState(false)
   const [failed, setFailed] = useState(false)
   if (!payload?.data?.length) return null
@@ -24,7 +24,13 @@ export default function DownloadButton({ payload, chartRef, question, theme }) {
   // rather than offering a button that can't produce anything.
   const svg = chartRef?.current?.querySelector('svg')
   const format = payload.format === 'chart' && !svg ? 'excel' : (payload.format || 'excel')
-  const name = `datamind-${slugify(question)}-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.${EXT[format]}`
+  // The file carries the host's brand, never ours: one build serves every
+  // partner, so a hardcoded name would put our product in a whitelabel's
+  // downloads folder. Falls back to the document title, which
+  // applyBrandChrome has already set to the brand's own product name.
+  const brand = slugify(brandName || document.title, 'report')
+  const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+  const name = `${brand}-${slugify(question, 'data')}-${stamp}.${EXT[format]}`
 
   const run = async () => {
     setBusy(true); setFailed(false)

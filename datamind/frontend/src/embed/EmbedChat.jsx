@@ -236,7 +236,8 @@ function Message({ msg, theme, onVote, brand, question }) {
                 export_data tool). Outside the show_data block on purpose: the
                 agent flow sets show_data=false for every answer. */}
             <DownloadButton payload={msg.data?.export} chartRef={chartRef}
-                            question={question} theme={theme} />
+                            question={question} theme={theme}
+                            brandName={brand?.productName} />
             {msg.data?.message_id != null && (
               <VoteButtons vote={msg.vote} onVote={v => onVote(msg.vote === v ? null : v)} />
             )}
