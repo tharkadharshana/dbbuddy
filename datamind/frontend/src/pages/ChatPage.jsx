@@ -5,6 +5,7 @@ import { Spinner, UsageMeter } from '../components/UI'
 import Logo from '../components/Logo'
 import Markdown from '../components/Markdown'
 import ResultChart from '../components/ResultChart'
+import DownloadButton from '../components/DownloadButton'
 import { formatCurrency, formatNumber, isMoneyColumn, summarySuffix } from '../utils/locale'
 
 
@@ -120,8 +121,9 @@ function VoteButtons({ vote, onVote }) {
   )
 }
 
-function Message({ msg, llm, onVote }) {
+function Message({ msg, llm, onVote, question }) {
   const [showSQL, setShowSQL] = useState(false)
+  const chartRef = useRef(null)
   const isUser = msg.role === 'user'
 
   if (isUser) return (
@@ -193,11 +195,15 @@ function Message({ msg, llm, onVote }) {
                 )}
                 */}
                 {msg.data.data?.length > 0 && <>
-                  <ResultChart columns={msg.data.columns} data={msg.data.data} />
+                  <ResultChart columns={msg.data.columns} data={msg.data.data} innerRef={chartRef} />
                   <ResultTable columns={msg.data.columns} data={msg.data.data} rowCount={msg.data.row_count} moneyCols={msg.data.money_cols} />
                 </>}
               </>
             )}
+            {/* Only present when the merchant asked for a file (agent's
+                export_data tool). Outside the show_data block on purpose: the
+                agent flow sets show_data=false for every answer. */}
+            <DownloadButton payload={msg.data?.export} chartRef={chartRef} question={question} />
             {msg.data?.message_id != null && (
               <VoteButtons vote={msg.vote} onVote={v => onVote(msg.vote === v ? null : v)} />
             )}
@@ -427,7 +433,9 @@ export default function ChatPage({
           </div>
         ) : (
           <div style={{ maxWidth:800, margin:'0 auto', padding:'0 24px' }}>
-            {messages.map(msg => <Message key={msg.id} msg={msg} llm={llm} onVote={v => handleVote(msg, v)} />)}
+            {messages.map((msg, i) => <Message key={msg.id} msg={msg} llm={llm}
+              question={messages[i - 1]?.role === 'user' ? messages[i - 1].content : ''}
+              onVote={v => handleVote(msg, v)} />)}
             <div ref={bottomRef} />
           </div>
         )}

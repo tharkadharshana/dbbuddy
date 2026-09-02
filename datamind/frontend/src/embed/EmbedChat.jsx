@@ -18,6 +18,7 @@ import BrandLogo from './BrandLogo'
 import BetaBadge from '../components/BetaBadge'
 import Markdown from '../components/Markdown'
 import ResultChart from '../components/ResultChart'
+import DownloadButton from '../components/DownloadButton'
 import * as storage from './embedStorage'
 
 // Icons stay here; the questions come from the brand row, so a partner can
@@ -171,7 +172,8 @@ function VoteButtons({ vote, onVote }) {
 }
 
 // ── Message bubble ────────────────────────────────────────────────────────────
-function Message({ msg, theme, onVote, brand }) {
+function Message({ msg, theme, onVote, brand, question }) {
+  const chartRef = useRef(null)
   if (msg.role === 'user') return (
     <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:14 }}>
       <div style={{ maxWidth:'80%', background:'var(--blue)', color:'#fff', borderRadius:'14px 14px 4px 14px', padding:'9px 13px', fontSize:13, lineHeight:1.5 }}>
@@ -226,10 +228,15 @@ function Message({ msg, theme, onVote, brand }) {
             )}
             {msg.data?.data?.length > 0 && msg.data?.show_data !== false && (
               <>
-                <ResultChart columns={msg.data.columns} data={msg.data.data} theme={theme} />
+                <ResultChart columns={msg.data.columns} data={msg.data.data} theme={theme} innerRef={chartRef} />
                 <ResultTable columns={msg.data.columns} data={msg.data.data} rowCount={msg.data.row_count} moneyCols={msg.data.money_cols} />
               </>
             )}
+            {/* Only present when the merchant asked for a file (agent's
+                export_data tool). Outside the show_data block on purpose: the
+                agent flow sets show_data=false for every answer. */}
+            <DownloadButton payload={msg.data?.export} chartRef={chartRef}
+                            question={question} theme={theme} />
             {msg.data?.message_id != null && (
               <VoteButtons vote={msg.vote} onVote={v => onVote(msg.vote === v ? null : v)} />
             )}
@@ -695,7 +702,9 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, on
           </div>
         ) : (
           <div style={{ padding: isNarrow ? '0 10px' : '0 14px' }}>
-            {messages.map(msg => <Message key={msg.id} msg={msg} theme={theme} brand={brand} onVote={v => handleVote(msg, v)} />)}
+            {messages.map((msg, i) => <Message key={msg.id} msg={msg} theme={theme} brand={brand}
+              question={messages[i - 1]?.role === 'user' ? messages[i - 1].content : ''}
+              onVote={v => handleVote(msg, v)} />)}
             <div ref={bottomRef} />
           </div>
         )}
