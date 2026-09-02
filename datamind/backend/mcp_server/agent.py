@@ -65,6 +65,7 @@ _TOOL_LABELS = {
     "get_report_detail": "Gathering the details",
     "forecast": "Projecting what's ahead",
     "detect_anomalies": "Looking for unusual activity",
+    "export_data": "Preparing your file",
 }
 
 _SYSTEM_PROMPT = """You are a senior business and marketing analyst working for a retail merchant.
@@ -106,6 +107,12 @@ SQL, queries, tools, reports-as-systems, caches or databases. Say "your
 receipts", not the name of anything internal.
 """
 
+_NO_EXPORT_NOTE = (
+    "\nYou cannot send this merchant files on their plan. If they ask to "
+    "download or export the figures, or to be sent a spreadsheet, say plainly "
+    "that file downloads are available on a higher plan."
+)
+
 _NO_FORECAST_NOTE = (
     "\nYou have no forecasting tool on this merchant's plan. If they ask for a "
     "forecast or projection, say plainly that forecasting is available on a "
@@ -121,6 +128,8 @@ class AgentResult:
     tool_calls: List[str] = field(default_factory=list)
     sources: set = field(default_factory=set)
     attempts: int = 1
+    # Present only when the merchant asked for a file this turn.
+    export: Optional[dict] = None
 
 
 class AgentFailed(Exception):
@@ -134,7 +143,7 @@ class AgentFailed(Exception):
 
 def build_system_prompt(currency: str, shops: str, window_start,
                         timezone: str = "", can_forecast: bool = True,
-                        extra: str = "") -> str:
+                        can_export: bool = True, extra: str = "") -> str:
     prompt = _SYSTEM_PROMPT.format(
         today=date.today().isoformat(),
         tz=f" ({timezone})" if timezone and timezone != "UTC" else "",
@@ -145,6 +154,8 @@ def build_system_prompt(currency: str, shops: str, window_start,
     )
     if not can_forecast:
         prompt += _NO_FORECAST_NOTE
+    if not can_export:
+        prompt += _NO_EXPORT_NOTE
     if extra:
         prompt += "\n" + extra.strip()
     return prompt
@@ -201,6 +212,56 @@ def _register_ml_tools(mcp, rctx, entitlements: dict) -> None:
     _ = REPORTS  # registry import keeps report ids validated at build time
 
 
+_EXPORT_FORMATS = ("excel", "csv", "chart")
+
+
+def _register_export_tool(mcp, ctx: ToolContext, entitlements: dict) -> None:
+    """Plan-gated file export. Registered ONLY when the plan includes it, so an
+    unentitled merchant's model has no such tool and cannot be talked into one.
+
+    Deliberately separate from _register_ml_tools: export needs no report
+    context, so it must not inherit that function's `rctx is None` bail-out —
+    a SQL-only tenant can export just as well.
+
+    Nothing is written to disk and nothing is stored. The tool only marks the
+    rows the model has already pulled as requested for download; the browser
+    builds the actual file from the response and the merchant keeps it. There
+    is no re-download later — asking again re-runs the question."""
+    if not entitlements.get("download_export"):
+        return
+
+    @mcp.tool()
+    def export_data(format: str = "excel") -> dict:
+        """Give the merchant a downloadable file of the figures you just pulled.
+        `format` is "excel" for a spreadsheet, "csv" for a plain data file, or
+        "chart" for a picture of the chart. Call this ONLY when they ask to
+        download, export, save or be sent the numbers as a file — never on your
+        own initiative. Pull the figures first if you have not already. Returns
+        confirmation only; the file reaches them on its own, so just tell them
+        it is ready."""
+        last = ctx.last_result or {}
+        rows = last.get("data") or []
+        if not rows:
+            raise ValueError(
+                "There are no figures pulled up to send yet — get the numbers "
+                "first, then export them.")
+        fmt = (format or "excel").strip().lower()
+        if fmt not in _EXPORT_FORMATS:
+            fmt = "excel"
+        # Same ceiling the SQL flow applies to what it sends (main.py row_limit),
+        # so an export can never be larger than an on-screen result.
+        capped = rows[:ctx.row_limit] if ctx.row_limit else rows
+        ctx.export_request = {
+            "format": fmt,
+            "columns": last.get("columns") or list(capped[0].keys()),
+            "data": capped,
+        }
+        # The rows deliberately do NOT go back into the model's context — they
+        # are already in ctx, and re-serialising them into a tool message would
+        # cost the whole result set in tokens for no gain.
+        return {"ready": True, "format": fmt, "row_count": len(capped)}
+
+
 def build_agent_mcp(ctx: ToolContext, report_ctx=None, entitlements: dict = None):
     """The tool surface for one request. Report tools when the tenant has a
     synced profile, SQL tools always (the long-tail fallback), ML tools only
@@ -211,6 +272,7 @@ def build_agent_mcp(ctx: ToolContext, report_ctx=None, entitlements: dict = None
     else:
         mcp = build_business_mcp(ctx)
     _register_ml_tools(mcp, report_ctx, entitlements or {})
+    _register_export_tool(mcp, ctx, entitlements or {})
     return mcp
 
 
@@ -277,7 +339,7 @@ async def _run_once(question: str, mcp, system_prompt: str, history: list,
     last = ctx.last_result or {}
     return AgentResult(text=final_text, columns=last.get("columns") or [],
                        data=last.get("data") or [], tool_calls=called,
-                       sources=sources)
+                       sources=sources, export=ctx.export_request)
 
 
 def _json(value) -> str:
@@ -305,6 +367,7 @@ async def answer(question: str, ctx: ToolContext, llm: str, api_key: str,
     system_prompt = build_system_prompt(
         currency=currency, shops=shops, window_start=window_start,
         timezone=timezone, can_forecast=bool(entitlements.get("forecast")),
+        can_export=bool(entitlements.get("download_export")),
         extra=extra_prompt)
 
     last_error = None
@@ -319,4 +382,5 @@ async def answer(question: str, ctx: ToolContext, llm: str, api_key: str,
             log.warning("Agent attempt failed", attempt=attempt,
                         user=user_email, error=str(exc))
             ctx.last_result = None
+            ctx.export_request = None
     raise AgentFailed(str(last_error))
