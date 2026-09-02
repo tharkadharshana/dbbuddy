@@ -1861,7 +1861,7 @@ def _run_agent_flow(*, req, user, conn, schemas, fkeys, steps, conv_id, llm,
     # Starter merchant's model cannot see `forecast` at all, so there is nothing
     # to jailbreak and no capability list to keep in sync.
     entitlements = {}
-    for _feature in ("forecast", "anomaly_detection"):
+    for _feature in ("forecast", "anomaly_detection", "download_export"):
         try:
             entitlements[_feature] = bool(check_plan_feature(user["email"], _feature)[0])
         except Exception:

@@ -793,6 +793,7 @@ _PLAN_FEATURE_GATE: dict = {
     "external_api":      {STANDARD_PLAN},
     "partner_api":       {STANDARD_PLAN},
     "web_widget":        {STANDARD_PLAN},
+    "download_export":   {STANDARD_PLAN},
 }
 
 # Data-history window per plan: months to look back, and row fallback when no date column.
