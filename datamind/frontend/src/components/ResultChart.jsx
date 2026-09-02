@@ -17,7 +17,7 @@ const TT = { background: '#1c1e2e', border: '1px solid rgba(255,255,255,0.08)', 
 // ```chart block, so the model picks the form that fits what it's showing.
 const PIE_COLORS = ['#4f8cff', '#41c99e', '#f2a33c', '#e0607e', '#9a7cf5', '#4bc0d9']
 
-export default function ResultChart({ columns, data, theme, height = 240, kind }) {
+export default function ResultChart({ columns, data, theme, height = 240, kind, innerRef }) {
   if (!data?.length || !columns?.length) return null
   const numCols = columns.filter(c => typeof data[0]?.[c] === 'number')
   const strCols = columns.filter(c => typeof data[0]?.[c] === 'string')
@@ -53,7 +53,7 @@ export default function ResultChart({ columns, data, theme, height = 240, kind }
   }
 
   const wrap = inner => (
-    <div style={{ marginTop: 10, background: 'var(--bg2)', borderRadius: 8, padding: 10, border: '1px solid var(--border)', overflowX: 'auto', overflowY: 'hidden' }}>
+    <div ref={innerRef} style={{ marginTop: 10, background: 'var(--bg2)', borderRadius: 8, padding: 10, border: '1px solid var(--border)', overflowX: 'auto', overflowY: 'hidden' }}>
       {inner}
     </div>
   )
