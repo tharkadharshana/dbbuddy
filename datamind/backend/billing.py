@@ -796,6 +796,19 @@ _PLAN_FEATURE_GATE: dict = {
     "download_export":   {STANDARD_PLAN},
 }
 
+# Features a trial does NOT include, however good the plan behind it is. A trial
+# should show what the product does; these three are the ones worth paying for,
+# so they wait for an active subscription.
+#
+# Deliberately not every gated feature: partner_api, external_api and
+# web_widget are how a merchant is integrated at all, and cutting those off
+# mid-trial would break the integration rather than upsell it.
+_PAID_ONLY_FEATURES: frozenset = frozenset({
+    "download_export",
+    "forecast",
+    "anomaly_detection",
+})
+
 # Data-history window per plan: months to look back, and row fallback when no date column.
 # get_plan_history_limit() only ever produces a concrete cutoff_date, there's no "unlimited"
 # sentinel — UNLIMITED_HISTORY_MONTHS is the practical stand-in for "all historical data".
@@ -888,7 +901,7 @@ def check_plan_feature(user_email: str, feature: str) -> Tuple[bool, str]:
         conn = _get_conn()
         cur  = conn.cursor(dictionary=True)
         cur.execute("""
-            SELECT sp.name AS plan_name
+            SELECT sp.name AS plan_name, us.status
             FROM user_subscriptions us
             JOIN subscription_plans sp ON sp.id = us.plan_id
             WHERE us.user_email = %s AND us.status IN ('trial','active')
@@ -899,6 +912,10 @@ def check_plan_feature(user_email: str, feature: str) -> Tuple[bool, str]:
         if not row:
             _reset_billing_fail()
             return False, "No active subscription."
+        if row["status"] == "trial" and feature in _PAID_ONLY_FEATURES:
+            _reset_billing_fail()
+            return False, ("This is available once your subscription is active — "
+                           "it isn't included in the free trial.")
         plan_name   = row["plan_name"]
         allowed     = _load_billing_config()["plan_feature_gates"].get(feature)
         if allowed and plan_name not in allowed:
