@@ -31,6 +31,28 @@ export function downloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
+// Opens a self-contained page and asks the browser to print it, which is where
+// the merchant picks "Save as PDF". No PDF library and no headless browser: the
+// print engine every browser already ships produces a better document than
+// anything worth adding a dependency for.
+//
+// Unlike ReportsPage's version this does NOT inline document.styleSheets (the
+// page carries its own CSS) and does NOT close the window on a timer, which
+// races the print dialog and can cancel the job.
+export function printDocument(html) {
+  const win = window.open('', '_blank')
+  if (!win) return false          // popup blocked — caller surfaces it
+  win.document.write(html)
+  win.document.close()
+  win.focus()
+  // onload so images/fonts settle before the dialog; the fallback covers a
+  // document that is already complete by the time the handler is attached.
+  const go = () => { try { win.print() } catch { /* user can print manually */ } }
+  if (win.document.readyState === 'complete') setTimeout(go, 60)
+  else win.onload = go
+  return true
+}
+
 // Recharts writes fill="var(--blue)" / stroke="var(--green)" straight onto the
 // SVG nodes. A detached SVG has no CSS context, so those resolve to nothing and
 // the PNG comes out blank — every var() has to be substituted with the value
