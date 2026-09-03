@@ -55,7 +55,7 @@ export default function DownloadButton({ payload, chartRef, question, theme, bra
       } else if (format === 'document') {
         const html = buildDocumentHTML({
           document: payload.document, data, moneyCols: payload.money_cols,
-          brandName: brandLabel, accent: accentColor(),
+          accent: accentColor(),
         })
         if (!printDocument(html)) setFailed('blocked')
       } else {
