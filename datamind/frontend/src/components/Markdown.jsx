@@ -9,9 +9,9 @@ import ResultChart from './ResultChart'
 // (not emitted, and the riskiest surface), so none are produced. Shared by the
 // main app (ChatPage) and the embed widget (EmbedChat) so both render identically.
 
-const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+export const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
-function inline(text) {
+export function inline(text) {
   let t = esc(text)
   t = t.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')  // bold before italic
   t = t.replace(/\*(.+?)\*/g, '<em>$1</em>')
@@ -40,8 +40,10 @@ const _isTableRow = line => /^\s*\|.*\|\s*$/.test(line)
 const _isTableSep  = line => /^\s*\|?(\s*:?-+:?\s*\|)+\s*:?-+:?\s*\|?\s*$/.test(line)
 const _splitRow = line => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim())
 
-export default function Markdown({ text, style }) {
-  if (!text) return null
+// The block parser, split out of the component so the clipboard builder can
+// reuse it (see messageToHTML). One parser means a copied answer can never
+// disagree with the rendered one.
+export function parseBlocks(text) {
   const blocks = []
   let list = null                               // { type:'ul'|'ol', items:[] }
   const flush = () => { if (list) { blocks.push(list); list = null } }
@@ -100,6 +102,12 @@ export default function Markdown({ text, style }) {
     }
   }
   flush()
+  return blocks
+}
+
+export default function Markdown({ text, style }) {
+  if (!text) return null
+  const blocks = parseBlocks(text)
 
   return (
     <div style={style}>

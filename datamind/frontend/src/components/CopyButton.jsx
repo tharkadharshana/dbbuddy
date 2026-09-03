@@ -1,13 +1,20 @@
 import React, { useState } from 'react'
+import { parseBlocks, inline, esc } from './Markdown'
 
-// Copy an answer to the clipboard, as plain text a merchant can paste into
-// Slack, email or a doc. Lives in components/ so the app and every embed brand
-// share one copy, the way ResultChart and DownloadButton do.
+// Copy an answer to the clipboard. Lives in components/ so the app and every
+// embed brand share one copy, the way ResultChart and DownloadButton do.
+//
+// Two flavours go on the clipboard at once: text/html and text/plain. Word,
+// Outlook, Teams and Google Docs take the HTML and paste a real formatted
+// table; anything plain-text (a terminal, a code editor, Slack's composer)
+// takes the markdown. Writing only text/plain is what made a copied table
+// arrive as a wall of pipes.
 //
 // The partner iframe snippet ships allow="clipboard-write", so the async
 // clipboard API is available in the widget. The execCommand fallback covers
 // older browsers and any non-secure context, where navigator.clipboard is
-// undefined rather than merely failing.
+// undefined rather than merely failing -- that path can only carry plain text,
+// which is the correct degradation.
 
 function legacyCopy(text) {
   const ta = document.createElement('textarea')
@@ -22,17 +29,28 @@ function legacyCopy(text) {
   return ok
 }
 
-export async function copyText(text) {
+export async function copyRich(html, text) {
   if (!text) return false
+  // ClipboardItem is the only way to put two representations on the clipboard.
+  // Missing in older Safari/Firefox, where writeText still gets the markdown.
+  try {
+    if (html && navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
+      await navigator.clipboard.write([new ClipboardItem({
+        'text/html':  new Blob([html], { type: 'text/html' }),
+        'text/plain': new Blob([text], { type: 'text/plain' }),
+      })])
+      return true
+    }
+  } catch {
+    // Permission denied, an unsupported type, or a non-secure context -- fall
+    // through rather than reporting failure to the merchant.
+  }
   try {
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(text)
       return true
     }
-  } catch {
-    // Permission denied or a non-secure context — fall through and try the
-    // synchronous path rather than reporting failure to the merchant.
-  }
+  } catch { /* fall through to the synchronous path */ }
   return legacyCopy(text)
 }
 
@@ -64,6 +82,58 @@ export function messageToText(msg) {
   return parts.filter(Boolean).join('\n\n')
 }
 
+// The same text, as HTML a rich-text target will render. Markdown tables the
+// model wrote inside its prose become real <table>s here -- that is the case
+// the plain-text-only copy handled worst, since a pipe table pasted into
+// Outlook is just a wall of pipes.
+//
+// Reuses Markdown.jsx's own parser and inline formatter, so a pasted answer
+// cannot drift from the rendered one. Both escape before transforming, so
+// merchant data never becomes markup.
+//
+// Styles are inline attributes, not a stylesheet: pasted HTML arrives stripped
+// of anything a <style> block would have carried.
+const TD = 'padding:5px 9px;border:1px solid #d4dae3;'
+const TH = TD + 'background:#f1f4f8;font-weight:600;text-align:left;'
+
+function blocksToHTML(blocks) {
+  const out = []
+  for (const b of blocks) {
+    if (b.type === 'p') out.push(`<p>${inline(b.text)}</p>`)
+    else if (b.type === 'h') out.push(`<h${Math.min(b.level + 2, 6)}>${inline(b.text)}</h${Math.min(b.level + 2, 6)}>`)
+    else if (b.type === 'ul') out.push(`<ul>${b.items.map(i => `<li>${inline(i)}</li>`).join('')}</ul>`)
+    else if (b.type === 'ol') out.push(`<ol>${b.items.map(i => `<li>${inline(i)}</li>`).join('')}</ol>`)
+    else if (b.type === 'table') {
+      const head = b.header.map(c => `<th style="${TH}">${inline(c)}</th>`).join('')
+      const body = b.rows.map(r => `<tr>${r.map(c => `<td style="${TD}">${inline(c)}</td>`).join('')}</tr>`).join('')
+      out.push(`<table style="border-collapse:collapse;"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`)
+    }
+    // 'chart' blocks are a rendered picture, not text -- nothing to paste.
+  }
+  return out.join('\n')
+}
+
+function gridToHTML(columns, rows) {
+  if (!columns?.length || !rows?.length) return ''
+  const head = columns.map(c => `<th style="${TH}">${esc(String(c))}</th>`).join('')
+  const body = rows.map(r => `<tr>${columns.map(c =>
+    `<td style="${TD}">${esc(r[c] == null ? '' : String(r[c]))}</td>`).join('')}</tr>`).join('')
+  return `<table style="border-collapse:collapse;"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`
+}
+
+export function messageToHTML(msg) {
+  const parts = []
+  if (msg?.analysis) parts.push(blocksToHTML(parseBlocks(String(msg.analysis))))
+  if (msg?.content && msg?.data?.show_data !== false)
+    parts.push(blocksToHTML(parseBlocks(String(msg.content))))
+  const d = msg?.data
+  if (d?.show_data !== false && d?.data?.length) {
+    const grid = gridToHTML(d.columns, d.data)
+    if (grid) parts.push(grid)
+  }
+  return parts.filter(Boolean).join('\n')
+}
+
 export default function CopyButton({ msg, title = 'Copy answer' }) {
   const [copied, setCopied] = useState(false)
   const [failed, setFailed] = useState(false)
@@ -72,7 +142,7 @@ export default function CopyButton({ msg, title = 'Copy answer' }) {
   if (!text) return null
 
   const onClick = async () => {
-    const ok = await copyText(text)
+    const ok = await copyRich(messageToHTML(msg), text)
     setCopied(ok); setFailed(!ok)
     setTimeout(() => { setCopied(false); setFailed(false) }, 1600)
   }
