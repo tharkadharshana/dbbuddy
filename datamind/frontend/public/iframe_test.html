@@ -22,12 +22,13 @@
     builds the iframe URL with &aat=TOKEN. This test page simulates that by letting
     you paste the token manually (since we can't read Salesplay's cookie from localhost).
 
-    In production on predev5backoffice.nvision.lk, the script reads the cookie automatically.
+    In production the script reads the cookie automatically. Locally, take the token
+    from whichever backoffice this backend points at (SALESPLAY_EMBED_PROXY_BASE in .env).
   -->
   <div id="aat-form">
     <label style="font-size:13px; color:#555; font-weight:600;">
       Paste your <code>app_access_token</code> from Salesplay backoffice
-      (DevTools → Application → Cookies → predev5backoffice.nvision.lk → app_access_token)
+      (DevTools → Application → Cookies → predev2backoffice.nvision.lk → app_access_token)
     </label><br><br>
     <input id="aat-input" type="text" placeholder="eyJ0eXAiOiJKV1Q..." />
     <button onclick="loadWidget()">Load Widget</button>
