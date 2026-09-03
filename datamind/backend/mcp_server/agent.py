@@ -131,6 +131,8 @@ class AgentResult:
     attempts: int = 1
     # Present only when the merchant asked for a file this turn.
     export: Optional[dict] = None
+    # Last SQL the agent executed (None for knowledge-only answers).
+    last_sql: Optional[str] = None
 
 
 class AgentFailed(Exception):
@@ -436,7 +438,8 @@ async def _run_once(question: str, mcp, system_prompt: str, history: list,
     last = ctx.last_result or {}
     return AgentResult(text=final_text, columns=last.get("columns") or [],
                        data=last.get("data") or [], tool_calls=called,
-                       sources=sources, export=ctx.export_request)
+                       sources=sources, export=ctx.export_request,
+                       last_sql=last.get("sql") or None)
 
 
 def _json(value) -> str:

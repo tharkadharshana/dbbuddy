@@ -1922,7 +1922,9 @@ def _run_agent_flow(*, req, user, conn, schemas, fkeys, steps, conv_id, llm,
         try:
             _conv.save_message(conv_id, "user", req.question)
             msg_id = _conv.save_message(conv_id, "assistant", answer_text,
-                                        analysis=answer_text)
+                                        analysis=answer_text,
+                                        sql_query=result.last_sql,
+                                        row_count=len(result.data))
             convo = _conv.get_conversation(conv_id, user["email"])
             msg_count = convo["message_count"] if convo else 0
             if msg_count == 2:
