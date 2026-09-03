@@ -60,3 +60,7 @@ scripts/.qa_instance_*.log
 # Local DB backups/dumps (large, sensitive — never commit)
 backups/
 *.sql
+
+# Local dev-server logs (uvicorn / vite), written at repo root
+backend.log
+frontend.log
