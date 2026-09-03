@@ -30,12 +30,12 @@ const spec = {
 const data = [
   { receipt_number: 'SP-10023', customer_name: 'A & Co <script>alert(1)</script>',
     product_name: 'Tea "large"', quantity: 2, price: 350.5, total_money: 701 },
-  { receipt_number: 'SP-10023', customer_name: 'A & Co',
+  { receipt_number: 'SP-10023', customer_name: 'A & Co <script>alert(1)</script>',
     product_name: 'Bun', quantity: 3, price: 100, total_money: 300 },
 ]
 const html = buildDocumentHTML({
   document: spec, data, moneyCols: ['price', 'total_money'],
-  brandName: 'SalesPlay AI', accent: '#0058BE',
+  accent: '#0058BE',
 })
 
 // Totals are computed from the rows, never supplied.
@@ -56,26 +56,50 @@ need(html.includes('&quot;'), 'quote not escaped')
 need(html.includes('display: table-header-group'), 'header will not repeat across pages')
 need(html.includes('@page'), 'no page margins set')
 
-// Brand belongs to the partner, never to us.
-need(html.includes('SalesPlay AI'), 'brand name missing')
-need(!html.toLowerCase().includes('datamind'), 'our product name leaked into the document')
-need(html.includes('#0058BE'), 'brand accent not applied')
+// No product or brand name anywhere on the page. The document is the
+// merchant's, handed to their own customers -- our name has no place on it,
+// and neither does the partner's.
+for (const word of ['salesplay', 'sellmo', 'datamind', 'nvision']) {
+  need(!html.toLowerCase().includes(word), `brand name "${word}" leaked into the document`)
+}
+need(html.includes('#0058BE'), 'accent colour not applied')
 
-// Provenance, and never a claim of being a tax document.
+// Provenance and the AI disclaimer, and never a claim of being a tax document.
 need(html.includes('Generated from your sales records'), 'provenance footer missing')
+need(html.includes('Content is AI generated and unverified.'), 'AI disclaimer missing')
+need(/\d{1,2}:\d{2}/.test(html), 'footer carries no time, only a date')
 need(!/tax\s*invoice/i.test(html), 'document presents itself as a tax invoice')
 
 // Header block is filled from the first row.
 need(html.includes('SP-10023'), 'header field not filled from row data')
 
 // A document without totals renders cleanly.
-const noTotals = buildDocumentHTML({ document: { ...spec, total_columns: [] }, data, brandName: 'Sellmo' })
+const noTotals = buildDocumentHTML({ document: { ...spec, total_columns: [] }, data })
 need(!/<tfoot>/.test(noTotals), 'tfoot rendered with no total columns')
-need(noTotals.includes('Sellmo'), 'second brand not applied')
 
 // A single-row document (one receipt line) still renders.
-const oneRow = buildDocumentHTML({ document: spec, data: [data[0]], moneyCols: ['total_money'], brandName: 'X' })
+const oneRow = buildDocumentHTML({ document: spec, data: [data[0]], moneyCols: ['total_money'] })
 need(oneRow.includes('701.00'), 'single-row total wrong')
+
+// A header field that varies across rows must be dropped rather than printed
+// as row one's value -- "Total spent: LKR 7,000" above a table totalling
+// 17,095 is worse than no field at all.
+const varying = buildDocumentHTML({
+  document: {
+    title: 'Summary',
+    header_fields: { 'Total spent': 'total_money', Customer: 'customer' },
+    line_columns: ['product_name', 'total_money'],
+    total_columns: ['total_money'],
+  },
+  data: [
+    { customer: 'A', product_name: 'Pizza', total_money: 7000 },
+    { customer: 'A', product_name: 'Bun', total_money: 10095.2 },
+  ],
+  moneyCols: ['total_money'],
+})
+need(!varying.includes('Total spent'), 'a varying column was printed as a header field')
+need(varying.includes('Customer'), 'a constant header field was wrongly dropped')
+need(varying.includes('17,095.20'), 'table total wrong')
 
 await server.close()
 console.log(failures ? `${failures} check(s) failed` : 'documentHtml self-check passed')

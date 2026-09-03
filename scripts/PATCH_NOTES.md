@@ -90,7 +90,24 @@ E. feat: agent answers now record what they ran
              count as successes. Trial-success numbers will rise — that
              is a data correction, not a regression.
 
-F. fix: UI corrections
+F. fix: the printable document carries no product branding
+   PROBLEM : The generated document showed the product name in its header
+             and again in its footer. A merchant hands this to their own
+             customer — our name, or the partner's, has no business on it.
+             Separately, a header field whose value differs per row was
+             printed as row one's value: a document showed "Total spent
+             LKR 7,000.00" above a table totalling LKR 17,095.20, because
+             it had taken the first line's figure and labelled it a total.
+   FIX     : No brand appears anywhere on the page. Filenames still carry
+             the brand — that is the merchant's own filing, not the
+             document. Header fields are now dropped unless their value is
+             identical on every row, so a varying column cannot be printed
+             under a label that reads as a total; the real total is still
+             the summed footer row. The footer gained a time alongside the
+             date, and the line "Content is AI generated and unverified."
+   ACTION  : None required.
+
+G. fix: UI corrections
    - The token meter ("1.36M / 2M") is hidden across the main app. Token
      consumption is an internal billing unit; a merchant has no use for
      it and no way to act on it. Commented rather than deleted, so

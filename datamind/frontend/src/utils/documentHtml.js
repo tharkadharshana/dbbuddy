@@ -55,8 +55,6 @@ const CSS = `
          gap: 24px; padding-bottom: 16px; border-bottom: 2px solid var(--accent); }
   .title { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; margin: 0; }
   .subtitle { font-size: 13px; color: #5b6472; margin-top: 3px; }
-  .brand { font-size: 14px; font-weight: 600; color: var(--accent); text-align: right;
-           white-space: nowrap; }
   .fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 8px 32px; margin: 20px 0 24px; }
   .field { display: flex; gap: 8px; font-size: 12.5px; }
@@ -81,16 +79,21 @@ const CSS = `
   }
 `
 
-export function buildDocumentHTML({ document: spec, data, moneyCols, brandName, accent }) {
+export function buildDocumentHTML({ document: spec, data, moneyCols, accent }) {
   const rows = data || []
   const lineCols = spec?.line_columns || []
   const totalCols = spec?.total_columns || []
 
-  // Header values come from the first row: the fields the model nominates for
-  // the header block (receipt number, date, customer) are constant across a
-  // document's line items by construction.
+  // Header values come from the first row, which only makes sense for a field
+  // that is the same on every row -- a receipt number, a date, a customer.
+  // A field that varies (an amount, a per-item count) would print row one's
+  // value under a label like "Total spent", which reads as a total and is not
+  // one. Those are dropped: a missing field is recoverable, a wrong figure on a
+  // document the merchant hands to someone else is not.
   const first = rows[0] || {}
+  const isConstant = col => rows.every(r => r[col] === first[col])
   const fields = Object.entries(spec?.header_fields || {})
+    .filter(([, col]) => isConstant(col))
     .map(([lbl, col]) => `<div class="field"><dt>${esc(lbl)}</dt>
          <dd>${esc(cellText(first[col], col, moneyCols))}</dd></div>`)
     .join('')
@@ -115,9 +118,12 @@ export function buildDocumentHTML({ document: spec, data, moneyCols, brandName, 
     foot = `<tfoot><tr>${cells}</tr></tfoot>`
   }
 
-  const brand = brandName || 'Report'
-  const generated = new Date().toLocaleDateString(undefined,
-    { year: 'numeric', month: 'long', day: 'numeric' })
+  // Date and time, not just the date: two documents pulled the same day from
+  // data that moved in between are otherwise indistinguishable.
+  const generated = new Date().toLocaleString(undefined, {
+    year: 'numeric', month: 'long', day: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  })
 
   return `<!DOCTYPE html><html><head><meta charset="utf-8">
 <title>${esc(spec?.title || 'Document')}</title>
@@ -128,7 +134,6 @@ export function buildDocumentHTML({ document: spec, data, moneyCols, brandName, 
       <h1 class="title">${esc(spec?.title || 'Sales Document')}</h1>
       ${spec?.subtitle ? `<div class="subtitle">${esc(spec.subtitle)}</div>` : ''}
     </div>
-    <div class="brand">${esc(brand)}</div>
   </div>
   ${fields ? `<dl class="fields">${fields}</dl>` : ''}
   <table>
@@ -138,7 +143,8 @@ export function buildDocumentHTML({ document: spec, data, moneyCols, brandName, 
   </table>
   ${spec?.notes ? `<div class="notes">${esc(spec.notes)}</div>` : ''}
   <div class="foot">
-    Generated from your sales records on ${esc(generated)} · ${esc(brand)}
+    Generated from your sales records on ${esc(generated)}.<br>
+    Content is AI generated and unverified.
   </div>
 </div></body></html>`
 }
