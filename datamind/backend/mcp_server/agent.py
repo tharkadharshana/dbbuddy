@@ -298,9 +298,13 @@ def _register_export_tool(mcp, ctx: ToolContext, entitlements: dict) -> None:
         "chart" for a picture of the chart, or "document" for a printable page
         they can save as a PDF. Call this ONLY when they ask to download,
         export, save, print or be sent the figures as a file — never on your own
-        initiative. Pull the figures first if you have not already. Returns
-        confirmation only; the file reaches them on its own, so just tell them
-        it is ready.
+        initiative. Returns confirmation only; the file reaches them on its own,
+        so just tell them it is ready.
+
+        IMPORTANT — run the query again in this same reply before calling this,
+        even when you already showed those figures a moment ago. Only the query
+        you run right now can be exported; earlier answers are not still loaded.
+        So: run the query, then call export_data, then say it is ready.
 
         For "document", describe the LAYOUT you want in `document` — you choose
         the shape, the page is filled in from the figures you already pulled, so
@@ -320,9 +324,15 @@ def _register_export_tool(mcp, ctx: ToolContext, entitlements: dict) -> None:
         last = ctx.last_result or {}
         rows = last.get("data") or []
         if not rows:
+            # The usual cause is a follow-up: the merchant asks to download
+            # what they were just shown, but those rows belonged to the previous
+            # request's context and are gone. Say so precisely — a vague error
+            # sends the model exploring the schema again and it burns the
+            # iteration budget before it ever writes an answer.
             raise ValueError(
-                "There are no figures pulled up to send yet — get the numbers "
-                "first, then export them.")
+                "Nothing is loaded to export in this reply. If they are asking "
+                "for figures you gave earlier, run that query again now — then "
+                "call export_data straight after it.")
         fmt = (format or "excel").strip().lower()
         if fmt not in _EXPORT_FORMATS:
             fmt = "excel"
