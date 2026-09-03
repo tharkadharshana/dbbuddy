@@ -18,6 +18,8 @@ import BrandLogo from './BrandLogo'
 import BetaBadge from '../components/BetaBadge'
 import Markdown from '../components/Markdown'
 import ResultChart from '../components/ResultChart'
+import CopyButton from '../components/CopyButton'
+import DownloadButton from '../components/DownloadButton'
 import * as storage from './embedStorage'
 
 // Icons stay here; the questions come from the brand row, so a partner can
@@ -128,7 +130,7 @@ function ResultTable({ columns, data, rowCount, moneyCols }) {
 }
 
 // ── Thumbs up/down on an assistant reply ────────────────────────────────────
-function VoteButtons({ vote, onVote }) {
+function VoteButtons({ vote, onVote, inline }) {
   const [popped, setPopped] = useState(null) // which button (1 | -1) is mid-animation
 
   const btn = (active, color) => ({
@@ -143,7 +145,7 @@ function VoteButtons({ vote, onVote }) {
   }
 
   return (
-    <div style={{ display:'flex', gap:2, marginTop:6 }}>
+    <div style={{ display:'flex', gap:2, marginTop: inline ? 0 : 6 }}>
       <button
         type="button" title="Good response" onClick={() => handleClick(1)}
         onAnimationEnd={() => setPopped(p => p === 1 ? null : p)}
@@ -171,7 +173,8 @@ function VoteButtons({ vote, onVote }) {
 }
 
 // ── Message bubble ────────────────────────────────────────────────────────────
-function Message({ msg, theme, onVote, brand }) {
+function Message({ msg, theme, onVote, brand, question }) {
+  const chartRef = useRef(null)
   if (msg.role === 'user') return (
     <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:14 }}>
       <div style={{ maxWidth:'80%', background:'var(--blue)', color:'#fff', borderRadius:'14px 14px 4px 14px', padding:'9px 13px', fontSize:13, lineHeight:1.5 }}>
@@ -226,13 +229,24 @@ function Message({ msg, theme, onVote, brand }) {
             )}
             {msg.data?.data?.length > 0 && msg.data?.show_data !== false && (
               <>
-                <ResultChart columns={msg.data.columns} data={msg.data.data} theme={theme} />
+                <ResultChart columns={msg.data.columns} data={msg.data.data} theme={theme} innerRef={chartRef} />
                 <ResultTable columns={msg.data.columns} data={msg.data.data} rowCount={msg.data.row_count} moneyCols={msg.data.money_cols} />
               </>
             )}
-            {msg.data?.message_id != null && (
-              <VoteButtons vote={msg.vote} onVote={v => onVote(msg.vote === v ? null : v)} />
-            )}
+            {/* Only present when the merchant asked for a file (agent's
+                export_data tool). Outside the show_data block on purpose: the
+                agent flow sets show_data=false for every answer. */}
+            <DownloadButton payload={msg.data?.export} chartRef={chartRef}
+                            question={question} theme={theme}
+                            brandName={brand?.productName} />
+            {/* Copy sits with the vote buttons but is not gated on message_id:
+                voting needs a saved message to attach to, copying does not. */}
+            <div style={{ display:'flex', alignItems:'center', gap:2, marginTop:6 }}>
+              {msg.data?.message_id != null && (
+                <VoteButtons vote={msg.vote} onVote={v => onVote(msg.vote === v ? null : v)} inline />
+              )}
+              <CopyButton msg={msg} />
+            </div>
           </>
         )}
       </div>
@@ -695,7 +709,9 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, on
           </div>
         ) : (
           <div style={{ padding: isNarrow ? '0 10px' : '0 14px' }}>
-            {messages.map(msg => <Message key={msg.id} msg={msg} theme={theme} brand={brand} onVote={v => handleVote(msg, v)} />)}
+            {messages.map((msg, i) => <Message key={msg.id} msg={msg} theme={theme} brand={brand}
+              question={messages[i - 1]?.role === 'user' ? messages[i - 1].content : ''}
+              onVote={v => handleVote(msg, v)} />)}
             <div ref={bottomRef} />
           </div>
         )}

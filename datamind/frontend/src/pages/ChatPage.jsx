@@ -2,9 +2,11 @@ import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { runNLQuery, createConversation, getConversationMessages, getErrorMessage, voteMessage } from '../utils/api'
 import { Spinner, UsageMeter } from '../components/UI'
+import CopyButton from '../components/CopyButton'
 import Logo from '../components/Logo'
 import Markdown from '../components/Markdown'
 import ResultChart from '../components/ResultChart'
+import DownloadButton from '../components/DownloadButton'
 import { formatCurrency, formatNumber, isMoneyColumn, summarySuffix } from '../utils/locale'
 
 
@@ -72,7 +74,7 @@ function ResultTable({ columns, data, rowCount, moneyCols }) {
   )
 }
 
-function VoteButtons({ vote, onVote }) {
+function VoteButtons({ vote, onVote, inline }) {
   const [popped, setPopped] = useState(null) // which button (1 | -1) is mid-animation
 
   const btn = (active, color) => ({
@@ -87,7 +89,7 @@ function VoteButtons({ vote, onVote }) {
   }
 
   return (
-    <div style={{ display:'flex', gap:2, marginTop:8 }}>
+    <div style={{ display:'flex', gap:2, marginTop: inline ? 0 : 8 }}>
       <style>{`
         .cp-vote-btn { transition: transform .12s ease, color .12s ease, opacity .12s ease; }
         .cp-vote-btn:hover { transform: scale(1.15); }
@@ -120,8 +122,9 @@ function VoteButtons({ vote, onVote }) {
   )
 }
 
-function Message({ msg, llm, onVote }) {
+function Message({ msg, llm, onVote, question }) {
   const [showSQL, setShowSQL] = useState(false)
+  const chartRef = useRef(null)
   const isUser = msg.role === 'user'
 
   if (isUser) return (
@@ -193,14 +196,23 @@ function Message({ msg, llm, onVote }) {
                 )}
                 */}
                 {msg.data.data?.length > 0 && <>
-                  <ResultChart columns={msg.data.columns} data={msg.data.data} />
+                  <ResultChart columns={msg.data.columns} data={msg.data.data} innerRef={chartRef} />
                   <ResultTable columns={msg.data.columns} data={msg.data.data} rowCount={msg.data.row_count} moneyCols={msg.data.money_cols} />
                 </>}
               </>
             )}
-            {msg.data?.message_id != null && (
-              <VoteButtons vote={msg.vote} onVote={v => onVote(msg.vote === v ? null : v)} />
-            )}
+            {/* Only present when the merchant asked for a file (agent's
+                export_data tool). Outside the show_data block on purpose: the
+                agent flow sets show_data=false for every answer. */}
+            <DownloadButton payload={msg.data?.export} chartRef={chartRef} question={question} />
+            {/* Copy sits with the vote buttons but is not gated on message_id:
+                voting needs a saved message to attach to, copying does not. */}
+            <div style={{ display:'flex', alignItems:'center', gap:2, marginTop:8 }}>
+              {msg.data?.message_id != null && (
+                <VoteButtons vote={msg.vote} onVote={v => onVote(msg.vote === v ? null : v)} inline />
+              )}
+              <CopyButton msg={msg} />
+            </div>
           </>
         )}
       </div>
@@ -394,10 +406,12 @@ export default function ChatPage({
   return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%', overflow:'hidden' }}>
 
-      {/* LLM selector with token meter */}
+      {/* TOKEN METER HIDDEN — token usage is an internal billing detail, not
+          something a merchant needs on screen. Restore by uncommenting.
       <div style={{ display:'flex', justifyContent:'flex-end', padding:'10px 20px 0', flexShrink:0 }}>
         <UsageMeter sub={sub} />
       </div>
+      */}
 
       {/* Messages area */}
       <div style={{ flex:1, overflowY:'auto', padding:'20px 0' }}>
@@ -427,7 +441,9 @@ export default function ChatPage({
           </div>
         ) : (
           <div style={{ maxWidth:800, margin:'0 auto', padding:'0 24px' }}>
-            {messages.map(msg => <Message key={msg.id} msg={msg} llm={llm} onVote={v => handleVote(msg, v)} />)}
+            {messages.map((msg, i) => <Message key={msg.id} msg={msg} llm={llm}
+              question={messages[i - 1]?.role === 'user' ? messages[i - 1].content : ''}
+              onVote={v => handleVote(msg, v)} />)}
             <div ref={bottomRef} />
           </div>
         )}

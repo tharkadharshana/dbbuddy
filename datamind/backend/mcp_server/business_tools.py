@@ -61,6 +61,10 @@ class ToolContext:
     # time) so the orchestrator can recover the final columns/data/sql after
     # the tool-calling loop ends, without needing the model to repeat them in prose.
     last_result: Optional[Dict[str, Any]] = field(default=None)
+    # Set by the export_data tool when the merchant asks for a file. Carries
+    # the rows already in last_result out to the response so the browser can
+    # build the file — nothing is written to disk and nothing is stored.
+    export_request: Optional[Dict[str, Any]] = field(default=None)
 
 
 def _strip_hidden_columns(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

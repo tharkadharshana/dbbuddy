@@ -59,15 +59,31 @@ function SyncProgress({ progress }) {
       <style>{syncBarStyle}</style>
       <div style={{ height:3, background:'var(--bg3)', borderRadius:2, overflow:'hidden', marginBottom:5 }}>
         {pct > 0
-          ? <div style={{ height:'100%', width:`${pct}%`, background:'var(--amber)', borderRadius:2, transition:'width .6s ease' }} />
-          : <div style={{ height:'100%', width:'30%', background:'var(--amber)', borderRadius:2, animation:'syncSlide 1.4s linear infinite' }} />
+          ? <div style={{ height:'100%', width:`${pct}%`, background:'var(--green)', borderRadius:2, transition:'width .6s ease' }} />
+          : <div style={{ height:'100%', width:'30%', background:'var(--green)', borderRadius:2, animation:'syncSlide 1.4s linear infinite' }} />
         }
       </div>
-      <div style={{ display:'flex', justifyContent:'space-between', fontSize:11, color:'var(--amber)' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', fontSize:11, color:'var(--green)' }}>
         <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'65%' }}>{msg}</span>
         <span style={{ flexShrink:0 }}>
           {rows > 0 && `${rows.toLocaleString()} records`}{etaStr && ` · ${etaStr}`}
         </span>
+      </div>
+    </div>
+  )
+}
+
+// Shown for a few seconds after a sync finishes. Without it the progress bar
+// just disappears, which looks identical to a sync that died -- the merchant
+// has no way to tell whether their data actually arrived.
+function SyncComplete({ rows }) {
+  return (
+    <div style={{ marginTop:6 }}>
+      <div style={{ height:3, background:'var(--bg3)', borderRadius:2, overflow:'hidden', marginBottom:5 }}>
+        <div style={{ height:'100%', width:'100%', background:'var(--green)', borderRadius:2 }} />
+      </div>
+      <div style={{ fontSize:11, color:'var(--green)' }}>
+        Sync complete{rows > 0 && ` • ${rows.toLocaleString()} records processed successfully`}
       </div>
     </div>
   )
@@ -78,30 +94,39 @@ function ConnectedRow({ conn, onDisconnect, onSync, canUseDB }) {
   const [status, setStatus]   = useState(null)
   const [syncingBtn, setSyncingBtn] = useState(false)
   const [pollKey, setPollKey] = useState(0)   // increment to restart poll loop
+  // Rows synced by the run that just finished. Held briefly so the merchant
+  // sees a result rather than the bar simply vanishing -- a sync that ends
+  // silently looks the same as one that failed.
+  const [justSynced, setJustSynced] = useState(null)
   const statusRef = React.useRef(null)
 
   // Self-scheduling poll: polls every 2s while syncing, single fetch otherwise
   useEffect(() => {
     let active = true
-    let tid
+    let tid, doneTid
 
     async function poll() {
       try {
         const s = await fetchProviderStatus(conn.connection_id)
         if (!active) return
         const wasSyncing = statusRef.current?.status === 'syncing'
+        // Read the in-flight count BEFORE the ref is overwritten — the final
+        // poll carries no progress block, so this is the last count we saw.
+        const lastRows = statusRef.current?.progress?.rows_synced
         statusRef.current = s
         setStatus(s)
         if (s.status === 'syncing') {
           tid = setTimeout(poll, 2000)
         } else if (wasSyncing) {
+          setJustSynced(s.total_rows ?? lastRows ?? 0)
+          doneTid = setTimeout(() => { if (active) setJustSynced(null) }, 8000)
           onSync?.()   // sync just finished — refresh parent list + row counts
         }
       } catch {}
     }
 
     poll()
-    return () => { active = false; clearTimeout(tid) }
+    return () => { active = false; clearTimeout(tid); clearTimeout(doneTid) }
   }, [conn.connection_id, pollKey])
 
   async function handleSync() {
@@ -130,20 +155,26 @@ function ConnectedRow({ conn, onDisconnect, onSync, canUseDB }) {
         <div style={{ flex:1, minWidth:0 }}>
           <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:3 }}>
             <div style={{ fontWeight:600, fontSize:14 }}>{conn.display_name}</div>
-            <Badge color={isConnected ? 'green' : isSyncing ? 'amber' : 'gray'}>
-              {isSyncing ? 'Syncing…' : isConnected ? 'Connected' : 'Pending'}
+            {/* Syncing is green, not amber: the data is arriving, which is the
+                good path. Amber read as a warning about a healthy sync. */}
+            <Badge color={isConnected || isSyncing ? 'green' : 'gray'}>
+              {isSyncing ? 'Syncing…'
+                : justSynced != null ? 'Sync Complete'
+                : isConnected ? 'Connected' : 'Pending'}
             </Badge>
           </div>
           <div style={{ fontSize:11, color:'var(--text3)' }}>
             {records.toLocaleString()} records &nbsp;·&nbsp; Last sync: {lastSync}
           </div>
           {isSyncing && <SyncProgress progress={status?.progress} />}
+          {!isSyncing && justSynced != null && <SyncComplete rows={justSynced} />}
         </div>
         <div style={{ display:'flex', gap:6, flexShrink:0 }}>
           <Btn size="sm" variant="ghost" onClick={handleSync}
             disabled={syncingBtn || isSyncing || canUseDB === false}
             title={canUseDB === false ? 'DB row limit reached — upgrade or purchase add-on rows to sync' : undefined}>
-            {syncingBtn ? <><Spinner size={11} /> Starting…</> : '↺ Sync'}
+            {syncingBtn ? <><Spinner size={11} /> Starting…</>
+              : justSynced != null ? '↺ Re-Sync' : '↺ Sync'}
           </Btn>
           <Btn size="sm" variant="danger" onClick={() => onDisconnect(conn.connection_id)}>Disconnect</Btn>
         </div>
