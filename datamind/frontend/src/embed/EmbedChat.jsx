@@ -18,6 +18,7 @@ import BrandLogo from './BrandLogo'
 import BetaBadge from '../components/BetaBadge'
 import Markdown from '../components/Markdown'
 import ResultChart from '../components/ResultChart'
+import CopyButton from '../components/CopyButton'
 import DownloadButton from '../components/DownloadButton'
 import * as storage from './embedStorage'
 
@@ -129,7 +130,7 @@ function ResultTable({ columns, data, rowCount, moneyCols }) {
 }
 
 // ── Thumbs up/down on an assistant reply ────────────────────────────────────
-function VoteButtons({ vote, onVote }) {
+function VoteButtons({ vote, onVote, inline }) {
   const [popped, setPopped] = useState(null) // which button (1 | -1) is mid-animation
 
   const btn = (active, color) => ({
@@ -144,7 +145,7 @@ function VoteButtons({ vote, onVote }) {
   }
 
   return (
-    <div style={{ display:'flex', gap:2, marginTop:6 }}>
+    <div style={{ display:'flex', gap:2, marginTop: inline ? 0 : 6 }}>
       <button
         type="button" title="Good response" onClick={() => handleClick(1)}
         onAnimationEnd={() => setPopped(p => p === 1 ? null : p)}
@@ -238,9 +239,14 @@ function Message({ msg, theme, onVote, brand, question }) {
             <DownloadButton payload={msg.data?.export} chartRef={chartRef}
                             question={question} theme={theme}
                             brandName={brand?.productName} />
-            {msg.data?.message_id != null && (
-              <VoteButtons vote={msg.vote} onVote={v => onVote(msg.vote === v ? null : v)} />
-            )}
+            {/* Copy sits with the vote buttons but is not gated on message_id:
+                voting needs a saved message to attach to, copying does not. */}
+            <div style={{ display:'flex', alignItems:'center', gap:2, marginTop:6 }}>
+              {msg.data?.message_id != null && (
+                <VoteButtons vote={msg.vote} onVote={v => onVote(msg.vote === v ? null : v)} inline />
+              )}
+              <CopyButton msg={msg} />
+            </div>
           </>
         )}
       </div>

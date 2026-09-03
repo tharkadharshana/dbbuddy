@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { runNLQuery, createConversation, getConversationMessages, getErrorMessage, voteMessage } from '../utils/api'
 import { Spinner, UsageMeter } from '../components/UI'
+import CopyButton from '../components/CopyButton'
 import Logo from '../components/Logo'
 import Markdown from '../components/Markdown'
 import ResultChart from '../components/ResultChart'
@@ -73,7 +74,7 @@ function ResultTable({ columns, data, rowCount, moneyCols }) {
   )
 }
 
-function VoteButtons({ vote, onVote }) {
+function VoteButtons({ vote, onVote, inline }) {
   const [popped, setPopped] = useState(null) // which button (1 | -1) is mid-animation
 
   const btn = (active, color) => ({
@@ -88,7 +89,7 @@ function VoteButtons({ vote, onVote }) {
   }
 
   return (
-    <div style={{ display:'flex', gap:2, marginTop:8 }}>
+    <div style={{ display:'flex', gap:2, marginTop: inline ? 0 : 8 }}>
       <style>{`
         .cp-vote-btn { transition: transform .12s ease, color .12s ease, opacity .12s ease; }
         .cp-vote-btn:hover { transform: scale(1.15); }
@@ -204,9 +205,14 @@ function Message({ msg, llm, onVote, question }) {
                 export_data tool). Outside the show_data block on purpose: the
                 agent flow sets show_data=false for every answer. */}
             <DownloadButton payload={msg.data?.export} chartRef={chartRef} question={question} />
-            {msg.data?.message_id != null && (
-              <VoteButtons vote={msg.vote} onVote={v => onVote(msg.vote === v ? null : v)} />
-            )}
+            {/* Copy sits with the vote buttons but is not gated on message_id:
+                voting needs a saved message to attach to, copying does not. */}
+            <div style={{ display:'flex', alignItems:'center', gap:2, marginTop:8 }}>
+              {msg.data?.message_id != null && (
+                <VoteButtons vote={msg.vote} onVote={v => onVote(msg.vote === v ? null : v)} inline />
+              )}
+              <CopyButton msg={msg} />
+            </div>
           </>
         )}
       </div>
