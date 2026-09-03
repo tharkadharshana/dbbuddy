@@ -59,11 +59,11 @@ function SyncProgress({ progress }) {
       <style>{syncBarStyle}</style>
       <div style={{ height:3, background:'var(--bg3)', borderRadius:2, overflow:'hidden', marginBottom:5 }}>
         {pct > 0
-          ? <div style={{ height:'100%', width:`${pct}%`, background:'var(--amber)', borderRadius:2, transition:'width .6s ease' }} />
-          : <div style={{ height:'100%', width:'30%', background:'var(--amber)', borderRadius:2, animation:'syncSlide 1.4s linear infinite' }} />
+          ? <div style={{ height:'100%', width:`${pct}%`, background:'var(--green)', borderRadius:2, transition:'width .6s ease' }} />
+          : <div style={{ height:'100%', width:'30%', background:'var(--green)', borderRadius:2, animation:'syncSlide 1.4s linear infinite' }} />
         }
       </div>
-      <div style={{ display:'flex', justifyContent:'space-between', fontSize:11, color:'var(--amber)' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', fontSize:11, color:'var(--green)' }}>
         <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'65%' }}>{msg}</span>
         <span style={{ flexShrink:0 }}>
           {rows > 0 && `${rows.toLocaleString()} records`}{etaStr && ` · ${etaStr}`}
@@ -130,7 +130,9 @@ function ConnectedRow({ conn, onDisconnect, onSync, canUseDB }) {
         <div style={{ flex:1, minWidth:0 }}>
           <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:3 }}>
             <div style={{ fontWeight:600, fontSize:14 }}>{conn.display_name}</div>
-            <Badge color={isConnected ? 'green' : isSyncing ? 'amber' : 'gray'}>
+            {/* Syncing is green, not amber: the data is arriving, which is the
+                good path. Amber read as a warning about a healthy sync. */}
+            <Badge color={isConnected || isSyncing ? 'green' : 'gray'}>
               {isSyncing ? 'Syncing…' : isConnected ? 'Connected' : 'Pending'}
             </Badge>
           </div>
