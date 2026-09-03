@@ -35,6 +35,7 @@ merchant's plan does not include. A Starter merchant's model cannot see
 """
 
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import date
 from typing import List, Optional
@@ -212,7 +213,67 @@ def _register_ml_tools(mcp, rctx, entitlements: dict) -> None:
     _ = REPORTS  # registry import keeps report ids validated at build time
 
 
-_EXPORT_FORMATS = ("excel", "csv", "chart")
+_EXPORT_FORMATS = ("excel", "csv", "chart", "document")
+
+# A merchant's own POS issues their tax documents; this one is built from synced
+# sales records that carry no per-line tax, no billing address and no
+# registration numbers, so it must never present itself as one.
+_TAX_INVOICE_RE = re.compile(r"tax\s*invoice", re.IGNORECASE)
+
+
+def _money_columns(columns: list) -> list:
+    """Which columns are monetary, by main.py's own rule.
+
+    Imported lazily: main imports this module, so a module-level import would
+    be circular. Falls back to an empty list, which just means the frontend
+    uses its own heuristic — the same path older payloads already take.
+    """
+    try:
+        from main import _is_money_column
+        return [c for c in (columns or []) if _is_money_column(c)]
+    except Exception:
+        return []
+
+
+def _clean_document_spec(spec: dict, columns: list) -> dict:
+    """Validate the model's document LAYOUT against the columns actually queried.
+
+    The model chooses the shape of the document — its title, which fields make
+    up the header, which columns are line items. It does not supply any values:
+    every figure is read from the rows by the renderer. This is the whole safety
+    property of the feature. A model retyping monetary figures into a document
+    is how a wrong total reaches a merchant's customer, so the spec carries
+    column NAMES and the data stays where the database put it.
+
+    A name that is not in `columns` is dropped rather than rendered blank — a
+    printed page with 'undefined' on it is worse than one field short.
+    """
+    spec = spec or {}
+    known = set(columns or [])
+
+    header = {label: col for label, col in (spec.get("header_fields") or {}).items()
+              if col in known}
+    lines = [c for c in (spec.get("line_columns") or []) if c in known]
+    totals = [c for c in (spec.get("total_columns") or []) if c in lines]
+
+    if not lines:
+        raise ValueError(
+            "None of those columns are in the figures you pulled. Use the "
+            "column names from the result you already have, or run the query "
+            "that has them first.")
+
+    title = str(spec.get("title") or "Sales Document").strip()
+    if _TAX_INVOICE_RE.search(title):
+        title = "Sales Document"
+
+    return {
+        "title": title,
+        "subtitle": str(spec.get("subtitle") or "").strip() or None,
+        "header_fields": header,
+        "line_columns": lines,
+        "total_columns": totals,
+        "notes": str(spec.get("notes") or "").strip() or None,
+    }
 
 
 def _register_export_tool(mcp, ctx: ToolContext, entitlements: dict) -> None:
@@ -231,14 +292,31 @@ def _register_export_tool(mcp, ctx: ToolContext, entitlements: dict) -> None:
         return
 
     @mcp.tool()
-    def export_data(format: str = "excel") -> dict:
+    def export_data(format: str = "excel", document: dict = None) -> dict:
         """Give the merchant a downloadable file of the figures you just pulled.
-        `format` is "excel" for a spreadsheet, "csv" for a plain data file, or
-        "chart" for a picture of the chart. Call this ONLY when they ask to
-        download, export, save or be sent the numbers as a file — never on your
-        own initiative. Pull the figures first if you have not already. Returns
+        `format` is "excel" for a spreadsheet, "csv" for a plain data file,
+        "chart" for a picture of the chart, or "document" for a printable page
+        they can save as a PDF. Call this ONLY when they ask to download,
+        export, save, print or be sent the figures as a file — never on your own
+        initiative. Pull the figures first if you have not already. Returns
         confirmation only; the file reaches them on its own, so just tell them
-        it is ready."""
+        it is ready.
+
+        For "document", describe the LAYOUT you want in `document` — you choose
+        the shape, the page is filled in from the figures you already pulled, so
+        never type any amounts, names or dates yourself:
+          title          - what the document is called, e.g. "Sales Document"
+          subtitle       - optional line under the title
+          header_fields  - {label: column} pairs for the top block, e.g.
+                           {"Receipt": "receipt_number", "Date": "created_at"}
+          line_columns   - the columns that make up the item table, in order
+          total_columns  - which of those to total at the bottom (they are
+                           added up for you)
+          notes          - an optional closing line
+        Every value must be a column name from the figures you pulled. Use it
+        for an invoice-style page, a statement, a summary — whatever they asked
+        for. It is built from their sales records, so it is not a tax invoice
+        and must not be called one; their POS issues those."""
         last = ctx.last_result or {}
         rows = last.get("data") or []
         if not rows:
@@ -251,11 +329,20 @@ def _register_export_tool(mcp, ctx: ToolContext, entitlements: dict) -> None:
         # Same ceiling the SQL flow applies to what it sends (main.py row_limit),
         # so an export can never be larger than an on-screen result.
         capped = rows[:ctx.row_limit] if ctx.row_limit else rows
+        columns = last.get("columns") or list(capped[0].keys())
+        # Validate BEFORE marking the export, so a rejected layout leaves no
+        # half-formed request behind for the response to pick up.
+        spec = _clean_document_spec(document, columns) if fmt == "document" else None
         ctx.export_request = {
             "format": fmt,
-            "columns": last.get("columns") or list(capped[0].keys()),
+            "columns": columns,
             "data": capped,
+            # Same money/count decision the on-screen table uses, so a printed
+            # figure formats identically to the one in the chat.
+            "money_cols": _money_columns(columns),
         }
+        if spec:
+            ctx.export_request["document"] = spec
         # The rows deliberately do NOT go back into the model's context — they
         # are already in ctx, and re-serialising them into a tool message would
         # cost the whole result set in tokens for no gain.
