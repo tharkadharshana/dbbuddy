@@ -400,10 +400,12 @@ export default function ChatPage({
   return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%', overflow:'hidden' }}>
 
-      {/* LLM selector with token meter */}
+      {/* TOKEN METER HIDDEN — token usage is an internal billing detail, not
+          something a merchant needs on screen. Restore by uncommenting.
       <div style={{ display:'flex', justifyContent:'flex-end', padding:'10px 20px 0', flexShrink:0 }}>
         <UsageMeter sub={sub} />
       </div>
+      */}
 
       {/* Messages area */}
       <div style={{ flex:1, overflowY:'auto', padding:'20px 0' }}>

@@ -279,10 +279,13 @@ export default function ReportsPage({ llm, setLlm, sub, onNavigate, onQueryCompl
           <div style={{ fontSize:12, color:'var(--text3)', marginBottom:16 }}>Select sections and the AI generates a professional report with charts and narrative.</div>
 
           {/* Usage + Format */}
+          {/* TOKEN METER HIDDEN — internal billing detail, not merchant-facing.
+              Restore by uncommenting (the USAGE heading goes with it).
           <div style={{ marginBottom:14 }}>
             <div style={{ fontSize:11, color:'var(--text3)', marginBottom:6, fontWeight:500, textTransform:'uppercase', letterSpacing:'.07em' }}>Usage</div>
             <UsageMeter sub={sub} />
           </div>
+          */}
           <div style={{ marginBottom:16 }}>
             <div style={{ fontSize:11, color:'var(--text3)', marginBottom:6, fontWeight:500, textTransform:'uppercase', letterSpacing:'.07em' }}>Report Style</div>
             <div style={{ display:'flex', gap:4 }}>
