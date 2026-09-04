@@ -164,7 +164,8 @@ function ConnectedRow({ conn, onDisconnect, onSync, canUseDB }) {
             </Badge>
           </div>
           <div style={{ fontSize:11, color:'var(--text3)' }}>
-            {records.toLocaleString()} records &nbsp;·&nbsp; Last sync: {lastSync}
+            {/* RECORD COUNT HIDDEN — internal detail, not merchant-facing. Restore: {records.toLocaleString()} records &nbsp;·&nbsp; */}
+            Last sync: {lastSync}
           </div>
           {isSyncing && <SyncProgress progress={status?.progress} />}
           {!isSyncing && justSynced != null && <SyncComplete rows={justSynced} />}

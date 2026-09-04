@@ -64,7 +64,10 @@ export default function QueryPage({ llm, setLlm }) {
         <Card style={{ padding:18 }}>
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12 }}>
             <span style={{ fontSize:11, fontWeight:600, color:'var(--text3)', textTransform:'uppercase', letterSpacing:'.08em' }}>Ask Your Data Anything</span>
-            <UsageMeter value={llm} onChange={setLlm} />
+            {/* TOKEN METER HIDDEN — internal billing detail, not merchant-facing.
+                Restore by uncommenting.
+            <UsageMeter sub={sub} />
+            */}
           </div>
           <div style={{ display:'flex', gap:10 }}>
             <textarea value={q} onChange={e=>setQ(e.target.value)}
