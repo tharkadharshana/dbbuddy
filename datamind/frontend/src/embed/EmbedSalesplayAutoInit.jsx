@@ -323,9 +323,14 @@ export default function EmbedSalesplayAutoInit({ context, partnerKey, aatToken, 
       {sp && phase === 'consent' ? null : (
         <>
           <Logo brand={brand} />
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, fontWeight: 700, color: sp ? SP.heading : 'var(--text)', marginBottom: 4 }}>
-            {productTitle}
-          </div>
+          {/* Same reason as the consent screen below: the logo is a wordmark
+              carrying the product name, so printing the title under it says it
+              twice. Brands with no logo still need the name. */}
+          {!brand?.logoUrl && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, fontWeight: 700, color: sp ? SP.heading : 'var(--text)', marginBottom: 4 }}>
+              {productTitle}
+            </div>
+          )}
         </>
       )}
 
