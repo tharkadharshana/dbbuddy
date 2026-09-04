@@ -44,10 +44,28 @@ export default function DownloadButton({ payload, chartRef, question, theme, bra
   const accentColor = () =>
     getComputedStyle(document.documentElement).getPropertyValue('--blue').trim() || '#0058BE'
 
+  // A ratio metric is stored as a fraction (a 23.12% margin is 0.2312). The
+  // chat reads it and writes "23.12%" itself; a file has no such judgement and
+  // printed "0.2312%". Scaled once here so the document, CSV and spreadsheet
+  // all agree with the chat. The backend names the columns -- see
+  // agent._percent_point_columns -- rather than the renderer guessing from a
+  // column name, because a small percentage and a fraction look identical.
+  const toPercentPoints = (rows, cols) => {
+    if (!cols?.length || !rows?.length) return rows
+    return rows.map(r => {
+      const out = { ...r }
+      for (const c of cols) {
+        if (typeof out[c] === 'number') out[c] = out[c] * 100
+      }
+      return out
+    })
+  }
+
   const run = async () => {
     setBusy(true); setFailed(false)
     try {
-      const { columns, data } = payload
+      const { columns } = payload
+      const data = toPercentPoints(payload.data, payload.percent_cols)
       if (format === 'csv') {
         downloadBlob(new Blob([toCSV(columns, data)], { type: 'text/csv;charset=utf-8' }), name)
       } else if (format === 'chart') {
