@@ -444,6 +444,10 @@ def _base_query_response(**kwargs) -> dict:
     # conversation, so a reloaded thread has no download to offer.
     if kwargs.get("export"):
         base["export"] = kwargs["export"]
+    # True when the answer was a plan refusal. The embed turns it into an
+    # upgrade button; without it a trial merchant is told no with nowhere to go.
+    if kwargs.get("upgrade_offer"):
+        base["upgrade_offer"] = True
     # D3 exit guard — the single place every outgoing answer passes through, so
     # no branch can leak internal table/SQL/tool/report names to a merchant.
     # (SSE streams tokens before this payload exists; those are covered in S5
@@ -1942,6 +1946,7 @@ def _run_agent_flow(*, req, user, conn, schemas, fkeys, steps, conv_id, llm,
         success=True, type="data", steps=steps, analysis=answer_text,
         conversation_id=conv_id, data_as_of=last_sync_at, show_data=False,
         message_id=msg_id, agent_answer=True, export=result.export,
+        upgrade_offer=result.upgrade_offer,
     )
 
 
