@@ -143,6 +143,10 @@ function EmbedApp() {
   // caller sees the brand that actually loaded.
   const contextRef = useRef(null)
   contextRef.current = context
+  // The plans screen was opened from an upgrade click in chat, so dismissing it
+  // returns to the conversation rather than closing the widget on a merchant
+  // who was mid-question.
+  const [cameFromChat, setCameFromChat] = useState(false)
   const [plansStartExpanded, setPlansStartExpanded] = useState(false) // consent screen's "Explore plans" was clicked — land on salesplay_plans already expanded
   const [plansAutoPick, setPlansAutoPick] = useState(null) // { tierIndex, cycle } — a tier was clicked on the consent screen; open its receipt directly
 
@@ -407,6 +411,23 @@ function EmbedApp() {
     await routeNoAccess(access)
   }
 
+  // The merchant asked for something their plan does not include and the answer
+  // said no. Take them to the plans screen they would otherwise never reach:
+  // a trial user still has access, so nothing routes them there on its own.
+  async function handleUpgrade() {
+    setCameFromChat(true)
+    let access = subAccess
+    try {
+      access = await checkSalesplayAccessRetrying(partnerKey, aatToken, subscriptionFree)
+      setSubAccess(access)
+    } catch {
+      // Show the screen with whatever we already had rather than swallowing
+      // the click -- the plans screen refreshes access on its own.
+    }
+    setState('partner_plans')
+    notifyParent('dm:onboarding_start')
+  }
+
   function handleExpired() {
     storage.removeItem('dm_embed_token')
     storage.removeItem('dm_sp_email')
@@ -573,7 +594,9 @@ function EmbedApp() {
         onTrialSelected={handleTrialSelected}
         onSubscribed={handlePlanSubscribed}
         onRefreshAccess={handleRefreshAccess}
-        onClose={handleClose}
+        onClose={cameFromChat
+          ? () => { setCameFromChat(false); setState('chat') }
+          : handleClose}
       />
     )
   } else if (state === 'onboarding') {
@@ -590,6 +613,7 @@ function EmbedApp() {
       <EmbedChat
         context={context}
         onExpired={handleExpired}
+        onUpgrade={handleUpgrade}
         onLogout={handleLogout}
         onCollapse={layoutBar ? () => requestClose(() => setExpanded(false)) : undefined}
         onMessageSent={() => { hasChattedRef.current = true }}

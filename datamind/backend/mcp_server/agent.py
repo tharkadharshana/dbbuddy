@@ -108,6 +108,24 @@ SQL, queries, tools, reports-as-systems, caches or databases. Say "your
 receipts", not the name of anything internal.
 """
 
+# Emitted by the model on its own line when it turns something down because the
+# plan does not include it, and stripped from the answer before the merchant
+# sees it. The frontend turns it into an upgrade button, so a refusal offers a
+# way forward instead of a dead end.
+#
+# A marker rather than matching the prose: the model words the refusal freshly
+# every time ("available on a higher plan", "isn't included in your trial"), so
+# any phrase list would both miss real refusals and fire on answers that merely
+# discuss pricing.
+UPGRADE_MARKER = "[[UPGRADE]]"
+
+_UPGRADE_NOTE = (
+    "\nWhen you turn something down because their plan does not include it, end "
+    "your reply with " + UPGRADE_MARKER + " on its own line. It is removed "
+    "before they see it and becomes an upgrade button. Use it ONLY for a plan "
+    "refusal, never on an ordinary answer."
+)
+
 _NO_EXPORT_NOTE = (
     "\nYou cannot send this merchant files on their plan. If they ask to "
     "download or export the figures, or to be sent a spreadsheet, say plainly "
@@ -133,6 +151,9 @@ class AgentResult:
     export: Optional[dict] = None
     # Last SQL the agent executed (None for knowledge-only answers).
     last_sql: Optional[str] = None
+    # True when the answer was a plan refusal, so the UI can offer a way to
+    # subscribe rather than leaving the merchant at a dead end.
+    upgrade_offer: bool = False
 
 
 class AgentFailed(Exception):
@@ -159,6 +180,9 @@ def build_system_prompt(currency: str, shops: str, window_start,
         prompt += _NO_FORECAST_NOTE
     if not can_export:
         prompt += _NO_EXPORT_NOTE
+    # Only worth asking for the marker when there is something to refuse.
+    if not can_forecast or not can_export:
+        prompt += _UPGRADE_NOTE
     if extra:
         prompt += "\n" + extra.strip()
     return prompt
@@ -472,6 +496,13 @@ async def _run_once(question: str, mcp, system_prompt: str, history: list,
     if not final_text:
         raise AgentFailed(
             f"The model stopped without an answer after {len(called)} tool calls.")
+    # Strip the marker BEFORE on_text: that callback streams the answer, so a
+    # marker left in here is a marker the merchant watches appear. It must not
+    # reach the saved message or the answer sanitiser either.
+    upgrade = UPGRADE_MARKER in final_text
+    if upgrade:
+        final_text = final_text.replace(UPGRADE_MARKER, "").strip()
+
     if on_text:
         on_text(final_text)
 
@@ -479,7 +510,8 @@ async def _run_once(question: str, mcp, system_prompt: str, history: list,
     return AgentResult(text=final_text, columns=last.get("columns") or [],
                        data=last.get("data") or [], tool_calls=called,
                        sources=sources, export=ctx.export_request,
-                       last_sql=last.get("sql") or None)
+                       last_sql=last.get("sql") or None,
+                       upgrade_offer=upgrade)
 
 
 def _json(value) -> str:

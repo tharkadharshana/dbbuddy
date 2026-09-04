@@ -80,11 +80,35 @@ D. fix: a stale document layout is rejected instead of printed
 
    ACTION  : None. No schema change, no new env key, no new dependency.
 
+E. feat: a refused answer now offers a way to subscribe
+   PROBLEM : A trial merchant who asked to download something was told it
+             needs a higher plan and left there. Nothing routes a merchant
+             who still HAS access to the plans screen — that path only
+             fires for someone already blocked — so the refusal was a dead
+             end with no way to act on it.
+   FIX     : When the model turns something down on plan grounds it ends
+             the reply with a marker, which is stripped before the text
+             reaches the merchant, the saved message or the sanitiser, and
+             surfaced as `upgrade_offer` on the response. The widget shows
+             a "View plans" button that opens the plans screen that
+             already exists; dismissing it returns to the conversation
+             rather than closing the widget on someone mid-question.
+             A marker rather than matching the wording: the model phrases
+             the refusal freshly every time, so a phrase list would both
+             miss real refusals and fire on answers that merely discuss
+             pricing. The instruction is only added to the prompt when a
+             feature is actually denied.
+   ACTION  : None required.
+
 SCOPE
 ─────
-Nothing on the answer path changed. The chat's wording, figures, billing
-and stored history are untouched; the fixes are in how an already-answered
-result is assembled into a file. 305 backend tests and the frontend
+The export fixes (A-D) change nothing on the answer path: the chat's
+wording, figures, billing and stored history are untouched; they change how
+an already-answered result is assembled into a file.
+
+E adds one field (`upgrade_offer`) to the response and one instruction to
+the prompt, and only when a feature is actually denied. An answer that
+refuses nothing carries neither. 305 backend tests and the frontend
 self-check pass.
 
 KNOWN GAP

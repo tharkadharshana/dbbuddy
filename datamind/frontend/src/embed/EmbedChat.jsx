@@ -173,7 +173,7 @@ function VoteButtons({ vote, onVote, inline }) {
 }
 
 // ── Message bubble ────────────────────────────────────────────────────────────
-function Message({ msg, theme, onVote, brand, question }) {
+function Message({ msg, theme, onVote, brand, question, onUpgrade }) {
   const chartRef = useRef(null)
   if (msg.role === 'user') return (
     <div style={{ display:'flex', justifyContent:'flex-end', marginBottom:14 }}>
@@ -241,6 +241,20 @@ function Message({ msg, theme, onVote, brand, question }) {
                             brandName={brand?.productName} />
             {/* Copy sits with the vote buttons but is not gated on message_id:
                 voting needs a saved message to attach to, copying does not. */}
+            {/* The answer turned something down on plan grounds. Nothing else
+                routes a merchant who still HAS access to the plans screen, so
+                without this the refusal is a dead end. */}
+            {msg.data?.upgrade_offer && onUpgrade && (
+              <button type="button" onClick={onUpgrade} style={{
+                marginTop: 10, display: 'inline-flex', alignItems: 'center', gap: 6,
+                fontSize: 12.5, fontWeight: 600, padding: '8px 15px', borderRadius: 8,
+                cursor: 'pointer', color: '#fff', border: 'none',
+                background: 'var(--accent, #0058BE)',
+              }}>
+                View plans
+                <span aria-hidden="true">&rarr;</span>
+              </button>
+            )}
             <div style={{ display:'flex', alignItems:'center', gap:2, marginTop:6 }}>
               {msg.data?.message_id != null && (
                 <VoteButtons vote={msg.vote} onVote={v => onVote(msg.vote === v ? null : v)} inline />
@@ -255,7 +269,7 @@ function Message({ msg, theme, onVote, brand, question }) {
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function EmbedChat({ context, onExpired, onLogout, onCollapse, onMessageSent, initialInput = '' }) {
+export default function EmbedChat({ context, onExpired, onUpgrade, onLogout, onCollapse, onMessageSent, initialInput = '' }) {
   const brand = resolveBrand(context)
   const productTitle = resolveProductTitle(context)
   const APP_NAME = appName(context)
@@ -711,7 +725,7 @@ export default function EmbedChat({ context, onExpired, onLogout, onCollapse, on
           <div style={{ padding: isNarrow ? '0 10px' : '0 14px' }}>
             {messages.map((msg, i) => <Message key={msg.id} msg={msg} theme={theme} brand={brand}
               question={messages[i - 1]?.role === 'user' ? messages[i - 1].content : ''}
-              onVote={v => handleVote(msg, v)} />)}
+              onVote={v => handleVote(msg, v)} onUpgrade={onUpgrade} />)}
             <div ref={bottomRef} />
           </div>
         )}
