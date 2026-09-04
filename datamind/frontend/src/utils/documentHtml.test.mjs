@@ -116,6 +116,26 @@ need(pct.includes('18.96%'), 'margin percent not rendered as points')
 need(!pct.includes('+18.96%'), 'a level was printed with a growth sign')
 need(pct.includes('+4.20%'), 'a delta column lost its sign')
 
+// A merchant on LKR must not get "$" in a document. The embed stores its user
+// under a partner-key-suffixed localStorage key, so the plain 'dm_embed_user'
+// lookup always missed and every amount fell back to the default symbol.
+globalThis.localStorage = {
+  _d: { 'dm_embed_user_sp_dev_test': JSON.stringify({ locale: { currency: 'LKR' } }) },
+  getItem(k) { return this._d[k] ?? null },
+}
+globalThis.window = { location: { search: '?pk=sp_dev_test' } }
+
+const lkr = buildDocumentHTML({
+  document: { title: 'Sales', line_columns: ['net_sales', 'refunds', 'sold_qty'],
+              total_columns: ['net_sales'] },
+  data: [{ net_sales: 3010.72, refunds: 1263.05, sold_qty: 5 }],
+  moneyCols: ['net_sales', 'refunds'],
+})
+need(lkr.includes('LKR 3,010.72'), 'currency symbol not taken from the embed locale')
+need(!lkr.includes('$'), 'fell back to the default currency symbol')
+need(lkr.includes('LKR 1,263.05'), 'a refunds column lost its decimals')
+need(/>5</.test(lkr), 'a count was padded with decimals')
+
 await server.close()
 console.log(failures ? `${failures} check(s) failed` : 'documentHtml self-check passed')
 process.exit(failures ? 1 : 0)

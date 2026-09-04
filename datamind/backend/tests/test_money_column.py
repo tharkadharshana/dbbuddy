@@ -53,3 +53,24 @@ def test_never_sums_id_column():
 if __name__ == "__main__":
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_refunds_and_singular_sale_are_money():
+    """The report registry uses singular net_sale/gross_sale, and "refunds"
+    contains no money fragment of its own. Both missed, so a document printed
+    "1,263" beside a chat that said "LKR 1,263.05"."""
+    for c in ("refunds", "refund", "net_sale", "gross_sale",
+              "tips_amount", "surcharge_amount"):
+        assert _is_money_column(c), c
+
+
+def test_date_columns_are_not_money():
+    """"sale" matches money, so sale_date needs an explicit guard."""
+    for c in ("sale_date", "created_at", "sales_month", "order_year"):
+        assert not _is_money_column(c), c
+
+
+def test_count_columns_still_win_over_money():
+    for c in ("refund_qty", "sold_qty", "receipt_count",
+              "number_of_refunds_and_credit_note"):
+        assert not _is_money_column(c), c
