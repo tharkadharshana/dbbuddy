@@ -105,3 +105,23 @@ def test_mostly_missing_layout_raises_instead_of_rendering_one_column():
 def test_no_surviving_columns_still_raises():
     with pytest.raises(ValueError):
         _clean_document_spec({"line_columns": ["x"]}, ["y"])
+
+
+# --- percentage scaling (agent._percent_point_columns) ---------------------
+
+from mcp_server.agent import _percent_point_columns
+
+
+def test_only_percentage_ratios_are_flagged_for_scaling():
+    """avg_receipt_value is a ratio too — scaling THAT by 100 would be a new
+    bug, so the flag comes from the metric's own label, not the agg type."""
+    flagged = _percent_point_columns(
+        ["gross_sales", "gross_margin_pct", "avg_receipt_value",
+         "receipt_count", "profit_margin"])
+    assert flagged == ["gross_margin_pct", "profit_margin"]
+
+
+def test_a_sql_column_merely_named_pct_is_left_alone():
+    """Nothing guarantees a hand-written SQL column is a fraction; a value under
+    1 is equally consistent with a small percentage."""
+    assert _percent_point_columns(["conversion_pct", "some_rate"]) == []

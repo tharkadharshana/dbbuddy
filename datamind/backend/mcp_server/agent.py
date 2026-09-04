@@ -223,6 +223,30 @@ _EXPORT_FORMATS = ("excel", "csv", "chart", "document")
 _TAX_INVOICE_RE = re.compile(r"tax\s*invoice", re.IGNORECASE)
 
 
+def _percent_point_columns(columns: list) -> list:
+    """Which of `columns` hold a FRACTION that a file should print as percentage
+    points.
+
+    report_cache/answer.py computes every ratio metric as num/den, so a 23.12%
+    margin sits in the row as 0.2312. The chat is unaffected -- the model reads
+    the fraction and writes "23.12%" itself -- but a file renderer has no such
+    judgement, and printed "0.2312%" beside a chat that said 23.12%.
+
+    Read from the registry rather than guessed from the column name: a value
+    below 1 is equally consistent with a fraction and with a genuinely small
+    percentage, and guessing between them is what produced the bug. A SQL
+    column merely NAMED "..._pct" is left alone, because nothing guarantees it
+    is a fraction.
+    """
+    try:
+        from report_cache.registry import REPORTS
+    except Exception:
+        return []
+    keys = {m.key for r in REPORTS.values() for m in (r.metrics or ())
+            if m.agg == "ratio" and m.label.rstrip().endswith("%")}
+    return [c for c in (columns or []) if c in keys]
+
+
 def _money_columns(columns: list) -> list:
     """Which columns are monetary, by main.py's own rule.
 
@@ -365,6 +389,9 @@ def _register_export_tool(mcp, ctx: ToolContext, entitlements: dict) -> None:
             # Same money/count decision the on-screen table uses, so a printed
             # figure formats identically to the one in the chat.
             "money_cols": _money_columns(columns),
+            # Fractions the renderer must scale to percentage points. Named
+            # explicitly so no file has to infer a unit from a column name.
+            "percent_cols": _percent_point_columns(columns),
         }
         if spec:
             ctx.export_request["document"] = spec

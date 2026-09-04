@@ -33,9 +33,10 @@ const label = col => HEADINGS[col] || String(col || '').replace(/_/g, ' ')
 // sign, everything else as a whole number. A printed figure has to match the one
 // in the chat digit for digit, or the merchant is looking at two different
 // answers to the same question.
-// Values arrive already scaled to percentage points (report_cache/answer.py
-// _ratio), so this only appends the sign. A leading "+" is for a CHANGE, not a
-// level: "+18.96%" reads as growth when it is a margin.
+// Percentages are scaled to points before they get here (DownloadButton's
+// toPercentPoints, using the columns the backend named), so this only formats.
+// A leading "+" is for a CHANGE, not a level: "+18.96%" reads as growth when
+// it is a margin.
 const _PCT_RE = /pct|rate|percent|margin/i
 const _DELTA_RE = /change|delta|growth|vs_|_diff/i
 
