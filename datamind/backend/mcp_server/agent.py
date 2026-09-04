@@ -258,11 +258,24 @@ def _clean_document_spec(spec: dict, columns: list) -> dict:
     lines = [c for c in (spec.get("line_columns") or []) if c in known]
     totals = [c for c in (spec.get("total_columns") or []) if c in lines]
 
+    asked = [c for c in (spec.get("line_columns") or [])]
     if not lines:
         raise ValueError(
             "None of those columns are in the figures you pulled. Use the "
             "column names from the result you already have, or run the query "
             "that has them first.")
+    # Dropping a stray column is fine; dropping MOST of the layout means the
+    # model is describing a different result than the one loaded -- usually a
+    # figure from an earlier report that is no longer the current result. That
+    # once rendered as a one-column page under a full summary's title, which
+    # looks like a working document rather than a failure. Make it correctable
+    # instead of silent.
+    if len(lines) < len(asked) / 2:
+        missing = ", ".join(c for c in asked if c not in known)
+        raise ValueError(
+            f"These columns are not in the figures currently loaded: {missing}. "
+            f"Available: {', '.join(sorted(known))}. Re-run the query that has "
+            "the columns you want in this same reply, then call export_data.")
 
     title = str(spec.get("title") or "Sales Document").strip()
     if _TAX_INVOICE_RE.search(title):

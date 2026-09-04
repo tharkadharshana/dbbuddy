@@ -74,3 +74,34 @@ def test_empty_result_clears():
     _set_last_result(rctx, "report:x 1..2", None, {"a": 1})
     _set_last_result(rctx, "report:y 1..2", None, {})
     assert rctx.business.last_result["data"] == []
+
+
+# --- document layout validation (agent._clean_document_spec) ---------------
+
+import pytest
+
+from mcp_server.agent import _clean_document_spec
+
+
+def test_stray_column_is_dropped_quietly():
+    spec = _clean_document_spec(
+        {"title": "Summary", "line_columns": ["a", "b", "c", "nope"]},
+        ["a", "b", "c"])
+    assert spec["line_columns"] == ["a", "b", "c"]
+
+
+def test_mostly_missing_layout_raises_instead_of_rendering_one_column():
+    """The PDF that showed 'Receipt Count' alone under a full summary title."""
+    with pytest.raises(ValueError) as exc:
+        _clean_document_spec(
+            {"title": "Today's Sales Summary",
+             "line_columns": ["gross_sales", "net_sales", "gross_profit",
+                              "receipt_count"]},
+            ["receipt_count"])
+    assert "not in the figures currently loaded" in str(exc.value)
+    assert "gross_sales" in str(exc.value)
+
+
+def test_no_surviving_columns_still_raises():
+    with pytest.raises(ValueError):
+        _clean_document_spec({"line_columns": ["x"]}, ["y"])
