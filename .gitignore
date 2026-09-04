@@ -63,4 +63,5 @@ backups/
 
 # Local dev-server logs (uvicorn / vite), written at repo root
 backend.log
+backend.err.log
 frontend.log
