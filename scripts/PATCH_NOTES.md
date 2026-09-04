@@ -108,12 +108,18 @@ F. fix: the printable document carries no product branding
    ACTION  : None required.
 
 G. fix: UI corrections
-   - The token meter ("1.36M / 2M") is hidden across the main app. Token
+   - The token meter ("1.36M / 2M") is hidden across the main app,
+     including the Query page, which was the last one still rendering it
+     (and rendering it broken — it passed value/onChange where the
+     component expects sub, so it had been drawing nothing). Token
      consumption is an internal billing unit; a merchant has no use for
-     it and no way to act on it. Commented rather than deleted, so
-     restoring it is uncommenting one block per page. The embed widget
-     keeps its own near-limit warning, which is a genuine heads-up before
-     a merchant runs out.
+     it and no way to act on it. It stays on Billing/Usage and in the
+     embed. Commented rather than deleted, so restoring it is
+     uncommenting one block per page. The embed widget keeps its own
+     near-limit warning, which is a genuine heads-up before a merchant
+     runs out.
+   - The raw record count is gone from the Data Sources connection card.
+     Only the last sync time means anything to a merchant there.
    - A sync in progress is green, not amber — amber read as a warning
      about the healthy path.
    - A finished sync now confirms itself ("Sync Complete", full bar,
