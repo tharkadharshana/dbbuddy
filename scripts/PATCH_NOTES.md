@@ -7,57 +7,28 @@
 CHANGES IN THIS PATCH
 ─────────────────────
 
-One screenshot showed all three defects at once: a generated document read
-"$ 4,303.89" where the chat beside it said "LKR 4,303.89", and printed
-Refunds as "1,263" where the chat said "LKR 1,263.05". Same figures, same
-answer, three different ways of writing them.
-
-A. fix: a document shows the merchant's own currency
-   PROBLEM : getUserLocale() read the localStorage key 'dm_embed_user', but
-             the widget writes its user to a PARTNER-KEY-SUFFIXED key
-             (embedStorage.js — deliberately, so two brands served from one
-             origin cannot share a token). The lookup therefore always
-             missed in the embed, and every amount fell through to
-             formatCurrency's default '$'.
-             The chat was unaffected because its figures are the model's own
-             prose, formatted server-side from the tenant's locale; only the
-             document calls formatCurrency. That is why the discrepancy
-             showed up on the printed page and nowhere else.
-   FIX     : Read the suffixed key the widget actually wrote, then the plain
-             one. Nothing is hardcoded: the symbol still comes from the
-             merchant's own synced SalesPlay profile, so a future partner
-             needs no code change.
-
-B. fix: refunds and single-product amounts print as money
-   PROBLEM : _is_money_column missed "refunds" — it carries no money
-             fragment of its own — and the report registry's SINGULAR
-             net_sale / gross_sale, because the fragment list held the
-             plural "sales". Both then rendered as bare counts: a weekly
-             product document printed "768" for LKR 768.02.
-   FIX     : Added "sale", "refund", "tip" and "surcharge". Since "sale" is
-             a substring match it also hits sale_date, so date-ish tokens
-             are now excluded alongside the existing count tokens — a date
-             is not a count, but it is certainly not money.
-             The frontend heuristic moved in step with the backend list: it
-             is the fallback for loaded history snapshots, which carry no
-             money_cols, and a divergence there is what these two lists
-             existed to prevent.
-
-C. fix: an amount keeps its cents
-   PROBLEM : The document renderer forced 0 decimals on every non-money
-             number, so any amount that slipped past the check in B lost its
-             cents outright rather than merely losing its symbol.
-   FIX     : A whole number still prints whole (a count of 5 is "5", not
-             "5.00"); a value with a real fractional part keeps it.
-
+A. fix: the onboarding screens print the product name once, not twice
+   PROBLEM : The setup/sync screen showed the brand's wordmark logo and then
+             the product name again as text directly beneath it, so a
+             merchant saw "SalesPlay AI" twice while waiting for their
+             workspace.
+             The consent screen already guards against this — eb31114 fixed
+             it there in August with the note that a wordmark logo already
+             carries the name — but the block covering every OTHER phase
+             (loading, sync, plans, error) rendered both unconditionally and
+             was missed.
+   FIX     : The same guard, applied to that block: the title renders only
+             when the brand has no logoUrl.
+             This is not a blanket removal. A brand with no logo falls back
+             to a single-letter tile, which carries no name, so those brands
+             still need the text — which is exactly the condition the
+             consent screen already uses.
    ACTION  : None. No schema change, no new env key, no new dependency.
 
 SCOPE
 ─────
-The chat is untouched — its figures never went through this path. These are
-render-time fixes to how an already-answered result is written into a file,
-plus the money/count column rule shared by the file and the on-screen table.
-308 backend tests and the frontend self-check pass.
+One conditional in one embed component. No backend change, nothing on the
+answer or export path.
 
 KNOWN GAP
 ─────────
