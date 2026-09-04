@@ -101,6 +101,21 @@ need(!varying.includes('Total spent'), 'a varying column was printed as a header
 need(varying.includes('Customer'), 'a constant header field was wrongly dropped')
 need(varying.includes('17,095.20'), 'table total wrong')
 
+// A percentage column prints as percentage POINTS with no "+" sign. The bug:
+// a margin of 18.96 printed as "+0.1896%" because the value arrived unscaled
+// and every pct column got a growth sign.
+const pct = buildDocumentHTML({
+  document: {
+    title: 'Sales Summary',
+    line_columns: ['gross_margin_pct', 'change_pct'],
+    total_columns: [],
+  },
+  data: [{ gross_margin_pct: 18.96, change_pct: 4.2 }],
+})
+need(pct.includes('18.96%'), 'margin percent not rendered as points')
+need(!pct.includes('+18.96%'), 'a level was printed with a growth sign')
+need(pct.includes('+4.20%'), 'a delta column lost its sign')
+
 await server.close()
 console.log(failures ? `${failures} check(s) failed` : 'documentHtml self-check passed')
 process.exit(failures ? 1 : 0)

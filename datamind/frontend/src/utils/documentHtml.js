@@ -33,13 +33,20 @@ const label = col => HEADINGS[col] || String(col || '').replace(/_/g, ' ')
 // sign, everything else as a whole number. A printed figure has to match the one
 // in the chat digit for digit, or the merchant is looking at two different
 // answers to the same question.
-const _PCT_RE = /pct|rate|percent/i
+// Values arrive already scaled to percentage points (report_cache/answer.py
+// _ratio), so this only appends the sign. A leading "+" is for a CHANGE, not a
+// level: "+18.96%" reads as growth when it is a margin.
+const _PCT_RE = /pct|rate|percent|margin/i
+const _DELTA_RE = /change|delta|growth|vs_|_diff/i
 
 function cellText(value, col, moneyCols) {
   if (value == null || value === '') return ''
   if (typeof value === 'number') {
     if (isMoneyColumn(col, moneyCols)) return formatCurrency(value)
-    if (_PCT_RE.test(col || '')) return `${value > 0 ? '+' : ''}${value}%`
+    if (_PCT_RE.test(col || '')) {
+      const sign = value > 0 && _DELTA_RE.test(col) ? '+' : ''
+      return `${sign}${formatNumber(value, null, 2)}%`
+    }
     return formatNumber(value, null, 0)
   }
   return String(value)
