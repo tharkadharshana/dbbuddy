@@ -48,7 +48,10 @@ function cellText(value, col, moneyCols) {
       const sign = value > 0 && _DELTA_RE.test(col) ? '+' : ''
       return `${sign}${formatNumber(value, null, 2)}%`
     }
-    return formatNumber(value, null, 0)
+    // Whole numbers print whole (a count of 5, not "5.00"); a value with a
+    // real fractional part keeps it. Forcing 0 decimals here truncated genuine
+    // amounts whenever a money column slipped past isMoneyColumn.
+    return formatNumber(value, null, Number.isInteger(value) ? 0 : 2)
   }
   return String(value)
 }

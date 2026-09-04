@@ -2,8 +2,16 @@ const _CURRENCY_COLS = /revenue|money|amount|price|value|spend|ticket(?!s)|sale(
 
 export function getUserLocale() {
   try {
-    const u = JSON.parse(localStorage.getItem('dm_user') || localStorage.getItem('dm_embed_user') || 'null')
-    return u?.locale || null
+    // The embed suffixes its keys with the partner key (embedStorage.js), so a
+    // bare 'dm_embed_user' lookup always missed and every amount in the widget
+    // fell back to '$' -- a merchant on LKR got "$ 4,303.89" in a document
+    // beside a chat that said "LKR 4,303.89". Read the suffixed key the widget
+    // actually wrote before giving up.
+    const pk = new URLSearchParams(window.location.search).get('pk')
+    const raw = localStorage.getItem('dm_user')
+      || (pk && localStorage.getItem('dm_embed_user_' + pk))
+      || localStorage.getItem('dm_embed_user')
+    return JSON.parse(raw || 'null')?.locale || null
   } catch { return null }
 }
 
@@ -15,8 +23,11 @@ export function isCurrencyColumn(colName) {
 // Prefer the backend-provided money_cols list; fall back to a corrected local
 // heuristic (count tokens win; "total" alone is NOT money) for older payloads
 // and loaded history snapshots that carry no flags.
-const _COUNT_RE = /(^|_)(qty|quantity|count|cnt|units?|number|num|rows?|visits?)($|_)/i
-const _MONEY_RE = /revenue|money|amount|price|value|spend|spent|sale(?!_date)|profit|cost|discount|tax|charge|paid/i
+// Kept in step with the backend's _MONEY_FRAGMENTS/_COUNT_TOKENS in main.py.
+// Date-ish tokens are excluded because "sale" matches money and sale_date would
+// otherwise render as currency.
+const _COUNT_RE = /(^|_)(qty|quantity|count|cnt|units?|number|num|rows?|visits?|date|time|day|month|year|week|at|id)($|_)/i
+const _MONEY_RE = /revenue|money|amount|price|value|spend|spent|sale|profit|cost|discount|tax|charge|paid|refund|tip|surcharge/i
 export function isMoneyColumn(col, moneyCols) {
   if (Array.isArray(moneyCols)) return moneyCols.includes(col)
   if (!col) return false

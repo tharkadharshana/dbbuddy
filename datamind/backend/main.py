@@ -1574,7 +1574,12 @@ _ID_COLUMN_RE = re.compile(r'^id$|_id$', re.IGNORECASE)
 # as money. Real money words below are unambiguous.
 _MONEY_FRAGMENTS = frozenset({
     "money", "revenue", "spent", "price", "cost", "amount",
-    "paid", "discount", "tax", "charge", "value", "sales", "profit",
+    # "sale" (not "sales") so the report registry's singular net_sale/gross_sale
+    # match too; "refund" so a refunds column formats as money rather than a
+    # bare count -- a document printed "1,263" beside a chat saying
+    # "LKR 1,263.05". "tip"/"surcharge" are the same shape.
+    "paid", "discount", "tax", "charge", "value", "sale", "profit",
+    "refund", "tip", "surcharge",
 })
 
 # Whole tokens that mark a column as a count/quantity — never money, even if it
@@ -1583,6 +1588,9 @@ _MONEY_FRAGMENTS = frozenset({
 _COUNT_TOKENS = frozenset({
     "quantity", "qty", "count", "cnt", "units", "unit",
     "number", "num", "rows", "row",
+    # Not counts, but never money either: "sale" matches money, so sale_date
+    # would otherwise format as currency.
+    "date", "time", "day", "month", "year", "week", "at", "id",
 })
 
 
