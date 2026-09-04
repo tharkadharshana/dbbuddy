@@ -152,9 +152,37 @@ def _clamp_to_window(history_months: int, start: date, end: date):
 
 def _set_last_result(rctx: ReportToolContext, label: str, rows: list, metrics: dict):
     """Expose the report answer through the SAME slot business_tools uses, so
-    the orchestrator's existing (sql, columns, data) recovery needs no change."""
-    data = rows or ([metrics] if metrics else [])
-    columns = list(data[0].keys()) if data else []
+    the orchestrator's existing (sql, columns, data) recovery needs no change.
+
+    One answer often spans SEVERAL reports: "today's sales summary" needs
+    sales_summary for the money and receipts for the count and average ticket.
+    The slot holds one result, so a plain overwrite left the export with
+    whichever report happened to be called last -- the chat showed eleven
+    figures while the spreadsheet carried five, and a document whose layout
+    named sales_summary columns rendered a single column because the rest were
+    no longer in `columns`.
+
+    So consecutive METRIC results merge into the one row instead of replacing
+    it. Row-bearing results (get_report_detail, top-N tables) still replace:
+    they are a different shape -- many rows about different things -- and
+    merging them into a summary row would invent a table that was never
+    queried. Switching between the two shapes resets, because the new shape
+    cannot carry the old one's meaning."""
+    if rows:
+        data = rows
+        columns = list(data[0].keys())
+    elif metrics:
+        prev = rctx.business.last_result or {}
+        prev_data = prev.get("data") or []
+        # Merge only into another single-row metric result of our own making.
+        merged = dict(prev_data[0]) if (
+            len(prev_data) == 1 and str(prev.get("sql", "")).startswith("-- report:")
+        ) else {}
+        merged.update(metrics)
+        data = [merged]
+        columns = list(merged.keys())
+    else:
+        data, columns = [], []
     rctx.business.last_result = {"sql": f"-- {label}", "columns": columns, "data": data}
 
 

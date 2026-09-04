@@ -247,6 +247,30 @@ _EXPORT_FORMATS = ("excel", "csv", "chart", "document")
 _TAX_INVOICE_RE = re.compile(r"tax\s*invoice", re.IGNORECASE)
 
 
+def _percent_point_columns(columns: list) -> list:
+    """Which of `columns` hold a FRACTION that a file should print as percentage
+    points.
+
+    report_cache/answer.py computes every ratio metric as num/den, so a 23.12%
+    margin sits in the row as 0.2312. The chat is unaffected -- the model reads
+    the fraction and writes "23.12%" itself -- but a file renderer has no such
+    judgement, and printed "0.2312%" beside a chat that said 23.12%.
+
+    Read from the registry rather than guessed from the column name: a value
+    below 1 is equally consistent with a fraction and with a genuinely small
+    percentage, and guessing between them is what produced the bug. A SQL
+    column merely NAMED "..._pct" is left alone, because nothing guarantees it
+    is a fraction.
+    """
+    try:
+        from report_cache.registry import REPORTS
+    except Exception:
+        return []
+    keys = {m.key for r in REPORTS.values() for m in (r.metrics or ())
+            if m.agg == "ratio" and m.label.rstrip().endswith("%")}
+    return [c for c in (columns or []) if c in keys]
+
+
 def _money_columns(columns: list) -> list:
     """Which columns are monetary, by main.py's own rule.
 
@@ -282,11 +306,24 @@ def _clean_document_spec(spec: dict, columns: list) -> dict:
     lines = [c for c in (spec.get("line_columns") or []) if c in known]
     totals = [c for c in (spec.get("total_columns") or []) if c in lines]
 
+    asked = [c for c in (spec.get("line_columns") or [])]
     if not lines:
         raise ValueError(
             "None of those columns are in the figures you pulled. Use the "
             "column names from the result you already have, or run the query "
             "that has them first.")
+    # Dropping a stray column is fine; dropping MOST of the layout means the
+    # model is describing a different result than the one loaded -- usually a
+    # figure from an earlier report that is no longer the current result. That
+    # once rendered as a one-column page under a full summary's title, which
+    # looks like a working document rather than a failure. Make it correctable
+    # instead of silent.
+    if len(lines) < len(asked) / 2:
+        missing = ", ".join(c for c in asked if c not in known)
+        raise ValueError(
+            f"These columns are not in the figures currently loaded: {missing}. "
+            f"Available: {', '.join(sorted(known))}. Re-run the query that has "
+            "the columns you want in this same reply, then call export_data.")
 
     title = str(spec.get("title") or "Sales Document").strip()
     if _TAX_INVOICE_RE.search(title):
@@ -376,6 +413,9 @@ def _register_export_tool(mcp, ctx: ToolContext, entitlements: dict) -> None:
             # Same money/count decision the on-screen table uses, so a printed
             # figure formats identically to the one in the chat.
             "money_cols": _money_columns(columns),
+            # Fractions the renderer must scale to percentage points. Named
+            # explicitly so no file has to infer a unit from a column name.
+            "percent_cols": _percent_point_columns(columns),
         }
         if spec:
             ctx.export_request["document"] = spec
